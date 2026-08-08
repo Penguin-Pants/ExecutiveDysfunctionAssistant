@@ -66,9 +66,9 @@ capture library decision reopens **before** anything is built on top. Stop and e
 | **T2.1** Write `stt/interface.py` — Protocol, event types, and the §2 semantic contract as docstrings | FR17, D-2 | Passes `mypy --strict`. A conformance test suite exists that any backend can be run against, written before any backend. |
 | **T2.2** `local_whisper.py` with VAD-based synthesized finalization | FR18, FR47 | Passes the T2.1 conformance suite. Every acknowledged span yields exactly one final event. |
 | **T2.3** Utterance assembler | FR46 | Scripted fixture produces exactly the expected utterance boundaries; sub-threshold fragments merge forward; no match fires on interim events. |
-| **T2.4** Latency harness | NFR1, AS-1 | Timestamped scripted audio → transcript; reports p50/p95 on the **target machine**. |
+| **T2.4** Latency harness | NFR1, AS-1, NFR7 | Timestamped scripted audio → transcript; reports p50/p95 **per stage** against design §9a's budget. Run **CPU-only on the D-U6 laptop** for the gate; the D-U6 desktop's CUDA figure is recorded separately (NFR7) and never substituted. Covers the STT slice only — end-to-end NFR1 is T5.9, after the overlay exists. |
 
-**Gate:** T2.4 p95 ≥ 3 s means AS-1 is false. Local is not the viable default, and M8 (cloud) is
+**Gate:** T2.4 p95 ≥ **900 ms of inference tail** (design §9a's STT slice — *not* 3 s end-to-end, which is the whole NFR1 budget) means AS-1 is false. Local is not the viable default, and M8 (cloud) is
 promoted ahead of M5. Record the measurement in the decision log either way — this is the PRD's
 own §12 open risk and it gets answered here, not assumed.
 
@@ -83,7 +83,7 @@ own §12 open risk and it gets answered here, not assumed.
 | **T3.3** Schema version guard + corruption recovery | FR31, FR44 | `schema_version` N+1 refuses cleanly and leaves the file untouched; a truncated file offers restore. |
 | **T3.4** Export / import bundle | FR30 | Export → wipe → import yields deep equality on content, tags, bullets, order. |
 | **T3.5** Importer: chunking + bullet proposal | FR1a, FR2, FR42 | `.md` splits on `##`/`###`, `.txt` on blank lines / `Q:`-`A:`; save is blocked until review is confirmed; every proposed bullet is a verbatim substring of the source. |
-| **T3.6** Embedding index + model-version guard | FR34 | Changing `model_id` in the cache forces full re-embed; changing one note's content re-embeds only that note. |
+| **T3.6** Embedding index + model-version guard | FR34 | Changing the `embed_model_id` **attribute inside** the `.npz` forces a full re-embed; changing one note's headline re-embeds only that note. *(Test the attribute, not the filename — renaming the file produces a cache miss, which is a different code path from the mismatch FR34 describes.)* A corrupt `.npz` is deleted and rebuilt. |
 | **T3.7** Notes editor UI (CRUD, reorder, tags, `track_progress`) | FR3, FR4, FR60 | All operations persist; IDs stable; "not overlay-optimised" flag shows for bullet-less notes (D-6); delete requires confirmation. **Saves on explicit action or 5 s idle after an edit — never per keystroke**, so FR29's 5 backup generations cannot be consumed by typing. |
 | **T3.8** Note-set lifecycle UI | FR43, FR60 | Create, rename, select-active, delete a note set; active set persists in `QSettings`; delete confirms. *(Was missing — FR43 and FR60 referenced note sets that no task built.)* |
 | **T3.9** Backup restore UI | FR29, FR44 | Browse the 5 generations, preview, restore. If a backup is itself corrupt, fall through to the next generation and say so. *(FR29 required "restorable from the UI" and no task built it.)* |
@@ -117,8 +117,9 @@ own §12 open risk and it gets answered here, not assumed.
 | **T5.4** Drag, resize, opacity, lock, reset | FR22–24, FR27, FR55 | Each independent; off-screen persisted coordinates recoverable via reset. |
 | **T5.5** Transitions + auto-clear + pin | FR25, FR54, FR13 | Unpinned clears at τ_visible; pinned persists; replacement animates. |
 | **T5.6** `QSettings` persistence | FR26 | Survives restart; documented as exempt from §4. |
-| **T5.7** Health + egress indicators | FR20, FR35 | Every state in design §7 renders distinctly; **no-match is visually distinct from every failure state**; egress indicator fires independently for cloud STT and LLM. Built to design §9b's token table. |
+| **T5.7** Health + egress indicators | FR7, FR20, FR35 | Every state in design §7 renders distinctly; **no-match is visually distinct from every failure state**. Egress renders **cloud STT and LLM distinguishably** (§9b), not one shared dot. Includes the FR7 capture indicator, which FR20 is defined relative to. Built to §9b's token table. |
 | **T5.8** Diagnostics viewer | FR36 | In-app view of the ring buffer with export. *(FR36 required "viewable in-app"; T0.3 built only the buffer.)* |
+| **T5.9** End-to-end latency harness | NFR1, NFR3 | Measures **last audio sample → overlay paint** against §9a's per-stage budget, p50/p95, CPU-only on the D-U6 laptop. Also measures video-call frame time with the overlay active vs inactive (NFR3). *(T2.4 covers the STT slice only and lands before the overlay exists, so neither NFR had a task that could verify it.)* |
 
 ---
 
@@ -127,8 +128,8 @@ own §12 open risk and it gets answered here, not assumed.
 | Task | Requirements | Acceptance criteria |
 |---|---|---|
 | **T6.1** Session state machine | D-7 | All transitions in design §6 exercised; illegal transitions raise. |
-| **T6.2** Purge with zeroing | FR15 | Transcript buffers are `bytearray`; post-purge bytes are zero; no live references remain. |
-| **T6.3** Panic clear scope + in-flight cancellation | FR58, FR59 | Note files byte-identical before/after; in-flight LLM and socket cancelled; no post-purge render. |
+| **T6.2** Purge | FR15 | **Audio** buffers are `bytearray` and post-purge bytes are zero. **Transcript text is `str`** — assert no application-held reference survives (weakref sweep). Do **not** assert transcript memory is zeroed; that assertion is unsatisfiable and would pass vacuously. |
+| **T6.3** Panic clear scope + in-flight neutralisation | FR58, FR59, FR64 | Note files byte-identical before/after. **Socket cancelled** (asyncio); **LLM response discarded via nonce** after its 5 s timeout — not cancelled, because it cannot be. No post-purge render. Resume from `WIPED` completes in ≤1 s without preflight re-run. |
 | **T6.4** WER dump suppression + FR16 allowlist harness | FR16 | Process Monitor trace over a 45-min simulated session shows no writes outside the allowlist and no session content in any written file. |
 | **T6.5** Preflight readiness check | FR38 | Each precondition failed in turn produces the correct block-vs-warn classification. |
 | **T6.6** Backpressure + worker restart + sleep/lock | FR33, FR61, FR62 | Saturation drops oldest with flat memory; worker restarts once then holds; lock/unlock resumes. |
@@ -143,7 +144,7 @@ own §12 open risk and it gets answered here, not assumed.
 | **T7.1** Mic-only tracking against `track_progress` notes | FR12, FR56 | Speaking a tracked point marks it within 5 s; the same phrase played through loopback only does **not** mark it. |
 | **T7.2** Echo detection in preflight | FR57 | Over speakers: warning fires. Over headphones: no warning. Measured cross-correlation logged to the ring buffer. |
 | **T7.3** Runtime echo suppression | FR57, D-8 | Spans detected as mic echo are excluded from the interviewer stream. |
-| **T7.4** Checklist rendering in overlay | FR12 | Visible without displacing the snippet; respects FR37's off switch. |
+| **T7.4** Checklist rendering in overlay | FR12 | Built to §9b's tracker tokens; visible without displacing the snippet; respects FR37's off switch. |
 
 ---
 

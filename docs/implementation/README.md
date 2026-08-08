@@ -35,7 +35,7 @@ These are measurements, not checkboxes. Each answers an open risk the PRD's own 
 a bad number changes the architecture rather than being waived:
 
 1. **T1.2** — dual-stream capture stable for 60 min? Falsifies **AS-2**.
-2. **T2.4** — local STT p95 < 3 s on the target machine? Falsifies **AS-1**; inverts FR18.
+2. **T2.4** — local STT p95 < **900 ms inference tail** (design §9a's STT slice, not the whole NFR1 budget), CPU-only on the D-U6 laptop? Falsifies **AS-1**; inverts FR18.
 3. **T4.7** — does the LLM stage beat the local prefilter? Answers **OQ-1**; decides whether the
    hard internet dependency stays.
 

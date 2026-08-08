@@ -10,11 +10,11 @@ requirements from [`01-requirements.md`](./01-requirements.md).
 ```mermaid
 flowchart TB
     subgraph capture["Capture (2 OS callback threads)"]
-        LB[WASAPI Loopback<br/>interviewer] --> QL[(q_audio_loopback<br/>bounded 3)]
-        MC[WASAPI Mic<br/>user] --> QM[(q_audio_mic<br/>bounded 3)]
+        LB[WASAPI Loopback<br/>interviewer] --> QL[(q_audio_loopback<br/>150 frames = 3s)]
+        MC[WASAPI Mic<br/>user] --> QM[(q_audio_mic<br/>150 frames = 3s)]
     end
 
-    subgraph stt["STT (1 worker thread per stream)"]
+    subgraph stt["STT (4 threads per stream — see §2)"]
         QL --> SL[SttBackend :: loopback]
         QM --> SM[SttBackend :: mic]
         SL --> UA[Utterance Assembler]
@@ -24,7 +24,7 @@ flowchart TB
     UA --> QI[(q_utterance_interviewer<br/>bounded 8)]
     UB --> QU[(q_utterance_user<br/>bounded 8)]
 
-    subgraph match["Matching (1 worker thread + 2-slot LLM pool)"]
+    subgraph match["Matching (1 worker thread + 1 LLM caller)"]
         QI --> S1[Stage 1: embed + cosine prefilter]
         S1 -->|no candidate ≥ τ_floor| NM[no-match]
         S1 -->|top-5| S2[Stage 2: forced tool call]
@@ -91,6 +91,7 @@ interview_prep_recall/
     indicators.py           # FR20 egress, FR35 health
   diagnostics/
     ring.py                 # FR36 in-memory ring buffer
+  watchdog.py               # heartbeats, health derivation, device notifications (COM MTA)
   platform/
     win_capture_exclusion.py  # SetWindowDisplayAffinity via ctypes
     win_wer.py                # disable WER dumps (FR16)
@@ -111,12 +112,26 @@ FR33's overflow test means opposite things.
 | `q_audio_*` depth | **150 frames = 3 s** of jitter buffer |
 | Overflow unit | One 20 ms frame (FR45) — not a chunk, not a question |
 | Resampling | In the **capture callback**, via `soxr` (fast, fixed-cost). The callback stays under the FR45 p99 2 ms budget because `soxr` on a 20 ms frame is tens of microseconds |
-| `feed(pcm: bytes)` | Exactly this format. Backends never resample |
-| STT chunking (FR8) | The **STT worker** aggregates frames into 2–4 s windows before invoking inference. This is the only place chunking happens |
+| `feed(pcm: bytes)` | **Exactly one 20 ms frame.** Backends never resample and never receive a larger buffer |
+| STT chunking (FR8) | **Inside the backend.** The pump passes frames straight through; each backend buffers internally to whatever its inference or wire protocol wants — local aggregates to 2–4 s windows, cloud streams frames onto the socket as they arrive |
 
 **Why the callback resamples rather than the worker:** it keeps a single format in every queue,
 every backend, and every fixture, so a WAV fixture fed directly to `feed()` exercises the same
 path as live audio — which is what makes CI-without-audio-hardware possible (§12).
+
+**Why `feed()` takes a 20 ms frame rather than a 2–4 s chunk.** Both readings were defensible and
+an earlier draft contained each in a different section. Frames win for three reasons:
+
+1. **Cloud backends need frames.** Streaming 20 ms frames onto a WebSocket is what Deepgram and
+   ElevenLabs are built for. Handing them 3 s blobs would add seconds of avoidable latency on the
+   path whose entire selling point is sub-300 ms.
+2. **The 900 ms inference-tail budget (§9a) is unreachable otherwise.** If inference cannot start
+   until a 2–4 s window closes, the tail is bounded below by the window, not by the model.
+3. **Chunking is a backend concern.** Local Whisper wants windows; cloud wants frames. Pushing
+   aggregation behind the interface is what lets one conformance suite (T2.1) cover both.
+
+Consequence: **FR8's "~2–4 s rolling chunks" describes the local backend's internal window, not
+the interface.** The pump never aggregates.
 
 ---
 
@@ -246,7 +261,7 @@ recorded fixtures.
   config.json                              # thresholds, backend choice, model ID (D-9)
   notesets\<uuid>.json                     # one note set
   notesets\<uuid>.json.bak.1 … .bak.5      # rotation (FR29)
-  index\<uuid>.<model_id>.npz              # embedding cache (FR34)
+  index\<uuid>.<embed_model_slug>.npz     # embedding cache (FR34)
   consent.json                             # FR63 acknowledgement
 ```
 
@@ -256,7 +271,7 @@ recorded fixtures.
 |---|---|
 | Overlay position, size, opacity, lock state (FR22–27) | `QSettings` (registry) |
 | Active note set ID (FR43) | `QSettings` |
-| τ_floor / sensitivity (FR52), backend choice, `model_id`, all other thresholds | `config.json` |
+| τ_floor / sensitivity (FR52), backend choice, `llm_model_id`, `embed_model_id`, all other thresholds | `config.json` |
 
 `config.json` carries its own `schema_version`; a missing, unparseable, or newer-versioned file is
 replaced with defaults and the user is notified — it holds no irreplaceable data, so recovery is
@@ -324,7 +339,15 @@ The Anthropic key for stage-2 matching is covered by FR19 exactly as the STT key
 ### Embedding cache
 
 `.npz` holding `note_ids`, `vectors` (float32, L2-normalized), `content_hashes`, plus attributes
-`schema_version`, `model_id`, `model_version`, `embedded_at`.
+`schema_version`, `embed_model_id`, `embed_model_version`, `embedded_at`.
+
+**Naming, and why it changed:** `model_id` previously named both the Anthropic model (D-9) and the
+embedding model in the same document, and appeared in a filename. Hugging Face IDs contain `/`
+(`sentence-transformers/all-MiniLM-L6-v2`), which is illegal in a Windows filename — the path as
+written would not construct. The file now uses `embed_model_slug`, the ID with `/` and `:`
+replaced by `_`; the unmodified ID is kept in the `embed_model_id` attribute, which is what FR34's
+mismatch check compares. A corrupt or unreadable `.npz` is deleted and rebuilt — it is derived
+data, so there is nothing to recover.
 
 **Embedded text is `headline` only** *(review-B: previously unstated)*. Matching is
 question-to-question: the headline *is* the anticipated question, while `body` is the prepared
@@ -337,7 +360,7 @@ while implying a different embedding input; that mismatch would either re-embed 
 or, worse, miss edits to the embedded field, silently reintroducing the BC-1 stale-vector failure
 that FR34 exists to prevent.
 
-**Load rule (FR34):** if `model_id`/`model_version` mismatch the running model, discard the cache
+**Load rule (FR34):** if `embed_model_id`/`embed_model_version` mismatch the running model, discard the cache
 and re-embed everything. Per note, if `content_hash` differs, re-embed that note. This closes
 BC-1's silent-degradation path — the failure mode where stale vectors are compared against fresh
 ones and matching quietly gets worse with no error.
@@ -347,12 +370,20 @@ ones and matching quietly gets worse with no error.
 ```
 tmp = target.with_suffix(".tmp")
 write(tmp); flush(); os.fsync(fd); close()
-rotate_backups(target)          # .bak.4→.bak.5, … target→.bak.1
+
+# rotate by COPY, oldest first — target is never renamed away
+for n in (4, 3, 2, 1):
+    if exists(f"{target}.bak.{n}"): copy(f"{target}.bak.{n}", f"{target}.bak.{n+1}")
+if exists(target): copy(target, f"{target}.bak.1")   # copy, not rename
+
 os.replace(tmp, target)         # atomic on NTFS
 ```
 
-Rotation happens *before* replace so a crash mid-rotation loses at most one backup generation,
-never the live file.
+**Rotation copies rather than renames** *(review-B2 item 8)*. An earlier version renamed
+`target → .bak.1`, which leaves a window where no live file exists — directly contradicting the
+rationale it was written to support. Since this sits on the review's highest-severity finding
+(notes are the only irreplaceable asset), the extra copy is worth its cost: a crash at any point
+leaves either the old file or the new one intact, never neither.
 
 ---
 
@@ -395,7 +426,7 @@ T4.7 is a gate that can delete the LLM stage from the architecture, and its outc
 by the prompt. Leaving the prompt to the implementer means the gate measures the implementer, not
 the design.
 
-- **Model:** `config.model_id`, default `claude-haiku-4-5-20251001` (D-9).
+- **Model:** `config.llm_model_id`, default `claude-haiku-4-5-20251001` (D-9).
 - **`max_tokens`:** 50. **`temperature`:** 0.
 - **`tool_choice`:** `{"type": "tool", "name": "select_note"}` — forced (FR10).
 - **Enum:** candidate IDs only, plus `"none"` (FR48).
@@ -470,6 +501,74 @@ via FR35 — the user is told, not silently downgraded.
 
 ---
 
+## 5a. Dispatch, Echo, and Chunk Mapping *(closes review-B2 Tier-1 items 5, 6, 7)*
+
+### LLM dispatch collision policy (item 7)
+
+One caller thread, blocking `httpx`, uncancellable. What happens when a second utterance qualifies
+mid-call was undefined, and the three plausible policies produce visibly different behaviour.
+
+**Policy: one in flight, one pending slot, newest wins.**
+
+```
+dispatch(u):
+    if in_flight is None:  issue(u)                       # goes now
+    else:                  pending = u                    # REPLACES any older pending
+on_complete(result):
+    gate(result)                                          # nonce + latest-issued (§5)
+    if pending: issue(pending); pending = None
+```
+
+- The in-flight call is **never cancelled** — it cannot be. It runs to completion or its 5 s
+  timeout, and the sequence gate discards it if superseded.
+- The pending slot holds **at most one** utterance, always the newest. An utterance displaced from
+  the pending slot is dropped without a call, which is what bounds cost (FR40) and rate-limit
+  exposure.
+- `_latest_issued` advances at **issue** time, so a superseded in-flight result fails the gate. This
+  is why the stale result cannot render — the failure mode a plain "debounce the newcomer" reading
+  would have produced.
+- Worst-case added latency for the newest question is one in-flight call, capped at the 5 s timeout.
+- **The matching worker's inbox queue is bounded at 4** and drop-oldest, consistent with §8's rule
+  that every inter-stage queue is bounded. It was previously the one unbounded queue.
+
+### Runtime echo suppression (item 5)
+
+Preflight measures audio cross-correlation once (τ_echo 0.70) and caches it. **Runtime suppression
+is text-domain**, and runs in the matching worker before embedding:
+
+- An interviewer utterance is suppressed if a **user** utterance overlaps it within ±1.5 s and their
+  normalised token overlap (Jaccard on lowercased word sets) ≥ **τ_echo_text = 0.80**.
+- Rationale for text rather than continuous audio correlation: the audio streams are already
+  consumed by two independent STT backends with different internal buffering, so aligning their PCM
+  at runtime would mean retaining and time-warping both — expensive, and it re-introduces the
+  retained-audio problem FR16 exists to avoid. Comparing transcripts is cheap and needs nothing
+  extra held.
+- **Ordering:** the mic assembler emits before the matching worker dequeues, because mic utterances
+  are not gated on an LLM round trip. If the user utterance has not arrived within 300 ms, the
+  interviewer utterance proceeds unsuppressed — a missed suppression is a wrong-note risk, not a
+  correctness failure, and blocking on it would add latency to every question.
+- Lives in `audio/echo.py` (preflight, audio-domain) and `matching/pipeline.py` (runtime,
+  text-domain). Both are named because they are genuinely different mechanisms.
+
+### Chunk → `headline` / `body` mapping (item 6)
+
+FR2 fixed chunk *boundaries* but never said which text becomes `headline` — and since only
+`headline` is embedded (§4), this single mapping determines all stage-1 quality.
+
+| Strategy | `headline` | `body` |
+|---|---|---|
+| `.md` header split | The header text, `#` stripped | Everything below it |
+| `Q:` / `A:` convention | The `Q:` line, prefix stripped | The `A:` block |
+| Blank-line split | The **first line** of the block | The remaining lines |
+| Single-line block | The line itself | Empty |
+
+A blank-line-split chunk whose first line is not question-shaped produces a weak headline. The
+importer flags any chunk whose headline exceeds 120 characters or lacks a `?` as *"check this
+headline — it's what questions get matched against"*, which is exactly the kind of thing FR2's
+mandatory review step exists to catch.
+
+---
+
 ## 6. Session State Machine *(D-7)*
 
 ```mermaid
@@ -517,7 +616,7 @@ at runtime. Session start stays instantaneous rather than becoming a 15-second r
 interview, which is exactly when the user has least patience for one.
 
 **Health is orthogonal**, not a state. A session in `RUNNING` carries a health record (§7); there
-is no `RUNNING_DEGRADED` state. This is what keeps the state count at 6 instead of 6×2^5.
+is no `RUNNING_DEGRADED` state. This is what keeps the state count at 7 instead of 7×2^5.
 
 **`PAUSED` records why it paused** *(review-B A9)*, because resume behaviour differs by cause:
 
@@ -570,7 +669,8 @@ Any result arriving after step 1 is discarded by the sequence gate, whose counte
 class Health:
     loopback: Status   # ok | degraded | failed | off
     mic:      Status
-    stt:      Status
+    stt_interviewer: Status   # per stream, so FR61's per-stream failure is expressible
+    stt_user:        Status
     matching: Status   # ok | local_only | failed | off
     egress:   Egress   # none | cloud_stt | llm | both
     lag:      float    # seconds behind realtime
@@ -596,7 +696,7 @@ pool contradicting the one-in-flight rule (review-B C1, A2).*
 |---|---|---|---|
 | Qt main | 1 | All UI, `QSettings`, session state machine | Never |
 | Audio callback | 2 | Resample → 20 ms frame → bounded queue | Never (FR45, p99 < 2 ms) |
-| STT pump | 2 | Dequeue frames, aggregate to 2–4 s, call `feed()` | Yes |
+| STT pump | 2 | Dequeue frames, call `feed()` once per frame. **No aggregation** — see §1a | Yes |
 | Backend-internal | 2 | Local inference loop, or cloud private asyncio loop | Yes (backend-owned) |
 | Utterance assembler | 2 | Accumulation, silence timer, utterance emission | Yes |
 | Matching worker | 1 | Embedding, prefilter, dispatch, **sequence gate** | Yes |
@@ -638,7 +738,7 @@ Implements review §4's ladder. Each row is a test case in the strategy doc.
 |---|---|---|---|
 | Cloud STT drop | socket close/timeout | fall back to local, resume | `local STT (fallback)` (FR21) |
 | STT worker crash | watchdog heartbeat | restart once; second failure holds session | `STT unavailable` (FR61) |
-| STT falling behind | queue depth > 3 | drop oldest chunk | `falling behind` (FR33) |
+| STT falling behind | queue depth > 120 frames (80% full) | drop oldest frame | `falling behind` (FR33) |
 | Default device **changed** (another device available) | device-change notification | re-bind, session continues **RUNNING** | brief notice (FR39a) |
 | Device **lost** (no replacement available) | capture read error | retry 10 s → `PAUSED`, auto-resume when a device returns | `audio lost` (FR39b) |
 | LLM timeout/error | request exception | retry once → degraded path | degraded styling (FR49) |
@@ -692,7 +792,9 @@ M5 was seven tasks with no visual specification; T5.3's "distinct styling tokens
 | **Confirmed state** (FR51) | 3 px left border, `#4C9AFF` |
 | **Degraded state** (FR51) | 3 px left border, `#F5A623`, plus a `~` glyph before the headline |
 | Health strip (FR35) | 11 px, bottom-right, `#8A96A3`; **`ok` + empty content renders "nothing matched" in italic grey — never a blank panel** |
-| Egress indicator (FR20) | 8 px dot, top-right, `#F5A623` when any data leaves the device |
+| Capture indicator (FR7) | 8 px dot, top-**left**, `#4CD07D` while any stream is open; hollow ring while `WIPED`/`PAUSED` (devices held, nothing captured) |
+| Egress indicator (FR20) | Top-right, **two separate 8 px dots** so the paths are distinguishable per T8.5: left = cloud STT (`#F5A623`), right = LLM (`#F5A623`). One shared dot would collapse the `Egress` enum's `cloud_stt`/`llm`/`both` distinction |
+| Tracker checklist (FR12) | Docked below the bullets, 13 px, max 5 visible rows with scroll; `#8A96A3` unmarked, `#4CD07D` + check glyph when marked. Never displaces the snippet — the panel grows downward |
 | Capture-exclusion failure (FR14a) | Full-width `#D0454C` bar across the panel top, persistent |
 
 The confirmed/degraded distinction is carried by **border colour plus a glyph**, not colour alone —

@@ -54,8 +54,11 @@ Not a unit test. A **procedure**, automated as far as Windows allows:
 1. Start Process Monitor filtered to the app process.
 2. Run a 45-minute simulated session (scripted audio, both streams, matching active).
 3. Export the trace; diff every written path against the allowlist:
-   `%APPDATA%\InterviewPrepRecall\**`, the PyInstaller `_MEI*` temp dir, the `faster-whisper`
-   model cache, `QSettings` registry keys.
+   the allowlist in **design §4** — `%APPDATA%\InterviewPrepRecall\**`, `QSettings` registry keys,
+   the PyInstaller `_MEI*` temp dir, the `faster-whisper` model cache, **and the HuggingFace/torch
+   cache** (`%USERPROFILE%\.cache\huggingface`, `%LOCALAPPDATA%\torch`). Cite §4 rather than
+   restating it — an earlier version of this list omitted the torch cache and would have failed
+   any correct first run.
 4. For each allowlisted file written during the session, grep for known-unique phrases from the
    scripted transcript.
 
@@ -64,8 +67,11 @@ against the **packaged** build, not just the dev build — PyInstaller changes t
 
 ### FR15 / FR58 / FR59 — purge
 
-- **Zeroing:** hold a `memoryview` of the transcript buffer across purge; assert all bytes zero.
-  Asserting "the variable is `None`" would pass while the memory still holds the transcript.
+- **Zeroing (audio only):** hold a `memoryview` of the audio buffer across purge; assert all bytes
+  zero. Asserting "the variable is `None`" would pass while the memory still holds the audio.
+- **Transcript:** assert no application-held reference survives (weakref sweep). **Do not assert
+  zeroed memory** — transcript text is `str` (design §6), so that assertion is unsatisfiable and
+  would pass vacuously, which is the exact defect class this suite exists to catch.
 - **Scope:** SHA-256 every note file before and after panic clear; assert identical (FR58).
 - **In-flight:** a mock LLM client that completes 500 ms *after* purge; assert the response is
   discarded and nothing renders (FR59).
