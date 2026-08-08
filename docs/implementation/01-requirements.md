@@ -1,0 +1,157 @@
+# Requirements Specification
+
+Consolidates the PRD's FR1–FR27, the safety review's amendments (A1–A23, issued as FR28–FR40),
+and requirements newly derived while closing gaps (FR41+). This document supersedes the PRD's §6
+where they differ; differences are marked and explained.
+
+**Status key:** `v1` ships in the first release · `M9` specified but deferred · `superseded` replaced by another requirement
+
+Every requirement below states an observable pass condition. If a requirement cannot be
+verified by an automated test or a written manual procedure, it is not a requirement — it is a
+preference, and belongs in the design doc instead.
+
+---
+
+## 1. Notes & Prep
+
+| ID | Status | Requirement | Verification |
+|---|---|---|---|
+| **FR1a** | v1 | Import prep notes via paste, `.txt`, or `.md`. | Import each of the 3 paths; content round-trips exactly. |
+| **FR1b** | M9 | `.docx` import. | Deferred per D-U1. |
+| **FR2** | v1 | Auto-chunk notes into discrete items. `.md` splits on `##`/`###`; `.txt` splits on blank lines or an explicit `Q:`/`A:` convention. Every auto-split chunk is presented for review and is editable before save. | Import a fixture of each format; assert chunk boundaries; assert save is blocked until the review step is confirmed. |
+| **FR3** | v1 | Edit, delete, and reorder notes between sessions. Note IDs are unaffected by any of these (FR41). | Edit/delete/reorder; assert IDs stable, order persists. |
+| **FR4** | v1 | Tag notes with free-form labels. Tags drive progress-tracker selection (FR12) and are shown in the editor. | Round-trip tags through save/load/export. |
+| **FR41** | v1 | **Note IDs are UUID4, assigned at creation, stable across edits and reorders, and never reused after deletion.** | Delete a note, create 100 more; assert the deleted ID never recurs. (Review A9 / BC-2.) |
+| **FR42** | v1 | A note carries `bullets[]` of user-authored verbatim strings. The importer proposes sentence-split bullets for review; the user may accept, edit, or clear them. **No bullet text is ever machine-generated at match time.** | Assert every rendered bullet is a byte-exact substring of the stored note. (D-5.) |
+| **FR43** | v1 | Multiple named note sets; exactly one is active per session. | Create 2 sets, switch active, assert matching draws only from the active set. (US-A3, D-U1.) |
+
+## 2. Notes Durability *(review A1 — the review's highest-severity finding)*
+
+| ID | Status | Requirement | Verification |
+|---|---|---|---|
+| **FR28** | v1 | All notes writes are atomic: write a temp file in the same directory, flush + `fsync`, then atomically replace the target. Never write in place. | Kill the process (`taskkill /F`) during save, 10 consecutive runs; notes load intact every time. |
+| **FR29** | v1 | The app retains the last 5 versions of each note set, rotated on save, restorable from the UI. | Corrupt the live file; restore from backup via UI; content matches the prior version. |
+| **FR30** | v1 | Notes export to a plain `.md` + `.json` bundle and re-import from it, losslessly. | Export → wipe store → import; assert deep equality of content, tags, bullets, and order. |
+| **FR31** | v1 | The notes store carries `schema_version`. A newer version than the app understands causes a clean refusal with an explanatory message, never a best-effort parse. | Hand-edit `schema_version` to N+1; assert refusal and that the file is left untouched. |
+| **FR44** | v1 | A corrupt or unparseable note set offers restore-from-backup rather than failing silently or starting empty. | Truncate the file mid-object; assert the restore prompt appears. |
+
+## 3. Audio Capture
+
+| ID | Status | Requirement | Verification |
+|---|---|---|---|
+| **FR5** | v1 | Capture system audio output via WASAPI loopback, independent of the video application. | Capture during playback from 3 different apps; assert non-silent PCM. |
+| **FR6** | v1 | **Capture microphone input as a separate concurrent stream.** *(Supersedes the PRD's "optionally" — D-U2 makes both streams mandatory.)* | Assert both streams deliver frames concurrently for 60 min without drift or device conflict. |
+| **FR7** | v1 | Capture starts and stops only via explicit user control; it never runs in the background without a visible indicator. | Assert no capture thread exists in `IDLE`; assert indicator visible whenever any stream is open. |
+| **FR39** | v1 | On default-output-device change or device loss mid-session, re-bind to the new default automatically, notify the user, and keep the session alive. | Switch default device and unplug headphones mid-session; session survives, notice shown. (Review A16.) |
+| **FR45** | v1 | The audio callback never blocks: it copies the frame into a bounded queue and returns. Queue overflow drops the oldest frame and increments a counter. | Instrument callback duration; assert p99 < 2 ms and that overflow drops rather than grows. |
+
+## 4. Transcription
+
+| ID | Status | Requirement | Verification |
+|---|---|---|---|
+| **FR8** | v1 | Audio streams to STT in rolling chunks (~2–4 s). | Assert chunk cadence within tolerance. |
+| **FR17** | v1 | STT sits behind a common streaming interface (specified in design §2) so backends are swappable without changes elsewhere. | Swap backends via config with no edits outside the backend package; full pipeline test passes on both. |
+| **FR18** | v1 | Default backend is local `faster-whisper`. Cloud backends (Deepgram, ElevenLabs) are opt-in, enabled by entering an API key. | Assert default config selects local; assert cloud inactive without a key. |
+| **FR19** | v1 | API keys are stored in Windows Credential Manager, never in a config file, log, or diagnostic export. | Grep the entire app data directory and a diagnostic export for the key string; assert absent. |
+| **FR21** | v1 | If a cloud connection drops mid-session, fall back to local automatically and surface a brief notice. | Kill the socket mid-session; assert transcripts resume from local within 5 s and the notice appears. |
+| **FR46** | v1 | **An utterance is a finalized transcript span** terminated by ≥700 ms silence, 10 s max duration, or session stop; minimum 3 words and 12 characters, otherwise merged forward. Matching triggers per utterance, never per audio chunk. | Feed scripted audio; assert utterance boundaries and that no match fires on an interim result. (D-4.) |
+| **FR47** | v1 | Local backends synthesize finalization from silence detection, since Whisper emits no native final marker. Every acknowledged speech span produces exactly one final event or a transition to `FAILED`. | Assert final-event count equals expected utterance count on a scripted fixture. |
+
+## 5. Matching
+
+| ID | Status | Requirement | Verification |
+|---|---|---|---|
+| **FR9** | v1 | Two-stage pipeline: local embedding prefilter, then an LLM selector over the prefiltered candidates. | Integration test asserts both stages run and stage 2 receives only stage-1 survivors. |
+| **FR10** | v1 | The stage-2 call is structurally constrained: one forced tool call whose only output is a note ID from an enum, or `"none"`. Freeform text is impossible by construction. | Assert `tool_choice` is forced and the schema enum is present on every request. |
+| **FR48** | v1 | **The stage-2 enum contains only the prefiltered candidate IDs (max 5) plus `"none"` — never the full note set.** *(Fixes the concrete bug in PRD §10b's code sample.)* | Load 200 notes; assert every request enum has ≤6 members. (Review A5 / RC-6.) |
+| **FR32** | v1 | Each matching request carries a monotonically increasing sequence number. A response renders only if its sequence equals the **latest issued** sequence. Older responses are discarded on arrival regardless of whether cancellation succeeded. | Inject artificial latency to force out-of-order completion; assert no stale snippet ever renders. (Review A6, as corrected.) |
+| **FR40** | v1 | Matching calls are debounced to at most one in flight, retried at most once with backoff on 429/5xx, and subject to a per-session call ceiling. On sustained rate-limiting, degrade to local-only matching and signal via FR35. | Simulate sustained 429; assert ≤1 retry per call, degradation, and signalling. |
+| **FR34** | v1 | The embedding index records model name and version. On mismatch at load, re-embed all notes transparently and report it. | Change the model ID in the cache; assert automatic re-embed, not silent vector comparison. (Review A10 / BC-1.) |
+| **FR49** | v1 | **On stage-2 failure or timeout, fall back to the top stage-1 match only if it clears τ_degraded (a higher bar than τ_floor), and render it in the degraded visual state (FR51). Below τ_degraded, render nothing.** | Force stage-2 failure at similarities above and below τ_degraded; assert both branches. (D-U3, resolving §10b vs US-D2.) |
+| **FR50** | v1 | When no candidate clears τ_floor, the overlay shows nothing. The system never surfaces a note it did not select. | Feed unrelated speech; assert empty overlay and `matching=ok` health. (US-D2.) |
+| **FR52** | v1 | Match sensitivity is user-adjustable on a single control mapping to τ_floor. | Move the control; assert τ_floor changes and persists. (US-D3.) |
+| **FR53** | v1 | Matching consumes the interviewer (loopback) stream only. | Assert mic utterances never enter the matching queue. (D-10.) |
+
+## 6. Overlay UI
+
+| ID | Status | Requirement | Verification |
+|---|---|---|---|
+| **FR11** | v1 | Frameless, always-on-top, teleprompter-styled panel: dark semi-transparent, high-contrast text, minimal chrome. Renders headline + up to 3 verbatim bullets. | Visual check against the spec; assert ≤3 bullets rendered. |
+| **FR51** | v1 | The overlay has two distinct content states: **confirmed** (stage-2 selected) and **degraded** (FR49 fallback), visually distinguishable at a glance without reading. | Assert distinct styling tokens; manual glance test at 1 m distance. |
+| **FR13** | v1 | Manual controls: pause capture, dismiss snippet, pin snippet (suppresses auto-clear). | Exercise each; assert behavior. |
+| **FR54** | v1 | An unpinned snippet auto-clears after τ_visible (default 25 s, configurable). | Assert clear at τ_visible; assert a pinned snippet persists indefinitely. |
+| **FR14** | v1 | The overlay is excluded from screen capture via `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`. | Share full screen and single window in Zoom/Teams/Meet; overlay absent in all six combinations. |
+| **FR14a** | v1 | **If `SetWindowDisplayAffinity` returns failure, display a prominent persistent warning that the overlay is NOT excluded. Never silently assume success.** | Force the call to fail; assert the warning. (Review A15 / RC-7.) |
+| **FR22** | v1 | Drag to reposition; default position top-center. | Drag; assert position changes and default is correct on first run. |
+| **FR23** | v1 | Resize by edge drag or settings control; text scales with the window rather than clipping. | Resize across the supported range; assert no clipping at any size. |
+| **FR24** | v1 | Continuous opacity control, 20–100%, independent of size and position. | Assert opacity applies and the other properties are unchanged. |
+| **FR25** | v1 | Snippet replacement transitions (fade/slide), never a hard pop. | Assert a transition animation runs on replace. |
+| **FR26** | v1 | Position, size, and opacity persist between sessions via `QSettings`. Explicitly exempt from the §4 no-persistence principle, which governs audio and transcript content only. | Set, restart, assert restored. |
+| **FR27** | v1 | A lock-position toggle prevents accidental dragging. | Assert drag is a no-op while locked. |
+| **FR55** | v1 | A "reset overlay position" control restores the default position, for recovery when persisted coordinates land off-screen. | Persist off-screen coordinates, restart, assert recovery via the control. (Review A22 / RC-9.) |
+
+## 7. Progress Tracker *(promoted to v1 by D-U1)*
+
+| ID | Status | Requirement | Verification |
+|---|---|---|---|
+| **FR12** | v1 | A checklist of user-selected talking points, marked "mentioned" from the user's own transcribed speech. | Speak a tracked point into the mic; assert it marks within 5 s. |
+| **FR56** | v1 | Tracking consumes the mic stream only. | Play a tracked phrase through the loopback stream only; assert it does **not** mark. (US-G2.) |
+| **FR57** | v1 | **Echo detection:** preflight cross-correlates mic and loopback. On high correlation, warn that speaker output is bleeding into the system-audio stream and that headphones are required for reliable attribution. At runtime, spans detected as mic echo are excluded from the interviewer stream. | Run preflight over speakers; assert the warning. Run over headphones; assert no warning. (D-8 / RC-8.) |
+
+## 8. Session Lifecycle & Privacy
+
+| ID | Status | Requirement | Verification |
+|---|---|---|---|
+| **FR15** | v1 | Ending a session (manual or on app close) clears audio buffers, transcripts, and overlay content from memory. Transcript buffers are mutable and explicitly zeroed, not merely dereferenced. | Assert buffer bytes are zero post-purge; assert no live references. (Review A3 / DI-6.) |
+| **FR16** | v1 | **The application never writes audio, transcripts, or matched-snippet content to disk.** The OS may page process memory and may write crash dumps containing process memory; these are outside application control, and the app disables Windows Error Reporting dumps for its own process. *(Rewritten from the PRD's unkeepable absolute claim.)* | Process Monitor trace against an expected-path allowlist; no session content in any written file. (Review A3 / DI-5.) |
+| **FR58** | v1 | Panic clear and session purge affect audio buffers, transcript, and overlay state **only**. They never touch stored notes, note sets, or settings under any circumstance. | Panic-clear with notes loaded; assert byte-identical note files before and after. (Review A2 / DI-3.) |
+| **FR59** | v1 | Panic clear cancels all in-flight network requests (cloud STT socket, LLM call) before clearing local state. Any response arriving after a purge is discarded, never rendered. | Panic-clear with both in flight; assert cancellation and no post-purge render. (Review A2 / RC-4.) |
+| **FR60** | v1 | Destructive actions (delete note, delete note set, panic clear) require confirmation, except panic clear which is deliberately single-action but scoped by FR58. | Assert confirmation dialogs; assert panic clear is single-action. |
+
+## 9. Resilience & Backpressure
+
+| ID | Status | Requirement | Verification |
+|---|---|---|---|
+| **FR33** | v1 | The audio→STT queue is bounded (3 chunks). Overflow drops the oldest chunk and sets a degraded health state. The transcript buffer retains a bounded rolling window (5 min), not the whole session. | Saturate with slow STT; assert flat memory, oldest-drop, and the `falling behind` state. (Review A7 / RC-1, RC-2.) |
+| **FR61** | v1 | A crashed STT worker restarts once automatically; a second failure stops STT, holds the session open, and reports `STT unavailable`. The user is never silently unassisted. | Kill the worker twice; assert both behaviors. (US-C3, review RB-2.) |
+| **FR62** | v1 | On machine sleep/lock mid-session, capture pauses and resumes on unlock; nothing is purged and no crash occurs. | Lock and unlock during a session; assert resume. |
+
+## 10. Observability
+
+| ID | Status | Requirement | Verification |
+|---|---|---|---|
+| **FR20** | v1 | A persistent, unmissable indicator shows whenever data leaves the device — cloud STT audio **or** LLM matching text — visually distinct from the capture indicator. | Assert the egress indicator appears for each path independently and is distinguishable from FR7's. |
+| **FR35** | v1 | A persistent session health indicator distinguishes at minimum: `capturing`, `no audio detected`, `STT degraded`, `matching: local-only`, `falling behind`, `audio lost`. **It must make "no match found" and "pipeline broken" visually distinguishable** — an empty overlay must be readable as intentional. | Drive each state; assert distinct rendering. Assert the no-match state is distinct from every failure state. (Review A11 / OB-1, OB-2.) |
+| **FR36** | v1 | A bounded in-memory diagnostic ring buffer records structural events only — timestamps, component states, latencies, error codes, match/no-match decisions — and **never transcript or note content**. Viewable in-app and explicitly exportable by the user. Never auto-written to disk. | Run a session, export, assert no transcript substring appears; assert the buffer is bounded. (Review A12.) |
+| **FR37** | v1 | Mid-session degradation switches for: LLM matching on/off (falls back to local-only), cloud STT on/off, progress tracker on/off. Each independently switchable while running. | Toggle each mid-session; assert the pipeline adapts without a restart. (Review A13 / OB-3.) |
+| **FR38** | v1 | A pre-session readiness check runs **automatically** at session start, validating: loopback device, mic device, notes loaded, STT backend reachable, API key valid (if cloud), Windows build ≥ 19041, and that `SetWindowDisplayAffinity` returned success. Blocks start on hard failures, warns on soft ones. | Fail each precondition in turn; assert block vs warn classification. (Review A14 / OB-5.) |
+
+## 11. Legal & Consent
+
+| ID | Status | Requirement | Verification |
+|---|---|---|---|
+| **FR63** | v1 | An unavoidable first-run disclosure covering: recording/interception law varies by jurisdiction and may require all-party consent; many employers prohibit capture during interviews; the user is responsible for compliance. Not buried in settings. | Assert it appears on first run and blocks until acknowledged; assert acknowledgement persists. (Review A19 / §2.6.) |
+
+## 12. Non-Functional
+
+| ID | Status | Requirement | Verification |
+|---|---|---|---|
+| **NFR1** | v1 | End-to-end interviewer-speech → overlay update: p95 < 3 s on local STT, measured on the target machine. | Scripted-audio harness with timestamped ground truth; report p50/p95. **Gate on AS-1.** |
+| **NFR2** | v1 | Runs without a discrete GPU. | Run the full suite on CPU only. |
+| **NFR3** | v1 | Overlay CPU/GPU cost does not visibly degrade a concurrent video call. | Measure frame time during a live call with the overlay active vs inactive. |
+| **NFR4** | v1 | Windows 11 (D-U4); code path still checks build ≥ 19041 per FR38. | Assert the check runs. |
+| **NFR5** | v1 | Memory is flat across a 60-minute session — bounded by FR33's windows, not a function of session length. | 60-min soak; assert no monotonic growth. |
+| **NFR6** | v1 | Stage-2 cost stays within a few cents per 45-minute interview under expected utterance rates. | Count calls and tokens in the M4 measurement; extrapolate. |
+
+---
+
+## Supersession Notes
+
+Where this document differs from the PRD, the PRD is wrong or incomplete, for these reasons:
+
+- **FR6** — "optionally capture microphone" → mandatory. D-U2.
+- **FR16** — absolute no-disk claim → scoped, honest claim. The original could not be satisfied on Windows (DI-5).
+- **FR12 / Epic G** — stretch → v1. D-U1.
+- **FR1** — `.docx` split into FR1a (v1) and FR1b (deferred). D-U1.
+- **PRD §10b code sample** — enum populated from all note IDs → prefiltered candidates only. FR48.
+- **PRD §10b fallback prose** — unconditional fallback → τ_degraded-gated and visually marked. FR49, resolving the contradiction with US-D2.
