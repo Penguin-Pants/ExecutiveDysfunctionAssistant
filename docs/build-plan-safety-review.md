@@ -1,7 +1,10 @@
 # Safety & Architecture Review — Interview Prep Recall Build Plan
 
 **Reviewer role:** Principal Engineer / Production Risk Architect
-**Artifact reviewed:** `interviewpreprecallprd.md` (Requirements & Build Plan)
+**Artifact reviewed:** [`docs/interviewpreprecallprd.md`](./interviewpreprecallprd.md) (Requirements & Build Plan), committed
+alongside this review so every FR/US/section reference below resolves to a fixed version. All
+citations refer to that file as committed in this pull request; if the plan is amended, this
+review should be re-run against the new revision rather than assumed still current.
 **Status:** Pre-implementation. No application code exists in this repository at time of review.
 **Date:** 2026-08-08
 
@@ -364,9 +367,17 @@ from the 3–5 stage-1 survivors, not the whole note set. Add a stated cap (e.g.
 so request size is bounded regardless of corpus size.
 
 **A6. Add FR32: response ordering.** *(fixes RC-3)*
-*"Each matching request carries a monotonically increasing sequence number. The overlay only
-renders a result whose sequence number is greater than the last rendered result; superseded
-in-flight requests are cancelled. A stale response never replaces a newer one."*
+*"Each matching request carries a monotonically increasing sequence number. A response is
+rendered only if its sequence number equals the **latest issued** sequence number — not merely
+greater than the last rendered one. Any response older than the latest issued request is
+discarded on arrival, whether or not its cancellation succeeded. Superseded in-flight requests
+are also cancelled as an optimization, but correctness must not depend on cancellation landing:
+a request can complete concurrently with, or ignore, its own cancellation."*
+
+> Comparing against the last *rendered* sequence is insufficient. If request A (seq 1) and
+> request B (seq 2) are both in flight and A returns first, A passes a "greater than last
+> rendered" test and briefly renders, even though B was issued against a newer utterance and
+> already supersedes it. Comparing against the latest *issued* sequence discards A immediately.
 
 **A7. Add FR33: pipeline backpressure.** *(fixes RC-1, RC-2)*
 *"The audio→STT queue is bounded (suggest 3 chunks). On overflow, the oldest unprocessed chunk
@@ -496,8 +507,13 @@ rely on during a real interview.** Two gates.
       parsing (FR31).
 
 **Privacy guarantees**
-- [ ] Process Monitor trace across a full 45-minute simulated session; the only writes by this
-      process are to the settings and notes paths (OB-4 / A3).
+- [ ] Process Monitor trace across a full 45-minute simulated session, compared against an
+      explicit expected-path allowlist (OB-4 / A3). The gate is that **no session content** —
+      audio, transcript, or matched-snippet text — is written anywhere. Expected non-content
+      writes are permitted and must be enumerated in the allowlist: the settings and notes
+      paths, the PyInstaller one-file bootloader's temp extraction directory, and the
+      `faster-whisper` model cache on first acquisition. Any write outside the allowlist, or
+      any allowlisted file found to contain session content, fails the gate.
 - [ ] Verify Windows Error Reporting dumps are disabled for the process (A3).
 - [ ] Confirm `SetWindowDisplayAffinity` returns success, then verify the overlay is absent in
       a real Zoom/Teams/Meet share of both full screen and single window (FR14).
