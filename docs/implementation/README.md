@@ -26,6 +26,8 @@ restating them — so a change in one place propagates by reference, not by copy
 | `OQ-` | Open question. Deliberately unresolved, with a revisit point. |
 | `T` | Task. |
 | `A-` | Amendment from the safety review, retained so review findings stay traceable. |
+| `US-` | User story from the PRD §8. Referenced for intent; not itself a requirement — every `US-` that survived is realised by one or more `FR`. |
+| `DI-` `BC-` `RB-` `RC-` `OB-` | Safety-review finding categories: data integrity, backwards compatibility, rollback, race conditions, observability. Cited so each requirement traces back to the finding that motivated it. |
 
 ## Three gates that can change the plan
 

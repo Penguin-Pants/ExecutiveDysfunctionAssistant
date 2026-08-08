@@ -99,6 +99,27 @@ interview_prep_recall/
 
 ---
 
+## 1a. Audio Contract *(closes review-B A1 — the highest-divergence ambiguity)*
+
+Without this, "bounded (3 chunks)" and "copies the frame" describe buffers ~400× apart, and
+FR33's overflow test means opposite things.
+
+| Property | Value |
+|---|---|
+| Capture format | Device-native, converted immediately in the callback |
+| Queue element | **One 20 ms frame**, 16 kHz mono `int16` (640 bytes) |
+| `q_audio_*` depth | **150 frames = 3 s** of jitter buffer |
+| Overflow unit | One 20 ms frame (FR45) — not a chunk, not a question |
+| Resampling | In the **capture callback**, via `soxr` (fast, fixed-cost). The callback stays under the FR45 p99 2 ms budget because `soxr` on a 20 ms frame is tens of microseconds |
+| `feed(pcm: bytes)` | Exactly this format. Backends never resample |
+| STT chunking (FR8) | The **STT worker** aggregates frames into 2–4 s windows before invoking inference. This is the only place chunking happens |
+
+**Why the callback resamples rather than the worker:** it keeps a single format in every queue,
+every backend, and every fixture, so a WAV fixture fed directly to `feed()` exercises the same
+path as live audio — which is what makes CI-without-audio-hardware possible (§12).
+
+---
+
 ## 2. The STT Interface *(D-2 — written before any backend)*
 
 This is the contract BC-4/A8 said was missing. It is specified against the **local** backend's
@@ -155,8 +176,29 @@ class SttBackend(Protocol):
    would otherwise corrupt utterance boundaries.
 6. **`stop()`** flushes pending finals within `flush_timeout_s`, then transitions to `STOPPED`.
    **`close()`** releases resources and is idempotent.
-7. **Callbacks run on the backend's own thread.** Consumers must not do heavy work in them; they
-   enqueue and return.
+7. **Callbacks run on whichever thread the backend chooses**, which is not necessarily the caller
+   of `feed()`. Consumers must not do heavy work in them; they enqueue and return.
+
+### Thread ownership — normative *(closes review-B A2)*
+
+Rules 1 and 7 make the backend, not the caller, responsible for its own execution. The resulting
+ownership is fixed, not left to the implementer:
+
+| Stage | Thread | Notes |
+|---|---|---|
+| `feed()` caller | STT **pump** thread (1 per stream) | Dequeues frames, calls `feed()`, does nothing else |
+| Inference / socket I/O | **Backend-internal** thread, created and owned by the backend | Local: inference loop. Cloud: private asyncio loop (D-1) |
+| `on_transcript` / `on_state` | Backend-internal thread | Must return immediately |
+| Utterance assembly | **Assembler** thread (1 per stream) | Fed by a bounded `q_transcript_<stream>` (depth 32) that the callback writes to |
+
+This is **4 threads per stream** (pump, backend-internal, assembler, plus the OS capture callback),
+not the 2 the earlier §8 table implied. `q_transcript_*` is the fourth queue class and was
+previously unnamed. The assembler owns its accumulation state exclusively — no lock needed,
+because exactly one thread touches it.
+
+**Utterance close timer (closes review-B "missing #17"):** the assembler thread waits on its queue
+with a timeout equal to the remaining silence budget, so a trailing utterance closes even when no
+further events arrive. No separate timer thread exists, and none is needed.
 
 **Local backend note (FR47):** `faster-whisper` has no native finalization, so `local_whisper.py`
 runs a VAD-based silence detector and synthesizes `is_final=True` at ≥700 ms silence or 10 s max
@@ -173,8 +215,18 @@ final TranscriptEvents ──► [assembler] ──► Utterance
 
 - Accumulate consecutive `is_final` events on a stream.
 - Close the utterance on: ≥700 ms gap since `t_end`, OR accumulated span ≥10 s, OR session stop.
-- Discard-and-merge-forward if the closed utterance has <3 words or <12 characters (filters "mm",
-  "right", "okay" — the dominant source of wasted stage-2 calls).
+- **Merge forward** if the closed utterance has <3 words or <12 characters: hold the fragment and
+  prepend it to the next utterance on that stream. *(Closes review-B A5 — "discard-and-merge-forward"
+  named two different operations.)* Precisely:
+  - The held fragment is prepended to the next utterance, which is then re-tested against the
+    minimum.
+  - A fragment held longer than **30 s** is dropped — an isolated "mm" is never worth carrying into
+    an unrelated question.
+  - At session stop, a held fragment is **dropped, not emitted**. Firing a match on "why?" as the
+    session ends serves nobody.
+  - Consequence worth stating: short but meaningful questions — "Why?", "Tell me more" — do not
+    trigger matching on their own. They merge into the next utterance instead. This is deliberate;
+    such fragments carry too little signal for the embedding to place them.
 - Emit `Utterance(stream_id, text, t_start, t_end, context)` where `context` is up to 10 s of
   preceding finalized text on the same stream. **`context` is used only in the stage-2 prompt,
   never in the stage-1 embedding** — including it in the embedding blurs the query and measurably
@@ -198,9 +250,47 @@ recorded fixtures.
   consent.json                             # FR63 acknowledgement
 ```
 
-UI geometry/opacity → `QSettings` (registry) per FR26. API keys → Credential Manager per FR19.
-**Nothing else is ever written.** The allowlist in the test strategy is derived from exactly this
-list plus the PyInstaller temp dir and the `faster-whisper` model cache.
+### Settings split — normative *(review-B: previously ambiguous)*
+
+| Setting | Home |
+|---|---|
+| Overlay position, size, opacity, lock state (FR22–27) | `QSettings` (registry) |
+| Active note set ID (FR43) | `QSettings` |
+| τ_floor / sensitivity (FR52), backend choice, `model_id`, all other thresholds | `config.json` |
+
+`config.json` carries its own `schema_version`; a missing, unparseable, or newer-versioned file is
+replaced with defaults and the user is notified — it holds no irreplaceable data, so recovery is
+preferable to refusal (unlike notes, FR31).
+
+**Backward migration (review-B "missing #10"):** the store reads any `schema_version` ≤ current.
+Migrations are forward-only functions `migrate_v{n}_to_v{n+1}`, applied in sequence on load, with
+the pre-migration file preserved as `.bak.1` before any write. v1 ships with none, but the hook
+exists from the start — retrofitting a migration path onto a format already in users' hands is how
+data gets lost.
+
+### Write allowlist *(corrects "nothing else is ever written" — review-B C5)*
+
+The FR16 gate checks **session-time writes**. The complete allowlist:
+
+| Path | Written by |
+|---|---|
+| `%APPDATA%\InterviewPrepRecall\**` | The app |
+| `QSettings` registry keys | Qt |
+| PyInstaller `_MEI*` temp dir | Bootloader, at startup |
+| `faster-whisper` model cache | First run only |
+| **HuggingFace / torch cache (`%USERPROFILE%\.cache\huggingface`, `%LOCALAPPDATA%\torch`)** | `sentence-transformers`, first run only |
+
+The last row was missing and would have failed the FR16 gate on any correct first run for reasons
+unrelated to privacy.
+
+**User-initiated exports (FR30 notes, FR36 diagnostics) write wherever the user chooses and are
+outside this allowlist by design.** They are excluded from the gate because the gate measures what
+the app does *on its own* during a session; an export is the user exercising a requirement. The
+gate procedure runs without invoking either export.
+
+UI geometry/opacity → `QSettings` (registry) per FR26. API keys → Credential Manager per FR19,
+service name `InterviewPrepRecall`, account = backend name (`deepgram`, `elevenlabs`, `anthropic`).
+The Anthropic key for stage-2 matching is covered by FR19 exactly as the STT keys are.
 
 ### Note set schema (`schema_version: 1`)
 
@@ -233,9 +323,19 @@ list plus the PyInstaller temp dir and the `faster-whisper` model cache.
 
 ### Embedding cache
 
-`.npz` holding `note_ids`, `vectors` (float32, L2-normalized), `content_hashes`
-(SHA-256 of `headline + "\x00" + body`), plus attributes `model_id`, `model_version`,
-`embedded_at`.
+`.npz` holding `note_ids`, `vectors` (float32, L2-normalized), `content_hashes`, plus attributes
+`schema_version`, `model_id`, `model_version`, `embedded_at`.
+
+**Embedded text is `headline` only** *(review-B: previously unstated)*. Matching is
+question-to-question: the headline *is* the anticipated question, while `body` is the prepared
+answer and `bullets` are its glanceable form. Embedding the answer text pulls the vector toward
+topic vocabulary the interviewer will not use when asking.
+
+**`content_hash` = SHA-256 of the exact embedded text**, i.e. `headline` — the hash must cover
+precisely what was embedded and nothing else. An earlier draft hashed `headline + "\x00" + body`
+while implying a different embedding input; that mismatch would either re-embed on irrelevant edits
+or, worse, miss edits to the embedded field, silently reintroducing the BC-1 stale-vector failure
+that FR34 exists to prevent.
 
 **Load rule (FR34):** if `model_id`/`model_version` mismatch the running model, discard the cache
 and re-embed everything. Per note, if `content_hash` differs, re-embed that note. This closes
@@ -281,29 +381,86 @@ Utterance(interviewer)
 
 | Symbol | Default | Meaning |
 |---|---|---|
-| `τ_floor` | 0.35 | Stage-1 admission. Exposed to the user as the FR52 sensitivity control. |
-| `τ_degraded` | 0.55 | Minimum similarity to render a degraded fallback (FR49). |
+| `τ_floor` | 0.35 | Stage-1 admission. Exposed to the user as the FR52 sensitivity control, range **0.20–0.60**. |
+| `τ_degraded` | `max(0.55, τ_floor + 0.10)` | Minimum similarity to render a degraded fallback (FR49). **Derived, not independent** — a fixed 0.55 would fall below τ_floor once the user raised sensitivity past 0.55, making the degraded gate unconditional and silently restoring the PRD behaviour D-U3 exists to overturn. *(Closes review-B A8.)* |
+| `τ_track` | 0.60 | Progress-tracker "mentioned" threshold (FR12). Deliberately stricter than τ_floor: a false "you covered that" is worse than a missed tick, because the user acts on it by *not* saying something. *(Closes review-B "missing #7".)* |
 | `K` | 5 | Max candidates into stage 2 (bounds FR48's enum). |
 | `τ_visible` | 25 s | Snippet auto-clear (FR54). |
+| `τ_echo` | 0.70 | Normalised cross-correlation above which mic/loopback are judged to be the same signal (FR57). |
 | `debounce` | 1 in flight | D-11. |
+
+### Stage-2 request specification *(closes review-B A3)*
+
+T4.7 is a gate that can delete the LLM stage from the architecture, and its outcome is dominated
+by the prompt. Leaving the prompt to the implementer means the gate measures the implementer, not
+the design.
+
+- **Model:** `config.model_id`, default `claude-haiku-4-5-20251001` (D-9).
+- **`max_tokens`:** 50. **`temperature`:** 0.
+- **`tool_choice`:** `{"type": "tool", "name": "select_note"}` — forced (FR10).
+- **Enum:** candidate IDs only, plus `"none"` (FR48).
+- **Candidate serialisation:** for each candidate, `id`, `headline`, and `tags`. **Not `body`** —
+  bodies are prepared *answers*, and matching is question-to-question; including them adds
+  hundreds of tokens per call and biases selection toward long notes.
+- **User message:**
+
+```
+Recent conversation (context only, do not match against this):
+{utterance.context}
+
+The interviewer just asked:
+{utterance.text}
+
+Candidate prepared notes:
+{for each: "- id={id} | {headline} | tags: {tags}"}
+```
+
+- **System prompt:** *"You match a live interview question to the candidate's own prepared notes.
+  Select the single note that answers what was just asked. If none of them genuinely addresses the
+  question, select \"none\". Prefer \"none\" over a weak match — a wrong note shown mid-interview
+  is worse than no note."*
+
+The `"none"`-biasing instruction is deliberate and paired with the structural constraint: FR10
+guarantees the model *cannot* fabricate, and this prompt discourages it from over-selecting. Any
+change to this block invalidates T4.7's measurement and must be re-run.
 
 ### The sequence gate — precise semantics (FR32)
 
 ```python
+# Owned exclusively by the matching worker thread. LLM pool threads never mutate it;
+# they post results back to the matching worker's inbox queue, which drains them here.
+self._session_nonce: uuid.UUID    # regenerated on every session start AND every purge
 self._latest_issued: int          # incremented at dispatch
-self._rendered: int               # last rendered
 
 def on_result(result):
-    if result.seq != self._latest_issued:
+    if result.nonce != self._session_nonce or result.seq != self._latest_issued:
         diagnostics.record("stale_response_discarded", seq=result.seq)
-        return                    # discard: a newer request already superseded this
-    render(result); self._rendered = result.seq
+        return                    # superseded, or belongs to a purged session
+    render(result)
 ```
 
-Comparing against `_latest_issued` rather than `_rendered` is the correction the PR review
-caught. With requests A(1) and B(2) both in flight, a `> _rendered` test lets A render when it
-returns first, even though B already supersedes it. Correctness must not depend on cancellation
-landing, because a request can complete concurrently with its own cancellation.
+Two properties, and both are load-bearing:
+
+**Comparing against `_latest_issued` rather than a last-rendered counter** is the correction the PR
+review caught. With requests A(1) and B(2) both in flight, a `> _rendered` test lets A render when
+it returns first, even though B already supersedes it.
+
+**The session nonce** closes a second hole *(review-B C7)*: purge resets `_latest_issued`, so a
+pre-purge request carrying `seq=1` would match a post-purge session's `seq=1` and render wiped
+content — violating FR59 through the very mechanism meant to enforce it. The nonce makes staleness
+detectable across a purge boundary, where a monotonic counter alone cannot.
+
+**Cancellation is best-effort, and correctness never depends on it** *(review-B C8)*. The LLM call
+is a synchronous `httpx` request on a pool thread, and Python cannot cancel a blocking call from
+outside. What FR59 actually gets:
+
+- a 5 s hard request timeout, so no call outlives a purge by more than that;
+- rotation of the session nonce at purge, so any late response is discarded on arrival;
+- the cloud STT socket, which *is* asyncio and genuinely cancellable, closed immediately.
+
+FR59's wording and T6.3's assertion are corrected to match: **the socket is cancelled; the LLM
+response is neutralised.** Both satisfy the user-visible guarantee — nothing from before the purge
+reaches the screen — but only one is a true cancellation, and the spec should not claim otherwise.
 
 ### Cost and rate limiting (FR40)
 
@@ -331,8 +488,39 @@ stateDiagram-v2
     PAUSED --> PURGING: panic clear
 ```
 
+### Preflight classification *(FR38 — closes review-B A6; T6.5 was untestable without this)*
+
+| Check | Class | Rationale |
+|---|---|---|
+| Loopback device present | **Hard block** | No interviewer audio = no product |
+| Mic device present | **Hard block** | Mandatory since D-U2 |
+| Active note set loaded and non-empty | **Hard block** | Nothing to match against |
+| Windows build ≥ 19041 | **Hard block** | FR14 cannot function below it |
+| `SetWindowDisplayAffinity` returned success | **Warn, loudly and persistently** | Blocking would permanently strand a user whose machine always fails this, with no remedy available to them. FR14a's persistent warning is the mitigation, and the user gets to decide whether to proceed |
+| STT backend reachable (cloud only) | **Warn** | FR21 falls back to local |
+| API key valid (cloud only) | **Warn** | Same |
+| LLM matching reachable | **Warn** | FR49 degraded path covers it |
+| Echo check (cached from wizard) | **Warn** | FR57; advisory |
+
+**Echo measurement does not run at session start** *(review-B A7)*. Cross-correlation needs
+simultaneous signal on both streams, which only exists once a call is underway — so it is measured
+in the setup wizard (T9.3) using a played test tone plus a spoken prompt, cached, and re-validated
+at runtime. Session start stays instantaneous rather than becoming a 15-second ritual before an
+interview, which is exactly when the user has least patience for one.
+
 **Health is orthogonal**, not a state. A session in `RUNNING` carries a health record (§7); there
 is no `RUNNING_DEGRADED` state. This is what keeps the state count at 6 instead of 6×2^5.
+
+**`PAUSED` records why it paused** *(review-B A9)*, because resume behaviour differs by cause:
+
+| Pause cause | Resume |
+|---|---|
+| User pressed pause (FR13) | Manual only — the user meant it |
+| Machine lock/sleep (FR62) | Automatic on unlock |
+| Device lost (FR39b) | Automatic when a device returns |
+
+Without the cause recorded, a single `PAUSED → RUNNING` edge forces one policy on all three, and
+either the user's deliberate pause self-cancels or a lock leaves them unassisted until they notice.
 
 ### Purge semantics (FR15, FR58, FR59)
 
@@ -341,8 +529,25 @@ is no `RUNNING_DEGRADED` state. This is what keeps the state count at 6 instead 
 1. Cancel in-flight network work — close the cloud STT socket, cancel the LLM request — **before**
    clearing local state, so nothing in transit outlives the purge (FR59).
 2. Stop capture threads; drain and zero audio queues.
-3. Zero transcript buffers. Buffers are `bytearray`/`memoryview`, not `str`, precisely so they can
-   be zeroed; Python string reassignment does not erase the backing memory (DI-6).
+3. Zero what can be zeroed; drop the rest. **This guarantee is deliberately scoped, and the scope
+   is the honest part** *(review-B C2)*:
+   - **Audio buffers are `bytearray` and are explicitly zeroed.** Audio is the largest and most
+     sensitive residue, and it never needs to be a `str`.
+   - **Transcript text is `str` and cannot be zeroed.** `TranscriptEvent.text`, `Utterance.text`,
+     the queues, the LLM request body, and Qt's own widget buffers all hold immutable copies that
+     Python does not let us erase. Purge drops every reference the app holds and clears the
+     widgets; the backing memory is reclaimed by the garbage collector on its own schedule.
+   - **What the user is told** matches this exactly: audio is erased, transcript references are
+     dropped, and residual transcript text may persist in process memory until reclaimed.
+
+   An earlier version of this document asserted transcripts were zeroable `bytearray`s. That was
+   wrong — every consumer of the STT interface takes `str` — and the test written against it
+   (`assert memoryview is all zeros`) would have passed while the transcript stayed fully
+   recoverable from the heap. This is the same class of defect the safety review raised against
+   the PRD's FR16: a guarantee stated past what the platform permits, with a test that confirms the
+   claim rather than the property. Converting the entire text path to mutable buffers was
+   considered and rejected — it would infect every interface for a guarantee still defeated by
+   `pagefile.sys` (DI-5).
 4. Clear overlay content and the matching sequence counters.
 5. **Do not touch** note sets, embedding caches, settings, or consent state (FR58).
 
@@ -376,15 +581,32 @@ local-only`, `falling behind`, `audio lost`, `NOT hidden from screen share` (FR1
 
 ## 8. Concurrency Model *(D-1 — the load-bearing decision)*
 
+*Corrected from an earlier version that omitted three thread classes and specified a 2-slot LLM
+pool contradicting the one-in-flight rule (review-B C1, A2).*
+
 | Thread | Count | Owns | Blocking allowed |
 |---|---|---|---|
-| Qt main | 1 | All UI, `QSettings` | Never |
-| Audio callback | 2 | PCM copy → bounded queue | Never (FR45, p99 < 2 ms) |
-| STT worker | 2 | Backend `feed`/inference, utterance assembly | Yes |
-| Matching worker | 1 | Embedding, prefilter, dispatch | Yes |
-| LLM pool | 2 | HTTP request/response | Yes |
+| Qt main | 1 | All UI, `QSettings`, session state machine | Never |
+| Audio callback | 2 | Resample → 20 ms frame → bounded queue | Never (FR45, p99 < 2 ms) |
+| STT pump | 2 | Dequeue frames, aggregate to 2–4 s, call `feed()` | Yes |
+| Backend-internal | 2 | Local inference loop, or cloud private asyncio loop | Yes (backend-owned) |
+| Utterance assembler | 2 | Accumulation, silence timer, utterance emission | Yes |
+| Matching worker | 1 | Embedding, prefilter, dispatch, **sequence gate** | Yes |
+| LLM caller | **1** | HTTP request/response | Yes |
 | Tracker worker | 1 | Mic-side embedding + checklist | Yes |
-| Watchdog | 1 | Heartbeats, health, device-change notifications | Yes |
+| Watchdog | 1 | Heartbeats, health, device-change notifications (COM MTA) | Yes |
+
+**LLM caller is 1, not a pool.** D-11, FR40, and T4.5 all specify one call in flight; a second slot
+would be either unreachable or a contradiction. The sequence gate's correctness argument depends on
+this bound.
+
+**Sequence-gate state is single-threaded by construction.** `_session_nonce` and `_latest_issued`
+are owned by the matching worker. The LLM caller posts results to that worker's inbox queue rather
+than mutating gate state, so no lock exists and none is needed. *(Closes review-B "missing #18".)*
+
+**Watchdog runs in a COM multi-threaded apartment** because `IMMNotificationClient` device-change
+callbacks arrive on a COM thread; it initialises MTA at start and marshals notifications onto its
+own queue. *(Closes review-B "missing #19".)*
 
 **Rules:**
 - Cross-thread delivery into the UI is exclusively via Qt **queued** signal/slot connections. No
@@ -409,14 +631,68 @@ Implements review §4's ladder. Each row is a test case in the strategy doc.
 | Cloud STT drop | socket close/timeout | fall back to local, resume | `local STT (fallback)` (FR21) |
 | STT worker crash | watchdog heartbeat | restart once; second failure holds session | `STT unavailable` (FR61) |
 | STT falling behind | queue depth > 3 | drop oldest chunk | `falling behind` (FR33) |
-| Default device changed | device-change notification | re-bind, continue | brief notice (FR39) |
-| Device lost | capture read error | retry 10 s, then pause | `audio lost` (FR39) |
+| Default device **changed** (another device available) | device-change notification | re-bind, session continues **RUNNING** | brief notice (FR39a) |
+| Device **lost** (no replacement available) | capture read error | retry 10 s → `PAUSED`, auto-resume when a device returns | `audio lost` (FR39b) |
 | LLM timeout/error | request exception | retry once → degraded path | degraded styling (FR49) |
 | LLM 429 sustained | HTTP status | backoff → local-only for session | `matching: local-only` (FR40) |
 | Overlay hang | UI watchdog | recreate window, restore geometry | brief notice |
 | Capture-exclusion failure | API returns false | none possible | **persistent warning** (FR14a) |
 | Corrupt note set | parse failure | offer backup restore | explicit prompt (FR44) |
 | Sleep/lock | power notification | pause, purge nothing, resume | state shown (FR62) |
+
+---
+
+## 9a. Latency Budget *(closes review-B C3 and A10)*
+
+NFR1 and the AS-1 gate were both stated as "p95 < 3 s", which made the gate unpassable in
+combination with the requirement it protects — a build hitting exactly 3 s on STT alone has already
+spent the whole budget before embedding or the LLM call.
+
+**Measurement origin (A10):** `t0` = **the last audio sample of the utterance** (i.e. the moment the
+interviewer stops speaking), not the onset of the phrase. Matching cannot begin before the question
+finishes, so onset-anchored measurement would charge the pipeline for the interviewer's own speaking
+time. `t1` = the overlay paint completing.
+
+| Stage | p95 budget |
+|---|---|
+| Silence gate before finalisation (FR46) | 700 ms |
+| STT inference tail after finalisation | **900 ms** ← the AS-1 gate |
+| Embedding + prefilter | 50 ms |
+| Stage-2 LLM round trip | 800 ms |
+| Render + transition | 100 ms |
+| Slack | 450 ms |
+| **Total (NFR1)** | **3000 ms** |
+
+**AS-1's gate is therefore p95 < 900 ms of inference tail, not < 3 s end-to-end.** T2.4 measures and
+reports both, and the gate is the 900 ms figure.
+
+---
+
+## 9b. Overlay Visual Specification *(closes review-B "missing #6")*
+
+M5 was seven tasks with no visual specification; T5.3's "distinct styling tokens" had no referent.
+
+| Token | Value |
+|---|---|
+| Panel background | `#0B0F14` at user opacity (FR24, 20–100%, default 85%) |
+| Corner radius / padding | 12 px / 16 px |
+| Default size | 520 × 220 px, min 320 × 120, max 900 × 600 (FR23 supported range) |
+| Headline | 18 px semibold, `#F2F5F8`, single line, ellipsised |
+| Bullets | 16 px regular, `#C7D1DB`, max 3, each ellipsised at 2 lines |
+| Line height | 1.4 |
+| Transition (FR25) | 180 ms cross-fade + 8 px upward slide |
+| **Confirmed state** (FR51) | 3 px left border, `#4C9AFF` |
+| **Degraded state** (FR51) | 3 px left border, `#F5A623`, plus a `~` glyph before the headline |
+| Health strip (FR35) | 11 px, bottom-right, `#8A96A3`; **`ok` + empty content renders "nothing matched" in italic grey — never a blank panel** |
+| Egress indicator (FR20) | 8 px dot, top-right, `#F5A623` when any data leaves the device |
+| Capture-exclusion failure (FR14a) | Full-width `#D0454C` bar across the panel top, persistent |
+
+The confirmed/degraded distinction is carried by **border colour plus a glyph**, not colour alone —
+FR51 requires distinguishability at a glance, and roughly 8% of men have a colour vision deficiency
+that makes blue/amber unreliable as the only channel.
+
+Text scaling (FR23): font sizes scale linearly with panel height between the min and max, clamped
+to the stated values at the extremes, so text never clips and never shrinks below 11 px.
 
 ---
 
@@ -431,11 +707,33 @@ Implements review §4's ladder. Each row is a test case in the strategy doc.
 | `anthropic` | Stage-2 selector | Low. |
 | `keyring` | Credential Manager (FR19) | Low. |
 | `numpy` | Vector math, `.npz` cache | Low. |
+| **`soxr`** | Resampling in the capture callback (§1a) | Low. Was missing entirely; without it no component owned format conversion. |
+| **`silero-vad`** (via `faster-whisper`'s bundled copy) | Silence detection for FR47 finalisation | Medium. The entire utterance model depends on it, and it was previously unlisted. Its 700 ms boundary behaviour is tuned in M2. |
 | `websockets` / `httpx` | Cloud STT backends | Low. Confined to backend modules. |
 | `PyInstaller` | Packaging | Medium. One-file extraction is an expected non-content write; the privacy allowlist accounts for it. |
 
 **Platform APIs via `ctypes`:** `SetWindowDisplayAffinity` (FR14), WER dump suppression (FR16),
-`IMMNotificationClient` for device-change notifications (FR39).
+`IMMNotificationClient` for device-change notifications (FR39a/b).
+
+### Pinned versions *(review-B "missing #9")*
+
+- **Python 3.12** (64-bit). Not 3.13 — several of the above lack wheels at time of writing.
+- All dependencies pinned to exact versions in `pyproject.toml`; `uv.lock` committed.
+- **Whisper model: `base.en`, int8 quantised**, is the default and the model AS-1 is measured
+  against. `small.en` is the configured upgrade if T2.4 shows headroom, `tiny.en` the fallback if
+  it does not. *(Review-B correctly noted the AS-1 gate was unreproducible without naming this —
+  model size is the dominant variable in the measurement.)*
+- **English only in v1.** `.en` models are materially faster and more accurate at this size than
+  multilingual. Non-English speech produces poor transcripts rather than an error; documented,
+  not handled.
+
+### Cloud backend protocols
+
+Deepgram and ElevenLabs are implemented over raw `websockets`, not vendor SDKs, so both pass the
+same conformance suite unmodified (T8.1/T8.2). This is a deliberate trade — hand-rolling two
+proprietary streaming protocols is **medium risk, not low**, and the mitigation is that neither is
+on the default path: if a backend proves unreliable, FR21 falls back to local and the product still
+works.
 
 ---
 

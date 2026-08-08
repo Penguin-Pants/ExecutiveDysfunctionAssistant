@@ -151,11 +151,27 @@ The review's two-gate checklist is the release procedure. Gate 1 is build accept
 integrity, privacy, correctness, resilience, observability, latency). Gate 2 is live-use
 readiness (rehearsals, notes exported, consent understood, fallback practiced).
 
-Both are reproduced in full in
-[`../build-plan-safety-review.md` §5](../build-plan-safety-review.md) and are not duplicated here —
-one copy, so they cannot drift.
+The base checklist lives in [`../build-plan-safety-review.md` §5](../build-plan-safety-review.md).
+This section holds **only the delta** added since that review — the two are read together and
+neither restates the other. *(An earlier version claimed "one copy, so they cannot drift" and then
+added five items immediately below, creating the second copy it warned about — review-B C9.)*
 
-Additions to Gate 1 from decisions made since the review:
+### Release definition of done
+
+Gates alone are not a release criterion; they omit roughly a dozen `v1` requirements. v1 ships when
+**all four** hold:
+
+1. Every `v1`-status requirement in [`01-requirements.md`](./01-requirements.md) has passed the
+   verification named in its own row. This is the binding condition — the gate checklists are a
+   prioritised subset, not a superset.
+2. Safety-review §5 Gate 1 (build acceptance) passes in full, against the **packaged** build.
+3. The delta items below pass.
+4. Safety-review §5 Gate 2 (live-use readiness) passes, including two full rehearsals.
+
+The three architecture gates (AS-1, AS-2, OQ-1) are **not** release gates — they are decision
+points earlier in the plan that may change what gets built.
+
+### Gate 1 delta — added since the review:
 
 - [ ] Mic and loopback both captured for 60 min without conflict (D-U2 / AS-2).
 - [ ] Progress tracker does not mark from loopback audio (FR56).

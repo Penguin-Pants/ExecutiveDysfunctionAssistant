@@ -4,7 +4,7 @@ Consolidates the PRD's FR1–FR27, the safety review's amendments (A1–A23, iss
 and requirements newly derived while closing gaps (FR41+). This document supersedes the PRD's §6
 where they differ; differences are marked and explained.
 
-**Status key:** `v1` ships in the first release · `M9` specified but deferred · `superseded` replaced by another requirement
+**Status key:** `v1` ships in the first release · `post-v1` specified but deferred · `superseded` replaced by another requirement
 
 Every requirement below states an observable pass condition. If a requirement cannot be
 verified by an automated test or a written manual procedure, it is not a requirement — it is a
@@ -17,11 +17,11 @@ preference, and belongs in the design doc instead.
 | ID | Status | Requirement | Verification |
 |---|---|---|---|
 | **FR1a** | v1 | Import prep notes via paste, `.txt`, or `.md`. | Import each of the 3 paths; content round-trips exactly. |
-| **FR1b** | M9 | `.docx` import. | Deferred per D-U1. |
-| **FR2** | v1 | Auto-chunk notes into discrete items. `.md` splits on `##`/`###`; `.txt` splits on blank lines or an explicit `Q:`/`A:` convention. Every auto-split chunk is presented for review and is editable before save. | Import a fixture of each format; assert chunk boundaries; assert save is blocked until the review step is confirmed. |
+| **FR1b** | post-v1 | `.docx` import. | Deferred per D-U1. |
+| **FR2** | v1 | Auto-chunk notes into discrete items. `.md` splits on `##`/`###`. `.txt` is **auto-detected**: if ≥2 lines match `^\s*Q:`, use the `Q:`/`A:` convention; otherwise split on blank lines. The chosen strategy is named in the review UI and the user can switch it before saving. Every auto-split chunk is presented for review and is editable before save. | Import a fixture of each format and each `.txt` variant; assert boundaries and that the strategy label matches. *(Detection rule was previously unstated — two importers would chunk the same file differently: reviewer A.)* |
 | **FR3** | v1 | Edit, delete, and reorder notes between sessions. Note IDs are unaffected by any of these (FR41). | Edit/delete/reorder; assert IDs stable, order persists. |
 | **FR4** | v1 | Tag notes with free-form labels. Tags drive progress-tracker selection (FR12) and are shown in the editor. | Round-trip tags through save/load/export. |
-| **FR41** | v1 | **Note IDs are UUID4, assigned at creation, stable across edits and reorders, and never reused after deletion.** | Delete a note, create 100 more; assert the deleted ID never recurs. (Review A9 / BC-2.) |
+| **FR41** | v1 | **Note IDs and note-set IDs are UUID4**, assigned at creation, stable across edits and reorders, and never reused after deletion. The note-set ID is also its filename and its embedding-cache key. | Delete a note, create 100 more; assert the deleted ID never recurs. Assert a renamed note set keeps its ID and filename. *(Note-set IDs previously had no stated rule despite being load-bearing in two paths — reviewer A.)* |
 | **FR42** | v1 | A note carries `bullets[]` of user-authored verbatim strings. The importer proposes sentence-split bullets for review; the user may accept, edit, or clear them. **No bullet text is ever machine-generated at match time.** | Assert every rendered bullet is a byte-exact substring of the stored note. (D-5.) |
 | **FR43** | v1 | Multiple named note sets; exactly one is active per session. | Create 2 sets, switch active, assert matching draws only from the active set. (US-A3, D-U1.) |
 
@@ -42,7 +42,8 @@ preference, and belongs in the design doc instead.
 | **FR5** | v1 | Capture system audio output via WASAPI loopback, independent of the video application. | Capture during playback from 3 different apps; assert non-silent PCM. |
 | **FR6** | v1 | **Capture microphone input as a separate concurrent stream.** *(Supersedes the PRD's "optionally" — D-U2 makes both streams mandatory.)* | Assert both streams deliver frames concurrently for 60 min without drift or device conflict. |
 | **FR7** | v1 | Capture starts and stops only via explicit user control; it never runs in the background without a visible indicator. | Assert no capture thread exists in `IDLE`; assert indicator visible whenever any stream is open. |
-| **FR39** | v1 | On default-output-device change or device loss mid-session, re-bind to the new default automatically, notify the user, and keep the session alive. | Switch default device and unplug headphones mid-session; session survives, notice shown. (Review A16.) |
+| **FR39a** | v1 | On default-device **change** with a replacement available, re-bind automatically, notify, and keep the session `RUNNING`. | Switch default device mid-session; session survives without pausing. (Review A16.) |
+| **FR39b** | v1 | On device **loss** with no replacement, retry for 10 s, then enter `PAUSED` with `audio lost`; auto-resume when a device returns. | Remove all output devices mid-session; assert pause, then restore and assert auto-resume. *(Split from a single FR39 that claimed the session always survives while design §9 said it paused — review-B C6.)* |
 | **FR45** | v1 | The audio callback never blocks: it copies the frame into a bounded queue and returns. Queue overflow drops the oldest frame and increments a counter. | Instrument callback duration; assert p99 < 2 ms and that overflow drops rather than grows. |
 
 ## 4. Transcription
@@ -94,7 +95,7 @@ preference, and belongs in the design doc instead.
 
 | ID | Status | Requirement | Verification |
 |---|---|---|---|
-| **FR12** | v1 | A checklist of user-selected talking points, marked "mentioned" from the user's own transcribed speech. | Speak a tracked point into the mic; assert it marks within 5 s. |
+| **FR12** | v1 | A checklist of notes with `track_progress: true`, marked "mentioned" when a mic utterance embeds within τ_track (0.60) of the note's headline. Marks are sticky for the session and never un-mark. | Speak a tracked point into the mic; assert it marks within 5 s. Assert an unrelated utterance does not mark it. *(Algorithm and threshold were previously unspecified, making the acceptance criterion unimplementable.)* |
 | **FR56** | v1 | Tracking consumes the mic stream only. | Play a tracked phrase through the loopback stream only; assert it does **not** mark. (US-G2.) |
 | **FR57** | v1 | **Echo detection:** preflight cross-correlates mic and loopback. On high correlation, warn that speaker output is bleeding into the system-audio stream and that headphones are required for reliable attribution. At runtime, spans detected as mic echo are excluded from the interviewer stream. | Run preflight over speakers; assert the warning. Run over headphones; assert no warning. (D-8 / RC-8.) |
 
@@ -102,10 +103,10 @@ preference, and belongs in the design doc instead.
 
 | ID | Status | Requirement | Verification |
 |---|---|---|---|
-| **FR15** | v1 | Ending a session (manual or on app close) clears audio buffers, transcripts, and overlay content from memory. Transcript buffers are mutable and explicitly zeroed, not merely dereferenced. | Assert buffer bytes are zero post-purge; assert no live references. (Review A3 / DI-6.) |
+| **FR15** | v1 | Ending a session (manual or on app close) clears audio buffers, transcripts, and overlay content from memory. **Audio buffers are `bytearray` and explicitly zeroed. Transcript text is `str` and cannot be zeroed in Python** — purge drops every application reference and clears widget content, and the app states this limit to the user rather than implying erasure. | Assert audio buffer bytes are zero post-purge. Assert no application-held reference to transcript text survives (weakref sweep), **not** that its memory is zero — that assertion would be unsatisfiable and would pass vacuously. (Review A3 / DI-6; scope corrected per design §6.) |
 | **FR16** | v1 | **The application never writes audio, transcripts, or matched-snippet content to disk.** The OS may page process memory and may write crash dumps containing process memory; these are outside application control, and the app disables Windows Error Reporting dumps for its own process. *(Rewritten from the PRD's unkeepable absolute claim.)* | Process Monitor trace against an expected-path allowlist; no session content in any written file. (Review A3 / DI-5.) |
 | **FR58** | v1 | Panic clear and session purge affect audio buffers, transcript, and overlay state **only**. They never touch stored notes, note sets, or settings under any circumstance. | Panic-clear with notes loaded; assert byte-identical note files before and after. (Review A2 / DI-3.) |
-| **FR59** | v1 | Panic clear cancels all in-flight network requests (cloud STT socket, LLM call) before clearing local state. Any response arriving after a purge is discarded, never rendered. | Panic-clear with both in flight; assert cancellation and no post-purge render. (Review A2 / RC-4.) |
+| **FR59** | v1 | Panic clear neutralises all in-flight network work before clearing local state: the cloud STT socket is **cancelled** (asyncio, genuinely cancellable); the LLM request is **bounded by a 5 s timeout and its response discarded via the session nonce**, because Python cannot cancel a blocking call on a pool thread. No response from before the purge ever reaches the screen. | Panic-clear with both in flight; assert the socket closes, assert a late LLM response is discarded and nothing renders. *(Wording corrected — the original asserted symmetric cancellation of something that cannot be cancelled: review-B C8.)* |
 | **FR60** | v1 | Destructive actions (delete note, delete note set, panic clear) require confirmation, except panic clear which is deliberately single-action but scoped by FR58. | Assert confirmation dialogs; assert panic clear is single-action. |
 
 ## 9. Resilience & Backpressure
@@ -113,7 +114,7 @@ preference, and belongs in the design doc instead.
 | ID | Status | Requirement | Verification |
 |---|---|---|---|
 | **FR33** | v1 | The audio→STT queue is bounded (3 chunks). Overflow drops the oldest chunk and sets a degraded health state. The transcript buffer retains a bounded rolling window (5 min), not the whole session. | Saturate with slow STT; assert flat memory, oldest-drop, and the `falling behind` state. (Review A7 / RC-1, RC-2.) |
-| **FR61** | v1 | A crashed STT worker restarts once automatically; a second failure stops STT, holds the session open, and reports `STT unavailable`. The user is never silently unassisted. | Kill the worker twice; assert both behaviors. (US-C3, review RB-2.) |
+| **FR61** | v1 | A crashed STT worker restarts once automatically; a second failure stops **that stream only**, holds the session open, and reports `STT unavailable (interviewer)` or `(mic)`. A dead mic worker never stops interviewer matching, and vice versa. The user is never silently unassisted. | Kill each worker twice independently; assert per-stream isolation. *(Per-stream scope was ambiguous with two workers — review-B A13.)* |
 | **FR62** | v1 | On machine sleep/lock mid-session, capture pauses and resumes on unlock; nothing is purged and no crash occurs. | Lock and unlock during a session; assert resume. |
 
 ## 10. Observability

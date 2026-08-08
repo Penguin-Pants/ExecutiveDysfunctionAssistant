@@ -13,7 +13,7 @@ citing artifacts are the change list.
 
 | ID | Question | Decision | Consequence |
 |---|---|---|---|
-| **D-U1** | v1 scope | **In:** multiple note sets (US-A3), cloud STT (FR18–21), progress tracker (Epic G). **Out of v1:** `.docx` import (FR1b), deferred to M9. | Epic G moves from stretch to core. Data model is multi-set from day one. |
+| **D-U1** | v1 scope | **In:** multiple note sets (US-A3), cloud STT (FR18–21), progress tracker (Epic G). **Out of v1:** `.docx` import (FR1b), deferred to post-v1 (M9 is the last v1 milestone, so "M9" was an ambiguous label for the deferred bucket). | Epic G moves from stretch to core. Data model is multi-set from day one. |
 | **D-U2** | Both audio streams | **Both interviewer (loopback) and user (mic) capture are mandatory in v1.** FR6's "optionally capture microphone" is superseded. | Mic is no longer an Epic G dependency that can be dropped; it is a session prerequisite. Preflight must validate both devices. |
 | **D-U3** | LLM failure behavior | **Show the stage-1 fallback match, visually marked as degraded**, gated behind a higher confidence bar (τ_degraded). | Resolves the §10b vs US-D2 contradiction. Overlay has two visual states for content: confirmed and degraded. |
 | **D-U4** | Target platform | **Windows 11.** | FR14 capture exclusion is available. The startup check (FR38) is still built, but as a guard, not a gate on an uncertain platform. |

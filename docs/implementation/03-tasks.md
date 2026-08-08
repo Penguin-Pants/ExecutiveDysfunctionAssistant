@@ -12,7 +12,11 @@ exists; it is done when its criteria are demonstrated.
 
 1. Acceptance criteria demonstrated, by automated test where the criteria allow.
 2. Unit tests for new logic; integration test if the task crosses a component boundary.
-3. No new writes to disk outside the §4 allowlist (checked by the FR16 harness once M6 lands).
+3. No new writes to disk outside the design §4 allowlist. **Enforced from M0 by a `pytest` fixture
+   that fails any test touching a path outside the allowlist** — not deferred to M6. *(Reviewer A
+   and B both caught that scoping this to "once the M6 harness lands" made a mandatory criterion
+   unverifiable for the first six milestones, which is most of the project. T6.4's ProcMon trace
+   is the full-system check; the fixture is the per-task one.)*
 4. Requirement IDs referenced in the commit message.
 5. Structural events emitted to the diagnostic ring (FR36) for anything that can fail — no
    silent failure paths.
@@ -26,9 +30,18 @@ exists; it is done when its criteria are demonstrated.
 |---|---|---|
 | **T0.1** Project skeleton matching design §1 module layout, `pyproject.toml`, pinned deps | — | `pip install -e .` succeeds on a clean Windows 11 venv; the package imports; module tree matches design §1 exactly. |
 | **T0.2** CI: lint, type-check, unit tests on Windows runner | — | CI runs on push and fails on lint, `mypy --strict` errors on `stt/interface.py`, or test failure. |
-| **T0.3** Diagnostic ring buffer (`diagnostics/ring.py`) | FR36 | Bounded to N events, evicts oldest; a test asserting no method accepts transcript or note text; export produces JSON with structural fields only. |
+| **T0.3** Diagnostic ring buffer (`diagnostics/ring.py`) | FR36 | Bounded to **2000 events**, evicts oldest; a test asserting no method accepts transcript or note text; export produces JSON with structural fields only. |
+| **T0.4** Write-allowlist pytest fixture | FR16 | Any test writing outside design §4's allowlist fails. Active for every task from M0 onward. |
+| **T0.5** Credential wrapper (`platform/credentials.py`) | FR19 | Store/retrieve under service `InterviewPrepRecall`; grep test proves absence from disk. **Moved from M8** — M4's stage-2 selector needs an Anthropic key, so credentials cannot first appear in M8. |
 
-Built first because every subsequent task's DoD item 5 depends on the ring existing.
+Built first because every subsequent task's DoD items 3 and 5 depend on T0.3/T0.4 existing.
+
+**CI audio strategy** *(review-B "missing #16")*: hosted Windows runners have no audio endpoint. So
+CI never opens a device. Every test below the manual tier feeds WAV fixtures **directly into
+`SttBackend.feed()`** in the §1a format, which is exactly the format the capture callback produces —
+so the pipeline under test is the real one from `feed()` onward. Device-dependent tests (T1.1, T1.2,
+T1.4, T5.2, T7.2) are marked `@pytest.mark.device` and run on the developer machine, reported per
+milestone. The 60-minute soak runs nightly on that machine, not in CI.
 
 ---
 
@@ -71,7 +84,9 @@ own §12 open risk and it gets answered here, not assumed.
 | **T3.4** Export / import bundle | FR30 | Export → wipe → import yields deep equality on content, tags, bullets, order. |
 | **T3.5** Importer: chunking + bullet proposal | FR1a, FR2, FR42 | `.md` splits on `##`/`###`, `.txt` on blank lines / `Q:`-`A:`; save is blocked until review is confirmed; every proposed bullet is a verbatim substring of the source. |
 | **T3.6** Embedding index + model-version guard | FR34 | Changing `model_id` in the cache forces full re-embed; changing one note's content re-embeds only that note. |
-| **T3.7** Notes editor UI (CRUD, reorder, tags, `track_progress`) | FR3, FR4 | All operations persist; IDs stable; "not overlay-optimised" flag shows for bullet-less notes (D-6). |
+| **T3.7** Notes editor UI (CRUD, reorder, tags, `track_progress`) | FR3, FR4, FR60 | All operations persist; IDs stable; "not overlay-optimised" flag shows for bullet-less notes (D-6); delete requires confirmation. **Saves on explicit action or 5 s idle after an edit — never per keystroke**, so FR29's 5 backup generations cannot be consumed by typing. |
+| **T3.8** Note-set lifecycle UI | FR43, FR60 | Create, rename, select-active, delete a note set; active set persists in `QSettings`; delete confirms. *(Was missing — FR43 and FR60 referenced note sets that no task built.)* |
+| **T3.9** Backup restore UI | FR29, FR44 | Browse the 5 generations, preview, restore. If a backup is itself corrupt, fall through to the next generation and say so. *(FR29 required "restorable from the UI" and no task built it.)* |
 
 ---
 
@@ -102,7 +117,8 @@ own §12 open risk and it gets answered here, not assumed.
 | **T5.4** Drag, resize, opacity, lock, reset | FR22–24, FR27, FR55 | Each independent; off-screen persisted coordinates recoverable via reset. |
 | **T5.5** Transitions + auto-clear + pin | FR25, FR54, FR13 | Unpinned clears at τ_visible; pinned persists; replacement animates. |
 | **T5.6** `QSettings` persistence | FR26 | Survives restart; documented as exempt from §4. |
-| **T5.7** Health + egress indicators | FR20, FR35 | Every state in design §7 renders distinctly; **no-match is visually distinct from every failure state**; egress indicator fires independently for cloud STT and LLM. |
+| **T5.7** Health + egress indicators | FR20, FR35 | Every state in design §7 renders distinctly; **no-match is visually distinct from every failure state**; egress indicator fires independently for cloud STT and LLM. Built to design §9b's token table. |
+| **T5.8** Diagnostics viewer | FR36 | In-app view of the ring buffer with export. *(FR36 required "viewable in-app"; T0.3 built only the buffer.)* |
 
 ---
 
