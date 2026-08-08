@@ -18,35 +18,36 @@ TS§ = [test strategy](./04-test-strategy.md) section
 | FR8 | PRD | D§1 | T1.3, T2.2 | Unit |
 | FR9 | PRD | D§5 | T4.1, T4.2 | Integration |
 | FR10 | PRD | D§5 | T4.2 | Unit (request shape) |
-| FR11 | PRD | D§5, D-5 | T5.1 | Unit (verbatim substring) + manual |
-| FR12 | PRD (v1 per D-U1) | D§1 | T7.1, T7.4 | Integration |
-| FR13 | PRD | D§5 | T5.5 | Unit |
+| FR11 | PRD | **D§9b**, D-5 | T5.1 | Unit (verbatim substring) + manual |
+| FR12 | PRD (v1 per D-U1) | D§1, D§5 (τ_track) | T7.1, T7.4 | Integration |
+| FR13 | PRD | D§9b | T5.5 | Unit |
 | FR14 | PRD | D§1 | T5.2 | **Manual 6-way matrix**, TS§3 |
 | FR14a | Review A15 | D§7, D§9 | T5.2 | Unit (stubbed failure) |
-| FR15 | PRD | D§6 | T6.2 | Zeroing test, TS§3 |
+| FR15 | PRD | D§6 | T6.2 | Audio-zeroing + reference-sweep, TS§3 |
 | FR16 | PRD (rewritten, review A3) | D§4 | T6.4, T9.4 | **ProcMon allowlist**, TS§3 |
 | FR17 | PRD | **D§2** | T2.1 | Conformance suite |
 | FR18 | PRD | D§2 | T2.2, T8.1–2 | Config test |
-| FR19 | PRD | D§4 | T8.3 | Grep test |
+| FR19 | PRD | D§4 | **T0.5**, T8.3 | Grep test |
 | FR20 | PRD | D§7 | T5.7, T8.5 | Unit per egress path |
 | FR21 | PRD | D§9 | T8.4 | Fault injection |
-| FR22–27 | PRD | D§1 | T5.4, T5.5, T5.6 | Unit |
+| FR22–27 | PRD | **D§9b** | T5.4, T5.5, T5.6 | Unit |
 | FR28 | Review A1 | D§4 | T3.2 | **`taskkill` × 10**, TS§3 |
-| FR29 | Review A1 | D§4 | T3.2 | Unit |
+| FR29 | Review A1 | D§4 | T3.2, **T3.9** | Unit + restore UI |
 | FR30 | Review A1 | D§4 | T3.4 | Round-trip |
 | FR31 | Review A1 | D§4 | T3.3 | Unit |
 | FR32 | Review A6 (corrected) | **D§5** | T4.3 | **Out-of-order test**, TS§3 |
 | FR33 | Review A7 | D§8 | T6.6 | Saturation + soak, TS§3 |
 | FR34 | Review A10 | D§4 | T3.6 | Unit |
 | FR35 | Review A11 | **D§7** | T5.7 | Unit per state |
-| FR36 | Review A12 | D§1 | T0.3 | Content-leak grep, TS§3 |
+| FR36 | Review A12 | D§1 | T0.3, **T5.8** | Content-leak grep, TS§3 |
 | FR37 | Review A13 | D§9 | T6.7 | Integration |
-| FR38 | Review A14 | D§6 | T6.5 | Unit per precondition |
-| FR39 | Review A16 | D§9 | T1.4 | Manual device switch |
+| FR38 | Review A14 | **D§6 (classification table)** | T6.5 | Unit per precondition |
+| FR39a | Review A16 | D§9 | T1.4 | Manual device switch |
+| FR39b | Review-B C6 | D§9 | T1.4, T6.6 | Device-loss pause + auto-resume |
 | FR40 | Review A18 | D§5 | T4.5 | Fault injection |
 | FR41 | New (BC-2) | D§4 | T3.1 | Unit |
 | FR42 | New (D-5) | D§4 | T3.5, T5.1 | Substring assertion |
-| FR43 | New (US-A3) | D§4 | T3.1 | Unit |
+| FR43 | New (US-A3) | D§4 | T3.1, **T3.8** | Unit |
 | FR44 | New (DI-1) | D§4 | T3.3 | Corrupt fixture |
 | FR45 | New (RC-1) | D§8 | T1.3 | Callback timing |
 | FR46 | New (D-4) | **D§3** | T2.3 | Fixture boundaries |
@@ -54,7 +55,7 @@ TS§ = [test strategy](./04-test-strategy.md) section
 | FR48 | Review A5 | D§5 | T4.2 | Enum size, 200 notes |
 | FR49 | D-U3 | D§5 | T4.4 | Both branches |
 | FR50 | US-D2 | D§5, D§7 | T4.1, T5.7 | Unrelated-speech test |
-| FR51 | D-U3 | D§7 | T5.3 | Manual glance |
+| FR51 | D-U3 | **D§9b** | T5.3 | Manual glance + non-colour channel |
 | FR52 | US-D3 | D§5 | T9.2 | Unit |
 | FR53 | D-10 | D§1 | T4.6 | Unit |
 | FR54 | New (FR13 gap) | D§5 | T5.5 | Unit |
@@ -63,12 +64,14 @@ TS§ = [test strategy](./04-test-strategy.md) section
 | FR57 | D-8 | D§1 | T7.2, T7.3 | Paired echo fixtures |
 | FR58 | Review A2 | **D§6** | T6.3 | SHA before/after |
 | FR59 | Review A2 | D§6 | T6.3 | Late-response test |
-| FR60 | New (DI-3) | D§4 | T3.7 | Unit |
+| FR60 | New (DI-3) | D§4 | T3.7, T3.8 | Unit |
 | FR61 | Review RB-2 | D§9 | T6.6 | Kill worker × 2 |
 | FR62 | Review RB-2 | D§9 | T6.6 | Manual lock/unlock |
 | FR63 | Review A19 | D§4 | T9.1 | Unit |
-| NFR1 | PRD §7 | D§3, D§8 | **T2.4** | Latency harness (**AS-1 gate**) |
-| NFR2 | PRD §7 | D§10 | T9.4 | CPU-only run |
+| FR64 | D-U5 | **D§6** | T6.3 | Resume-after-panic timing |
+| NFR1 | PRD §7 | **D§9a** | **T2.4** | Per-stage latency harness |
+| NFR2 | PRD §7 | D§10 | T9.4 | CPU-only run, CUDA disabled |
+| NFR7 | D-U6 | D§10 | T2.4 | Recorded separately from the AS-1 gate |
 | NFR3 | PRD §7 | D§8 | T5.1 | Frame-time measurement |
 | NFR4 | D-U4 | D§10 | T6.5 | Build check |
 | NFR5 | Review RC-2 | D§8 | T6.6 | 60-min soak |
@@ -88,5 +91,5 @@ TS§ = [test strategy](./04-test-strategy.md) section
 | Gate | Task | Falsifies | If it fails |
 |---|---|---|---|
 | Dual-stream 60-min stability | T1.2 | AS-2 | Capture library decision reopens before anything is built on it |
-| Local STT p95 < 3 s | T2.4 | AS-1 | Local cannot be the default; M8 promoted ahead of M5; FR18 inverts |
+| Local STT p95 < 900 ms inference tail, **CPU-only on the D-U6 laptop** | T2.4 | AS-1 | Local cannot be the default; M8 promoted ahead of M5; FR18 inverts |
 | Stage-2 beats stage-1 | T4.7 | OQ-1 | The hard internet dependency is reconsidered before it is baked into the UX |

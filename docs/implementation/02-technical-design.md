@@ -486,7 +486,15 @@ stateDiagram-v2
     PURGING --> IDLE
     RUNNING --> PURGING: panic clear (FR59)
     PAUSED --> PURGING: panic clear
+    PURGING --> WIPED: panic clear path (D-U5)
+    WIPED --> RUNNING: resume (no preflight re-run)
+    WIPED --> IDLE: end session
 ```
+
+**`WIPED` is the panic-clear resting state** (D-U5). Capture is stopped, every buffer is cleared,
+and the overlay is empty — so the app is demonstrably not listening — but devices stay open and
+preflight results stay valid, making resume a ~1 s single click rather than a ~10 s restart.
+`PURGING → IDLE` remains the path for a normal end-of-session.
 
 ### Preflight classification *(FR38 — closes review-B A6; T6.5 was untestable without this)*
 

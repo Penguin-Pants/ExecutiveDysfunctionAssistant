@@ -17,6 +17,30 @@ citing artifacts are the change list.
 | **D-U2** | Both audio streams | **Both interviewer (loopback) and user (mic) capture are mandatory in v1.** FR6's "optionally capture microphone" is superseded. | Mic is no longer an Epic G dependency that can be dropped; it is a session prerequisite. Preflight must validate both devices. |
 | **D-U3** | LLM failure behavior | **Show the stage-1 fallback match, visually marked as degraded**, gated behind a higher confidence bar (τ_degraded). | Resolves the §10b vs US-D2 contradiction. Overlay has two visual states for content: confirmed and degraded. |
 | **D-U4** | Target platform | **Windows 11.** | FR14 capture exclusion is available. The startup check (FR38) is still built, but as a guard, not a gate on an uncertain platform. |
+| **D-U5** | Panic clear lifecycle | **Wipe, stop capture, stay resumable.** Purge clears buffers, transcript, and overlay; capture stops; the session holds in a `WIPED` state that resumes in ~1 s without re-running preflight. | Adds a seventh state to §6. Resolves the contradiction between a state machine that ended the session and an FR60 single-press control implying it was cheap. The user gets an unambiguous stop *and* a fast recovery — the two properties that were in tension. |
+| **D-U6** | Target hardware | **Two machines: a 2025-or-newer laptop, and a desktop (AMD Ryzen, 32 GB RAM, NVIDIA RTX 5070).** | See the measurement discipline below — this one has a trap in it. |
+
+### D-U6 measurement discipline — read before running the AS-1 gate
+
+The desktop has a discrete GPU. `faster-whisper` will use CUDA if it finds it, and would produce an
+inference-tail number several times better than any laptop achieves. **Measuring AS-1 there, with
+CUDA active, validates a machine most sessions will not run on** and would green-light a local
+default that misses the target in practice.
+
+So:
+
+1. **The AS-1 gate is measured CPU-only, on the 2025 laptop.** `device="cpu"`, CUDA explicitly
+   disabled. This is the number that decides whether local STT can be the default (FR18), because
+   NFR2 requires the product to work without a discrete GPU.
+2. **The desktop's CUDA number is recorded separately** as an upper bound, and never substituted
+   for (1).
+3. **CUDA is used opportunistically at runtime** (NFR7): if a compatible GPU is present, the local
+   backend uses it and the user gets a faster session for free. It is an optimisation, never a
+   requirement.
+
+If the interviews themselves will be taken on the desktop, the practical latency will be the CUDA
+number — but the gate stays CPU-anchored, because a build that only works on a 5070 is not the
+product described in the PRD.
 
 ## Decisions made by engineering judgement — recorded, reversible
 
@@ -39,7 +63,7 @@ citing artifacts are the change list.
 
 | ID | Assumption | If wrong |
 |---|---|---|
-| **AS-1** | `faster-whisper` on the target CPU achieves p95 < 3 s end-to-end for a 4 s chunk. | Local default is not viable; cloud STT (already in v1 per D-U1) becomes the default and §10a's recommendation inverts. **Measured in M2 — this is a gate, not a hope.** |
+| **AS-1** | `faster-whisper` `base.en` int8, **CPU-only on the 2025 laptop** (D-U6), achieves **p95 < 900 ms of inference tail** after utterance finalisation — the STT slice of the NFR1 budget in design §9a, not the whole 3 s. | Local default is not viable; cloud STT (already in v1 per D-U1) becomes the default and §10a's recommendation inverts. **Measured in M2 — this is a gate, not a hope.** |
 | **AS-2** | `pyaudiowpatch` can open WASAPI loopback and a mic input device concurrently and stably for 60 minutes. | D-U2's dual-stream requirement needs a different capture library. **Measured in M1.** |
 | **AS-3** | `all-MiniLM-L6-v2` cosine similarity separates relevant from irrelevant notes well enough that τ_floor suppresses most small talk. | Stage-2 call volume and cost rise sharply; may need a question-detection heuristic before stage 2. **Measured in M4.** |
 | **AS-4** | The user authors or confirms bullet-shaped notes at import (D-5). | Most notes fall to the D-6 truncation path and the overlay is less glanceable than FR11 intends. Mitigated by the importer nudging toward bullets. |
