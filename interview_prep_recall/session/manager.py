@@ -20,6 +20,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum, auto
+from typing import Protocol
 
 from interview_prep_recall.diagnostics.ring import DiagnosticRing
 from interview_prep_recall.session.health import HealthMonitor, MatchingStatus, Status
@@ -68,6 +69,16 @@ class IllegalTransition(RuntimeError):
     """A transition design §6 does not permit. Raised, never silently absorbed."""
 
 
+class MatchingTarget(Protocol):
+    """The slice of `MatchingPipeline` the LLM switch drives.
+
+    A Protocol rather than a direct import: the session owns lifecycle, not matching,
+    and a hard dependency between them would make either untestable without the other.
+    """
+
+    def set_local_only(self, value: bool) -> None: ...
+
+
 @dataclass
 class PurgeHooks:
     """Injected so ordering is testable without real sockets, threads or Qt.
@@ -113,6 +124,18 @@ class SessionManager:
         self._purge_order: list[str] = []
         self._worker_restarts: dict[str, int] = {}
         self._preflight_passed = False
+        self._matching: MatchingTarget | None = None
+        self._purge_failures: list[tuple[str, str]] = []
+
+    def attach_matching(self, target: MatchingTarget) -> None:
+        """Wire the LLM switch to the live pipeline.
+
+        Without this, `set_switch("llm_matching", False)` would flip a detached config
+        object and light the local-only indicator while the pipeline kept calling the
+        API — the UI claiming nothing leaves the device while text still does. That is
+        why toggling the switch unattached raises rather than degrading quietly.
+        """
+        self._matching = target
 
     # ---------- state ----------
 
@@ -123,6 +146,11 @@ class SessionManager:
     @property
     def pause_cause(self) -> PauseCause | None:
         return self._pause_cause
+
+    @property
+    def purge_failures(self) -> list[tuple[str, str]]:
+        """`(hook, exception)` pairs from the last purge. Empty means every step ran."""
+        return list(self._purge_failures)
 
     @property
     def purge_order(self) -> list[str]:
@@ -154,6 +182,19 @@ class SessionManager:
         return self._state
 
     def pause(self, cause: PauseCause) -> None:
+        """Validates *before* recording the cause.
+
+        Order matters: if the user has already paused deliberately and a lock or
+        device-loss callback fires, the transition is illegal — but writing the cause
+        first would leave an auto-resumable cause behind, and the next unlock would
+        restart capture the user had chosen to stop. Same failure D-22 closed on the
+        panic-clear path, reachable through a second pause event.
+        """
+        if SessionState.PAUSED not in _ALLOWED[self._state]:
+            raise IllegalTransition(
+                f"{self._state.name} -> PAUSED is not permitted; "
+                f"existing pause cause {self._pause_cause} is preserved"
+            )
         self._pause_cause = cause
         self.ring.record("session_paused", cause=cause.name)
         self._to(SessionState.PAUSED)
@@ -204,7 +245,12 @@ class SessionManager:
         if self._state is not SessionState.PURGING:
             self._to(SessionState.PURGING)
         self._purge_order = []
-        # Order is the requirement, not an implementation detail (FR59).
+        self._purge_failures = []
+        # Order is the requirement (FR59) — and so is completeness. Every step runs even
+        # if an earlier one throws: `cancel_network` closing a already-broken socket is
+        # exactly the plausible failure, and letting it abort the loop would leave
+        # capture running and audio, transcript and overlay uncleared. Panic clear would
+        # fail precisely on the degraded session that most needs it.
         for name, hook in (
             ("cancel_network", self.hooks.cancel_network),
             ("stop_capture", self.hooks.stop_capture),
@@ -212,10 +258,20 @@ class SessionManager:
             ("drop_transcript", self.hooks.drop_transcript),
             ("clear_overlay", self.hooks.clear_overlay),
         ):
-            hook()
+            try:
+                hook()
+            except Exception as exc:  # noqa: BLE001 — no hook may block the rest
+                self._purge_failures.append((name, type(exc).__name__))
             self._purge_order.append(name)
+
         self.monitor.reset()
+        # Diagnostics are session-scoped (FR36). Cleared here, before the new records
+        # below, so the purge outcome survives into the next session while the ended
+        # session's events do not leak into it or crowd the bounded ring.
+        self.ring.clear()
         self.ring.record("session_purged", count=len(self._purge_order))
+        for name, exc_name in self._purge_failures:
+            self.ring.record("purge_hook_failed", reason=name, cause=exc_name[:64])
 
     # ---------- supervision (T6.6, design §9) ----------
 
@@ -241,6 +297,19 @@ class SessionManager:
     def set_switch(self, name: str, value: bool) -> None:
         if not hasattr(self.switches, name):
             raise ValueError(f"unknown degradation switch {name!r}")
+
+        if name == "llm_matching":
+            if self._matching is None:
+                raise RuntimeError(
+                    "llm_matching toggled with no pipeline attached — call "
+                    "attach_matching() first. Reporting local-only while the pipeline "
+                    "still calls the API would tell the user their question text stays "
+                    "on the device when it does not."
+                )
+            # Apply to the pipeline first: if this raises, neither the switch nor the
+            # indicator may claim a state the pipeline is not actually in.
+            self._matching.set_local_only(not value)
+
         setattr(self.switches, name, value)
         self.ring.record("switch", reason=name[:64], ok=value)
         if name == "llm_matching":

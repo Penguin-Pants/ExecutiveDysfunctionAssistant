@@ -189,6 +189,67 @@ def test_panic_clear_from_paused() -> None:
     assert m.state is SessionState.WIPED
 
 
+def test_a_second_pause_cannot_overwrite_a_deliberate_one() -> None:
+    """A lock callback arriving while the user is already paused must not leave an
+    auto-resumable cause behind — the next unlock would restart capture they stopped."""
+    m = started()
+    m.pause(PauseCause.USER)
+    with pytest.raises(IllegalTransition, match="is preserved"):
+        m.pause(PauseCause.LOCK)
+    assert m.pause_cause is PauseCause.USER
+    with pytest.raises(IllegalTransition):
+        m.resume(automatic=True)
+
+
+def test_purge_completes_every_step_even_when_a_hook_throws() -> None:
+    """`cancel_network` closing an already-broken socket is the plausible failure, and
+    it runs first — aborting there would leave capture running and nothing cleared, so
+    panic clear would fail precisely on the degraded session that needs it."""
+    ran: list[str] = []
+
+    def boom() -> None:
+        raise OSError("socket already closed")
+
+    hooks = PurgeHooks(
+        cancel_network=boom,
+        stop_capture=lambda: ran.append("stop_capture"),
+        zero_audio=lambda: ran.append("zero_audio"),
+        drop_transcript=lambda: ran.append("drop_transcript"),
+        clear_overlay=lambda: ran.append("clear_overlay"),
+    )
+    m = SessionManager(hooks=hooks)
+    m.request_start()
+    m.preflight_result(blocked=False)
+    m.panic_clear()
+
+    assert ran == ["stop_capture", "zero_audio", "drop_transcript", "clear_overlay"]
+    assert m.state is SessionState.WIPED, "a failing hook must not strand the session"
+    assert m.purge_failures == [("cancel_network", "OSError")]
+
+
+def test_purge_clears_session_scoped_diagnostics() -> None:
+    """FR36: diagnostics are session-scoped. Stale events would otherwise leak into the
+    next session's export and crowd the bounded ring."""
+    m = started()
+    for _ in range(20):
+        m.ring.record("tick", count=1)
+    before = len(m.ring)
+    m.end_session()
+    assert len(m.ring) < before
+    assert all(e.event != "tick" for e in m.ring.snapshot())
+
+
+def test_purge_failures_survive_the_ring_clear() -> None:
+    """The purge outcome is the one thing from the old session worth carrying forward."""
+    hooks = PurgeHooks(cancel_network=lambda: (_ for _ in ()).throw(OSError("x")))
+    m = SessionManager(hooks=hooks)
+    m.request_start()
+    m.preflight_result(blocked=False)
+    m.panic_clear()
+    events = [e.event for e in m.ring.snapshot()]
+    assert "purge_hook_failed" in events
+
+
 def test_purge_resets_health() -> None:
     m = started()
     m.monitor.update(loopback=Status.OK, matching=MatchingStatus.LOCAL_ONLY)
@@ -250,14 +311,51 @@ def test_worker_supervision_is_per_stream() -> None:
 # ---------------- T6.7 switches ----------------
 
 
+class FakeMatching:
+    """Records what the switch actually did to the pipeline, not to a config object."""
+
+    def __init__(self) -> None:
+        self.local_only = False
+
+    def set_local_only(self, value: bool) -> None:
+        self.local_only = value
+
+
 def test_switches_toggle_mid_session() -> None:
     m = started()
+    m.attach_matching(FakeMatching())
     m.set_switch("llm_matching", False)
     assert m.switches.llm_matching is False
     assert m.monitor.health.matching is MatchingStatus.LOCAL_ONLY
     m.set_switch("llm_matching", True)
     assert m.monitor.health.matching is MatchingStatus.OK
     assert m.state is SessionState.RUNNING, "no restart required"
+
+
+def test_llm_switch_reaches_the_pipeline() -> None:
+    """FR37 + FR20: the indicator must not claim local-only while the API is still
+    being called. A switch that only flips a config object would tell the user their
+    question text stays on the device when it does not."""
+    m = started()
+    pipeline = FakeMatching()
+    m.attach_matching(pipeline)
+
+    m.set_switch("llm_matching", False)
+    assert pipeline.local_only is True
+
+    m.set_switch("llm_matching", True)
+    assert pipeline.local_only is False
+
+
+def test_llm_switch_without_a_pipeline_refuses_rather_than_lying() -> None:
+    with pytest.raises(RuntimeError, match="no pipeline attached"):
+        started().set_switch("llm_matching", False)
+
+
+def test_non_llm_switches_need_no_pipeline() -> None:
+    m = started()
+    m.set_switch("progress_tracker", False)
+    assert m.switches.progress_tracker is False
 
 
 def test_unknown_switch_is_refused() -> None:

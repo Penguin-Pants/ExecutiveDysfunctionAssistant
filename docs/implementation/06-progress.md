@@ -109,6 +109,19 @@ both entirely — it asserted only that the enum members exist. And the zeroing 
 `bytearray` path, so `zero()`'s silent no-op on `bytes` went uncaught. **Ninth and tenth instances
 of this project's recurring defect**, and the first time two landed in the same phase.
 
+**PR #6 review round — four more findings, all valid, all fixed**
+
+| Severity | Finding | Fix |
+|---|---|---|
+| P1 | **A second `pause()` overwrote the cause before validating.** A lock callback arriving while the user was already paused left `LOCK` behind even though the transition raised — so the next unlock would restart capture the user had deliberately stopped. The same failure D-22 closed on the panic-clear path, reachable by a different route. | Validate before recording. |
+| P1 | **The LLM switch never reached the pipeline.** `set_switch("llm_matching", False)` flipped a detached config object and lit the local-only indicator while `MatchingPipeline` kept calling the API. The UI would have told the user their question text stayed on the device while it did not. | `attach_matching()`; toggling unattached now raises rather than degrading quietly. |
+| P1 | **A throwing purge hook aborted the whole purge.** `cancel_network` runs first and closing an already-broken socket is the plausible failure — so capture would keep running with nothing cleared, and panic clear would fail precisely on the degraded session that needs it. | Every step runs; failures are collected and reported. |
+| P2 | **`ring.clear()` had zero call sites** despite a docstring saying "called on session purge". Ended-session events leaked into the next session's export and crowded the bounded ring. | Cleared during purge, with the purge outcome recorded after so it survives. |
+
+Two of these — the LLM switch and `ring.clear()` — are the **same shape as D-20**: a method that exists, is documented as being called, and is called by nothing. That is now three in one milestone. Worth checking for directly rather than waiting for review to find the next one.
+
+**A process note.** One of these fixes silently did not apply: a string replacement missed because `ruff format` had reshaped the target onto one line, and the test suite still passed because the *old* behaviour was what the existing test expected. Only re-reading the file caught it. A patch that fails to match is not an error — it is a no-op that looks like success.
+
 **Deferred — genuinely out of scope here, not forgotten**
 
 | Item | Why | Where it lands |
