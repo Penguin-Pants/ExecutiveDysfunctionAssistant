@@ -829,7 +829,7 @@ and the change is recorded in the table.
 | Padding | `--space-4 16px` (the overlay is compact; app cards use `--space-6 24px`) |
 | Headline | `--font-primary` (IBM Plex Mono) 16px/600, `--ink-inverse #F5F3F7` |
 | Bullets | `--font-secondary` (IBM Plex Sans) 15px/400, `#DCD6E2`, max 3 |
-| Default size | 420 × auto, min 320 wide, max 900 (FR23 range) |
+| Size range (FR23) | default **420 × 220**, min **320 × 120**, max **900 × 600** |
 | Transition (FR25) | 180 ms cross-fade + 8 px rise |
 | **Confirmed** (FR51) | 3px left rail, `--blue-500 #2D7DF6` |
 | **Degraded** (FR51) | 3px left rail, `--amber-500 #FFC93D` **+ a `~` glyph before the headline** |
@@ -837,6 +837,38 @@ and the change is recorded in the table.
 | Capture indicator (FR7) | The PRISM **accent-gradient chip**, 34×16, `10px` radius. Flat `#3A3145` when not capturing |
 | Egress indicator (FR20) | 8px `--amber-500` dot, separate per path (cloud STT / LLM) |
 | Capture-exclusion failure (FR14a) | Full-width `--red-500 #F0473E` bar across the panel top, persistent |
+| Tracker checklist (FR12) | `--font-secondary` 13px, docked below the bullets, **max 5 rows then scroll**. Unmarked `--ink-400`, marked `--green-500` + check glyph. **Never displaces the snippet** — the panel grows downward within the FR23 max height, and the checklist scrolls rather than pushing bullets out |
+| Secondary text | `--ink-400 #9C94A8` — **not** PRISM's `--ink-600`, which fails WCAG AA on both dark surfaces. See OQ-6 |
+
+### Text scaling (FR23) — restored
+
+An earlier draft of this section carried a scaling rule; the PRISM rewrite replaced the section
+wholesale and lost it, leaving only a width range. FR23 requires text to *scale* rather than clip
+across the supported range, so without this a fixed-font implementation would satisfy the tokens
+and still fail the requirement.
+
+Headline and bullet sizes interpolate **linearly with panel height** between the bounds above, and
+clamp outside them:
+
+| Panel height | Headline | Bullets |
+|---|---|---|
+| 120 (min) | 14px | 13px |
+| 220 (default) | 16px | 15px |
+| 600 (max) | 22px | 18px |
+
+```
+size(h) = clamp(size_min, size_min + (size_max - size_min) * (h - 120) / (600 - 120), size_max)
+```
+
+Three rules make this checkable:
+
+1. **Nothing renders below 13px** — PRISM's caption size is the floor, and below it the overlay
+   stops being glanceable, which is the only thing it exists to be.
+2. **Width drives wrapping, height drives size.** They are independent so FR23's resize and FR24's
+   opacity stay orthogonal, as the requirements state.
+3. **Ellipsis is the last resort, not the first.** A bullet clips only after scaling has hit the
+   floor: 2 lines maximum, then ellipsis. Clipping before the floor would be the failure FR23
+   names.
 
 **Why the headline is mono and the bullets are not.** PRISM makes Plex Mono the primary voice for
 display and labels, and Plex Sans the body face. That split lands well here for an independent
@@ -849,6 +881,23 @@ distinction unreliable — and FR51 requires distinguishability at a glance.
 
 **The gradient chip appears exactly once per surface**, per PRISM §9. In the overlay it is the live
 capture indicator, which is precisely PRISM's stated use for it: a preview of current state.
+
+### Secondary text does not use PRISM's `--ink-600` (OQ-6)
+
+PRISM §1 says to "re-verify `--ink-600` at 80% against `--plum-900` if used for secondary text."
+Verified, and it fails:
+
+| Combination | Contrast | WCAG AA (4.5:1 for 15px body) |
+|---|---|---|
+| `--ink-600` @80% over `--plum-900` (composites to `#504B59`) | **1.96:1** | fails |
+| `--ink-600` solid over `--plum-950` | **2.51:1** | fails |
+| Proposed `--ink-400 #9C94A8` over `--plum-900` | 5.69:1 | passes |
+| Proposed `--ink-400 #9C94A8` over `--plum-950` | 6.06:1 | passes |
+
+Dark is PRISM's default mode, so this is the *default* rendering of all secondary copy, not an edge
+case. This app uses `--ink-400 #9C94A8` for dark-mode secondary text and does not wait on the
+system-level decision — an inaccessible default is not something to ship while a token question is
+open.
 
 ### The one PRISM rule the overlay cannot follow
 
@@ -878,6 +927,9 @@ the 4px spacing ladder throughout.
 Three-state preflight rows use PRISM's semantic dots directly — `--green-500` ready,
 `--amber-500` warn, `--red-500` blocking — which maps exactly onto the block-vs-warn
 classification in §6.
+
+Secondary and descriptive copy uses `--ink-400 #9C94A8`, not `--ink-600`, for the contrast reason
+in §9b.
 
 **Mockup:** the published UI mockup renders every surface in this section and §9b.
 

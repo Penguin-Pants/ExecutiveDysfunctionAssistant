@@ -91,6 +91,22 @@ typography now specified as Plex Mono display / Plex Sans body.
 > mockup and §9b already assume it** — needs the user's approval or the documented `--purple-500`
 > fallback.
 
+**PR #5 review round.** Three findings, all valid, all fixed:
+
+1. **FR23's text-scaling contract was lost** in the §9b rewrite — I replaced the section wholesale
+   and dropped the height bounds and scaling rule, leaving only widths. That permitted a fixed-font
+   build that satisfies the tokens and still fails FR23. Restored with explicit bounds, an
+   interpolation formula, and a 13px floor.
+2. **The tracker's visual tokens were lost the same way** — T7.4's acceptance criterion cites §9b
+   for them. Restored, PRISM-native.
+3. **PRISM's dark-mode secondary token fails WCAG AA** — see OQ-6. My own mockup had the same
+   failure in two places, including the "nothing matched" message, which is the state the whole
+   observability argument rests on. Fixed and republished.
+
+Findings 1 and 2 share a cause worth remembering: **replacing a spec section wholesale silently
+drops requirements that other documents depend on.** Neither was a wrong decision — both were
+content that simply vanished. A section rewrite needs a diff read, not just a quality read.
+
 **New build consequence:** IBM Plex Mono and Sans must ship inside the executable. OFL-licensed so
 bundling is permitted; a Latin subset adds roughly 1–2 MB, and a silent fallback to Consolas would
 quietly undo the identity.
