@@ -14,13 +14,19 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 |---|---|---|
 | **M0 — Scaffold** | ✅ Complete | 20 tests passing, lint + format + mypy clean |
 | **M1 — Audio capture spike** | ⛔ Blocked | Needs the Windows machine. **AS-2 gate.** |
-| **M2 — STT interface & local backend** | 🟡 Started | **T2.1 interface written** (design §2 contract, `mypy --strict`). Assembler + conformance suite still to do here; `faster-whisper` and the AS-1 gate need Windows |
+| **M2 — STT interface & local backend** | 🟡 Started | **T2.1 interface + T2.3 assembler done.** T2.2 (`faster-whisper`) and T2.4 (AS-1 gate) need Windows |
 | **M3 — Notes store & indexing** | 🟢 Logic complete | T3.1–T3.6 done. T3.7–T3.9 are Qt UI, deferred to Windows |
-| **M4 — Matching pipeline** | ⏭ Next | Buildable here except the T4.7 measurement, which needs real fixtures |
+| **M4 — Matching pipeline** | 🟢 T4.1–T4.6 complete | T4.7 **blocked**: needs the user's labelled fixtures |
 | **M5–M9** | ⬜ Not started | Mostly Windows/UI |
 
-**Next action:** M4 — matching pipeline (T4.1–T4.6). Buildable here against the fake embedder.
-T4.7's measurement needs the user's labelled fixtures and is blocked until those exist.
+**Next action:** nothing further is buildable on Linux without new inputs. The remaining work
+splits cleanly:
+
+- **Needs the Windows machine:** M1 (AS-2 gate), T2.2 + T2.4 (AS-1 gate), M5 overlay, M6 session
+  lifecycle, M7 tracker device tests, M8 cloud backends, M9 packaging.
+- **Needs the user's fixtures:** T4.7, the OQ-1 gate.
+- **Buildable here if desired:** M6's session state machine and health model are pure logic and
+  could be written ahead of the Windows work, at the cost of being untestable end-to-end.
 
 ---
 
@@ -54,6 +60,62 @@ conservative choice, just a broken one.
 ---
 
 ## Log
+
+### M4 — Matching pipeline (+ T2.3) · T4.1–T4.6 complete · 2026-08-09
+
+**Delivered** — 72 new tests, 158 total. `ruff`, `ruff format`, `mypy` clean.
+
+| Task | Module | Notable coverage |
+|---|---|---|
+| **T2.3** | `stt/assembler.py` — utterance assembly, fragment merge-forward, context window, `StreamRouter` | Boundary cases per design §3; interim events never emit; fragment dropped at session stop; history bounded |
+| T4.1 | `matching/prefilter.py` | Top-K ≥ τ_floor; empty on unrelated speech; **<50 ms for 200 notes**; τ_degraded derived from τ_floor |
+| T4.2 | `matching/selector.py` | Forced `tool_choice`; enum ≤6 with 200 notes loaded; body never sent; freeform rejected end-to-end |
+| T4.3 | `matching/pipeline.py` | Dispatch A(1), B(2), complete A first → A discarded; the inverse branch also asserted |
+| T4.4 | same | Above τ_degraded → `DEGRADED`; below → no-match |
+| T4.5 | same | ≤1 in flight; ≤1 retry with backoff; ceiling → local-only + FR35 signal |
+| T4.6 | same | Mic utterances rejected at the pipeline boundary |
+
+T2.3 was pulled forward because M4 consumes `Utterance`; building M4 on an invented type would have
+diverged from the plan.
+
+**Local review — confirmed issues, all fixed before push**
+
+| # | Issue | Why it mattered |
+|---|---|---|
+| 1 | `_on_complete` cleared `_in_flight` on `seq` alone, without the nonce | Sequences restart at every purge, so a stale pre-purge completion could free the slot while a live post-purge call was still running — a second call would then be issued, breaking the one-in-flight invariant the entire gate rests on. **A fourth hole in this mechanism**, after the three found at specification stage. |
+| 2 | Ceiling reached via a *non-retryable* error never degraded to local-only | `is_retryable(exc) and attempts >= ceiling` meant a budget exhausted by a 400 was silently not announced, contradicting FR40's "the user is told, not silently downgraded". |
+| 3 | `_close()` merged a held fragment with no age check, and `tick()` expired *after* closing | A 40-second-old "mm" was glued onto an unrelated question and dragged the utterance's `t_start` backwards, which also corrupts the context-window anchor. Contradicts design §3's 30 s drop rule. |
+| 4 | `purge()` reset semantics were wrong in both directions | First written to preserve `_attempts` (leaking the per-session ceiling across sessions), then over-corrected to reset it (refilling the budget on every panic clear). Both wrong: `purge()` is *within* a session (D-U5/FR64, `WIPED → RUNNING`), so a separate `start_session()` now owns the per-session resets. |
+| 5 | No backoff between retries | FR40 says "retried at most once **with backoff**". An instant retry spends the second attempt while the rate limit is still in force. |
+| 6 | No request timeout | Design §5 makes a 5 s hard timeout load-bearing for FR59 — the call cannot be cancelled, so without it the window for a pre-purge response is unbounded. |
+| 7 | `InlineRunner` wrapped `on_done` in its own try | An exception raised *by the callback* re-entered it as a failure, emitting twice for one request. |
+| 8 | Context string unbounded | It enters every stage-2 prompt, so it is a per-call token cost (NFR6). Capped at 600 chars. |
+
+Two of my own tests asserted the wrong semantics for #4 and were rewritten rather than kept green.
+
+**Possible risks — recorded, not fixed**
+
+- **Prompt injection via interviewer speech.** The utterance is interpolated into the stage-2
+  prompt. FR10's forced enum bounds the damage to selecting a *wrong note from the user's own
+  set* — it cannot produce new text — so this is a match-quality risk, not a content risk. Revisit
+  if the prompt ever gains freeform output.
+- **Prefilter/index drift.** `Prefilter` holds a `NoteSet` and an `EmbeddingIndex` built at some
+  earlier point. Deleted notes are skipped; notes *added* since the build are silently unmatchable.
+  Rebuild-on-change belongs to the wiring in M6.
+- **Unhandled embedder failure in `submit()`.** The exception propagates to the caller. The
+  matching worker's restart policy is M6's `FR61` work; there is no worker yet to restart.
+- **`StreamRouter` is not yet wired to the pipeline.** Both enforce FR53 independently. Connecting
+  them is M6.
+
+**Blocked, not attempted**
+
+- **T4.7** (stage-1-only vs stage-1+2 accuracy) — the OQ-1 gate. Requires ≥3 recorded mock-interview
+  transcripts with real prep notes and hand-labelled utterances. Only the user can produce these,
+  and inventing fixtures would produce a number that decides the architecture on fabricated
+  evidence. **Not started, deliberately.**
+- **T2.2 / T2.4** — `faster-whisper` and the AS-1 latency gate need Windows.
+
+---
 
 ### PR #3 review round · 2026-08-09
 

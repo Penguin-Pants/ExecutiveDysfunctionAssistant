@@ -16,7 +16,7 @@ TS§ = [test strategy](./04-test-strategy.md) section
 | FR6 | PRD (superseded by D-U2) | D§1, D§8 | T1.2 | Soak, TS§4 |
 | FR7 | PRD | D§6 | T6.1 | Unit (no thread in IDLE) |
 | FR8 | PRD | D§1 | T1.3, T2.2 | Unit |
-| FR9 | PRD | D§5 | T4.1, T4.2 | Integration |
+| FR9 | PRD | D§5 | T4.1 ✅, T4.2 ✅ | Integration |
 | FR10 | PRD | D§5 | T4.2 | Unit (request shape) |
 | FR11 | PRD | **D§9b**, D-5 | T5.1 | Unit (verbatim substring) + manual |
 | FR12 | PRD (v1 per D-U1) | D§1, D§5 (τ_track) | T7.1, T7.4 | Integration |
@@ -35,7 +35,7 @@ TS§ = [test strategy](./04-test-strategy.md) section
 | FR29 | Review A1 | D§4 | T3.2, **T3.9** | Unit + restore UI |
 | FR30 | Review A1 | D§4 | T3.4 | Round-trip |
 | FR31 | Review A1 | D§4 | T3.3 | Unit |
-| FR32 | Review A6 (corrected) | **D§5** | T4.3 | **Out-of-order test**, TS§3 |
+| FR32 | Review A6 (corrected) | **D§5** | T4.3 ✅ | **Out-of-order test**, TS§3 |
 | FR33 | Review A7 | D§8 | T6.6 | Saturation + soak, TS§3 |
 | FR34 | Review A10 | D§4 | T3.6 | Unit |
 | FR35 | Review A11 | **D§7** | T5.7 | Unit per state |
@@ -44,20 +44,20 @@ TS§ = [test strategy](./04-test-strategy.md) section
 | FR38 | Review A14 | **D§6 (classification table)** | T6.5 | Unit per precondition |
 | FR39a | Review A16 | D§9 | T1.4 | Manual device switch |
 | FR39b | Review-B C6 | D§9 | T1.4, T6.6 | Device-loss pause + auto-resume |
-| FR40 | Review A18 | D§5 | T4.5 | Fault injection |
+| FR40 | Review A18 | D§5 | T4.5 ✅ | Fault injection |
 | FR41 | New (BC-2) | D§4 | T3.1 | Unit |
 | FR42 | New (D-5) | D§4 | T3.5, T5.1 | Substring assertion |
 | FR43 | New (US-A3) | D§4 | T3.1, **T3.8** | Unit |
 | FR44 | New (DI-1) | D§4 | T3.3 | Corrupt fixture |
 | FR45 | New (RC-1) | D§8 | T1.3 | Callback timing |
-| FR46 | New (D-4) | **D§3** | T2.3 | Fixture boundaries |
+| FR46 | New (D-4) | **D§3** | T2.3 ✅ | Fixture boundaries |
 | FR47 | New (D-2) | D§2 | T2.2 | Conformance |
-| FR48 | Review A5 | D§5 | T4.2 | Enum size, 200 notes |
-| FR49 | D-U3 | D§5 | T4.4 | Both branches |
-| FR50 | US-D2 | D§5, D§7 | T4.1, T5.7 | Unrelated-speech test |
+| FR48 | Review A5 | D§5 | T4.2 ✅ | Enum size, 200 notes |
+| FR49 | D-U3 | D§5 | T4.4 ✅ | Both branches |
+| FR50 | US-D2 | D§5, D§7 | T4.1 ✅, T5.7 | Unrelated-speech test |
 | FR51 | D-U3 | **D§9b** | T5.3 | Manual glance + non-colour channel |
 | FR52 | US-D3 | D§5 | T9.2 | Unit |
-| FR53 | D-10 | D§1 | T4.6 | Unit |
+| FR53 | D-10 | D§1 | T4.6 ✅ | Unit |
 | FR54 | New (FR13 gap) | D§5 | T5.5 | Unit |
 | FR55 | Review A22 | D§1 | T5.4 | Off-screen recovery |
 | FR56 | US-G2 | D§1 | T7.1 | **Loopback-must-not-mark** |
