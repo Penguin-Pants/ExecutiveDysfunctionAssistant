@@ -19,6 +19,7 @@ re-introduces exactly the retained-audio problem FR16 exists to avoid.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -41,6 +42,11 @@ ECHO_WINDOW_S = 1.5
 ECHO_HOLD_S = 0.3
 """How long a mic utterance waits for a matching interviewer utterance to appear.
 
+Measured from **submission**, not from the utterance's audio `t_end`. The assembler does
+not emit a span until at least the 700 ms silence gate has elapsed, so `now - t_end` is
+already past 0.3 by the time the tracker ever sees it — a deadline anchored to `t_end`
+would expire before it began, and the grace period would silently never happen.
+
 The delay lands on the tracker, which is not latency-critical, rather than on matching,
 which is. An interviewer utterance is never held.
 """
@@ -59,8 +65,18 @@ INTERVIEWER_MEMORY = 8
 may grow with session length (FR33)."""
 
 
+_PUNCT = re.compile(r"[^\w']+")
+
+
 def _tokens(text: str) -> set[str]:
-    return {w for w in text.lower().split() if w}
+    """Lowercased word set, punctuation stripped.
+
+    The two streams are transcribed by independent backends, which routinely disagree on
+    terminal punctuation — "migration?" against "migration" would otherwise be different
+    tokens, dropping an identical five-word span to 0.6 overlap and letting an echo
+    through to mark a point the user never made.
+    """
+    return {w for w in _PUNCT.sub(" ", text.lower()).split() if w}
 
 
 def jaccard(a: str, b: str) -> float:
@@ -86,6 +102,7 @@ class TrackedPoint:
 @dataclass
 class _Held:
     utterance: Utterance
+    deadline: float
     released: bool = False
 
 
@@ -153,11 +170,12 @@ class ProgressTracker:
                 self._suppressed += 1
                 self.ring.record("echo_suppressed", stream="user")
 
-    def submit_user(self, utterance: Utterance) -> list[str]:
+    def submit_user(self, utterance: Utterance, now: float) -> list[str]:
         """Offer a mic utterance to the tracker. Returns note IDs newly marked.
 
-        Held for `ECHO_HOLD_S` so a matching interviewer utterance has a chance to
-        arrive; call `tick()` to release it. Returns nothing on this call by design.
+        `now` is arrival time on the same clock `tick()` uses. Held until
+        `now + ECHO_HOLD_S` so a matching interviewer utterance has a chance to arrive;
+        call `tick()` to release it. Returns nothing on this call by design.
         """
         if utterance.stream_id != "user":
             raise ValueError(
@@ -169,7 +187,7 @@ class ProgressTracker:
             self._suppressed += 1
             self.ring.record("echo_suppressed", stream="user")
             return []
-        self._held.append(_Held(utterance))
+        self._held.append(_Held(utterance, deadline=now + ECHO_HOLD_S))
         while len(self._held) > MAX_HELD:
             dropped = self._held.pop(0)
             if not dropped.released:
@@ -187,7 +205,7 @@ class ProgressTracker:
         for held in self._held:
             if held.released:
                 continue
-            if now - held.utterance.t_end < ECHO_HOLD_S:
+            if now < held.deadline:
                 still.append(held)
                 continue
             newly.extend(self._mark(held.utterance))

@@ -19,17 +19,21 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | **M4 — Matching pipeline** | 🟢 T4.1–T4.6 complete | T4.7 **blocked**: needs the user's labelled fixtures |
 | **M5 — Overlay UI** | ⛔ Blocked | Qt + `SetWindowDisplayAffinity`; needs Windows. Fully specified (design §9b) |
 | **M6 — Session lifecycle** | 🟢 Logic complete | T6.1–T6.3, T6.5 classification, T6.6 backpressure, T6.7 done. T6.4 and the OS trigger paths need Windows |
-| **M7–M9** | ⬜ Not started | Windows/UI |
+| **M7 — Progress tracker** | 🟢 T7.1 + T7.3 complete | Marking and text-domain echo suppression done. T7.2 needs paired audio fixtures; T7.4 is Qt |
+| **M8–M9** | ⬜ Not started | Cloud backends, packaging — both Windows |
 
-**Next action:** nothing further is buildable on Linux without new inputs. M6's logic is done;
-what remains of it is device- and OS-bound. The remaining work
-splits cleanly:
+**Next action:** nothing further is buildable on Linux without new inputs. Every task whose logic
+is platform-free has now been implemented. The remaining work splits cleanly:
 
-- **Needs the Windows machine:** M1 (AS-2 gate), T2.2 + T2.4 (AS-1 gate), M5 overlay, M6 session
-  lifecycle, M7 tracker device tests, M8 cloud backends, M9 packaging.
-- **Needs the user's fixtures:** T4.7, the OQ-1 gate.
-- **Buildable here if desired:** M6's session state machine and health model are pure logic and
-  could be written ahead of the Windows work, at the cost of being untestable end-to-end.
+- **Needs the Windows machine:** M1 (AS-2 gate), T2.2 + T2.4 (AS-1 gate), M5 overlay, T6.4's
+  ProcMon trace and M6's OS trigger paths, T7.4's checklist rendering, M8 cloud backends,
+  M9 packaging.
+- **Needs the user's fixtures:** T4.7 (the OQ-1 gate) and T7.2 (paired headphone/speaker audio).
+
+**A caution about this list.** An earlier version of it said "M7 tracker device tests" and that
+blanket phrase hid two buildable tasks for a whole milestone — T7.3 is text-domain by design and
+needed no device at all. When a milestone is marked blocked here, name the *task*, not the
+milestone, or the same thing happens again.
 
 ---
 
