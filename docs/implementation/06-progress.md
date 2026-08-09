@@ -15,11 +15,12 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | **M0 — Scaffold** | ✅ Complete | 20 tests passing, lint + format + mypy clean |
 | **M1 — Audio capture spike** | ⛔ Blocked | Needs the Windows machine. **AS-2 gate.** |
 | **M2 — STT interface & local backend** | 🟡 Partly doable here | Interface + assembler + conformance suite can be written on Linux; `faster-whisper` and the AS-1 gate need Windows |
-| **M3 — Notes store & indexing** | ⏭ Next | Non-UI parts fully buildable here |
-| **M4 — Matching pipeline** | ⬜ Not started | Buildable here except the T4.7 measurement, which needs real fixtures |
+| **M3 — Notes store & indexing** | 🟢 Logic complete | T3.1–T3.6 done. T3.7–T3.9 are Qt UI, deferred to Windows |
+| **M4 — Matching pipeline** | ⏭ Next | Buildable here except the T4.7 measurement, which needs real fixtures |
 | **M5–M9** | ⬜ Not started | Mostly Windows/UI |
 
-**Next action:** implement M3 tasks T3.1–T3.6 (model, store, schema guard, export, importer, index).
+**Next action:** M4 — matching pipeline (T4.1–T4.6). Buildable here against the fake embedder.
+T4.7's measurement needs the user's labelled fixtures and is blocked until those exist.
 
 ---
 
@@ -45,6 +46,53 @@ syntax. CI runs 3.12 on `windows-latest`, which is the version that actually shi
 ---
 
 ## Log
+
+### M3 — Notes store & indexing · logic complete · 2026-08-09
+
+**Delivered** — 51 new tests, 71 total. `ruff`, `ruff format`, `mypy` clean.
+
+| Task | What exists | Notable coverage |
+|---|---|---|
+| T3.1 | `notes/model.py` — `Note`, `NoteSet`, UUID4 identity, schema v1, `order_index` authoritative on load | IDs stable across edit + reorder; deleted IDs never reused across 100 creations |
+| T3.2 | `notes/store.py` — atomic write (tmp → fsync → copy-rotate → `os.replace`), 5 generations | **SIGKILL mid-save × 10 consecutive runs, notes intact every time**; live file proven to exist at every point of rotation |
+| T3.3 | Schema guard + corruption recovery | Newer schema refused with file byte-identical after; 4 corruption shapes recover; fall-through when `.bak.1` is itself corrupt; no readable backup raises rather than starting empty |
+| T3.4 | Export/import `.md` + `.json` bundle | Round-trip preserves content, tags, bullets, order, IDs, `track_progress` |
+| T3.5 | `notes/importer.py` — strategy detection, chunking, headline mapping, bullet proposal | Every proposed bullet asserted verbatim across all three strategies; single stray `Q:` does not trigger the Q/A convention |
+| T3.6 | `notes/index.py` — `.npz` cache, `Embedder` Protocol | Model-version change forces full re-embed; headline edit re-embeds one note; **body edit re-embeds nothing**; corrupt cache rebuilt |
+
+**Decisions made while implementing**
+
+> **D-14 — Stale `.tmp` files are swept on store construction.** The SIGKILL test passed its
+> durability assertion on the first run — notes intact all ten times — but left an orphaned
+> `.tmp` behind each time. `os.replace` is atomic, so a surviving temp means the process died
+> before the swap: the live file is fine and the temp is a worthless partial write. Left alone
+> they accumulate one per crash, forever. The sweep runs in `NotesStore.__init__`.
+>
+> Worth noting the shape of this: the *guarantee* held and the *housekeeping* did not, and only
+> an assertion beyond the requirement's literal wording caught it.
+
+> **D-15 — `verify_bullets_verbatim()` runs on every save, not just at import.** FR42 is phrased
+> as an import-time property, but the overlay renders `bullets` directly, so a non-verbatim
+> bullet introduced by any later path — the editor, a migration, a hand-edited file — is
+> generated content reaching the screen. Checking at the store boundary makes it unbypassable.
+
+**Deliberately deferred to the Windows machine**
+
+- **T3.7** notes editor UI, **T3.8** note-set lifecycle UI, **T3.9** backup-restore UI — all Qt.
+  The store-side operations they drive (`save`, `delete`, `reorder`, `list_backups`,
+  `restore_latest_readable`, `export_bundle`) are implemented and tested, so the UI work is
+  wiring rather than logic.
+- The `taskkill /F` form of T3.2's criterion. SIGKILL is the equivalent here and is genuinely
+  hostile — it cannot be caught or cleaned up after — but the Windows run should still happen,
+  since NTFS `os.replace` semantics are what actually ship.
+
+**Not yet verified**
+
+- Real `sentence-transformers` embeddings. Everything runs against `FakeEmbedder`, which satisfies
+  the same Protocol. The swap is what FR17-style indirection is for, but it is untested until the
+  extra is installed.
+
+---
 
 ### M0 — Scaffold · complete · 2026-08-09
 
