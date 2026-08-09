@@ -39,9 +39,17 @@ gate, dispatch policy, diagnostics, credentials logic.
 `SetWindowDisplayAffinity` (T5.2), Credential Manager binding (the OS half of T0.5), the Process
 Monitor privacy trace (T6.4), PyInstaller packaging (T9.4), and every `@pytest.mark.device` test.
 
-**Python version:** the container has 3.11; the spec pins **3.12** for the Windows build. Code is
-written to run on both and `target-version` is set to `py311`, so nothing here depends on 3.12
-syntax. CI runs 3.12 on `windows-latest`, which is the version that actually ships.
+**Python version:** the container has 3.11; the spec pins **3.12** for the Windows build. Two
+settings look similar and mean different things — do not "align" them:
+
+- **`ruff target-version = "py311"`** — the *floor*. Keeps the source runnable in the 3.11
+  container, so nothing here silently adopts 3.12-only syntax.
+- **`mypy python_version = "3.12"`** — the *target*. Type-checks against the version that ships.
+
+An earlier version pinned mypy to 3.11 to match the container, which broke CI: numpy 2.5's own
+stubs use `type` statements that a 3.11 parser cannot read, so mypy failed before checking any
+project code. Analysing for an older version than your dependencies are written for is not a
+conservative choice, just a broken one.
 
 ---
 

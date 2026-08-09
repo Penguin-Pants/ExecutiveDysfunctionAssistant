@@ -62,7 +62,11 @@ extend-exclude = ["docs"]
 select = ["E", "F", "I", "B", "UP", "SIM"]
 
 [tool.mypy]
-python_version = "3.11"
+# The shipping target is 3.12 (design §10), so type-check for 3.12 even though the
+# Linux dev container runs 3.11. Pinning this to 3.11 made mypy fail to parse numpy's
+# own stubs on CI, which use `type` statements: analysing for an older version than
+# the dependencies are written for is not a safer choice, just a broken one.
+python_version = "3.12"
 warn_unused_ignores = true
 warn_redundant_casts = true
 
