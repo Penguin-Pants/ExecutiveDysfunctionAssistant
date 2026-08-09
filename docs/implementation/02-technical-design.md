@@ -718,6 +718,11 @@ made those two visually identical, which is the worst observability property thi
 have — the user cannot distinguish working-as-designed from broken at the moment they most need
 to know.
 
+`silence_s` and `capture_excluded` were added during M6. The section already named
+`no audio detected (Ns)` and `NOT hidden from screen share` as derived states but gave the
+record no field either could be derived from, so neither was expressible — the same
+gap reviewer B2 flagged for `capture_excluded` alone.
+
 Derived indicator states: `capturing`, `no audio detected (Ns)`, `STT degraded`, `matching:
 local-only`, `falling behind`, `audio lost`, `NOT hidden from screen share` (FR14a).
 
