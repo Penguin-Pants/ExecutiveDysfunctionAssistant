@@ -13,6 +13,12 @@ import time
 
 import pytest
 
+# Bare `conformance`, not `tests.conformance`: `tests/` has no `__init__.py`, so pytest
+# inserts the test file's own directory onto `sys.path`. The dotted form only works when
+# the repo root happens to be there too — true under `python -m pytest`, which adds the
+# cwd, and false under the `pytest` console script that CI runs.
+from conformance import run_conformance_suite, start
+
 from interview_prep_recall.diagnostics.ring import DiagnosticRing
 from interview_prep_recall.platform.credentials import CredentialStore
 from interview_prep_recall.session.health import Egress, HealthMonitor
@@ -31,7 +37,6 @@ from interview_prep_recall.stt.interface import (
     StateEvent,
     SttStreamState,
 )
-from tests.conformance import run_conformance_suite, start
 
 FRAME = b"\x00" * FRAME_BYTES
 
@@ -602,3 +607,77 @@ def test_base_class_parse_is_not_silently_optional() -> None:
     backend = CloudSttBackend(connector_for(FakeConnection()))
     with pytest.raises(NotImplementedError):
         backend.parse("{}")
+
+
+# ---------- PR #8 review round: rule 2 and rule 6, per span rather than per session ----
+
+
+def test_a_later_unfinalised_utterance_still_reports_failed() -> None:
+    """Rule 2 is a per-span guarantee, not a per-session one.
+
+    `_final_seen` latched on the **first** final and never cleared, so audio accepted
+    afterwards that the server never finalised reported STOPPED. That is the end of the
+    interview dropped silently — by the mechanism written to make exactly that
+    impossible. The original test passed because it only ever fed one utterance.
+    """
+    connection = FakeConnection([dg_result("first answer", 0.0, 1.0, True)])
+    backend = DeepgramBackend(connector_for(connection))
+    recorder = start(backend)
+
+    backend.feed(FRAME, 0.0)
+    assert wait_for(lambda: recorder.finals), "the first utterance never finalised"
+
+    # More audio arrives; the server says nothing further about it.
+    for i in range(5):
+        backend.feed(FRAME, 10.0 + i * 0.02)
+    backend.stop(flush_timeout_s=0.3)
+
+    assert SttStreamState.FAILED in recorder.state_names, (
+        "audio accepted after the last final was silently unaccounted for"
+    )
+    assert recorder.state_names[-1] is SttStreamState.STOPPED
+
+
+def test_a_clean_single_utterance_does_not_report_failed() -> None:
+    """Positive control for the test above, which would pass if FAILED were reported
+    unconditionally."""
+    connection = FakeConnection([dg_result("all finalised", 0.0, 1.0, True)])
+    backend = DeepgramBackend(connector_for(connection))
+    recorder = start(backend)
+    backend.feed(FRAME, 0.0)
+    assert wait_for(lambda: recorder.finals)
+    backend.stop(flush_timeout_s=1.0)
+
+    assert SttStreamState.FAILED not in recorder.state_names
+
+
+def test_no_callbacks_arrive_after_stop_returns() -> None:
+    """Rule 6. `close()` allows 0.5 s while the flush tail waited a fixed 1.5 s, so the
+    join returned with the worker and socket still live — and `FallbackSttBackend` then
+    cleared the egress indicator while the cloud socket was open. Callbacks are detached
+    unconditionally before `stop()` returns."""
+    connection = FakeConnection([dg_result("late", 0.0, 1.0, True)])
+    backend = DeepgramBackend(connector_for(connection))
+    recorder = start(backend)
+    backend.feed(FRAME, 0.0)
+    backend.stop(flush_timeout_s=0.05)
+
+    seen = len(recorder.transcripts) + len(recorder.states)
+    time.sleep(0.5)
+    assert len(recorder.transcripts) + len(recorder.states) == seen, (
+        "the worker emitted into a consumer that had been told the stream was over"
+    )
+
+
+def test_the_flush_tail_never_outlasts_the_callers_timeout() -> None:
+    """The mechanism behind the test above: a fixed internal wait longer than the
+    caller's timeout guarantees the join races the worker."""
+    connection = FakeConnection()
+    backend = DeepgramBackend(connector_for(connection))
+    start(backend)
+    backend.feed(FRAME, 0.0)
+
+    began = time.monotonic()
+    backend.stop(flush_timeout_s=0.2)
+    elapsed = time.monotonic() - began
+    assert elapsed < 1.5, f"stop() took {elapsed:.2f}s against a 0.2s flush timeout"

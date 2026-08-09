@@ -56,6 +56,17 @@ A stalled socket drops every frame that arrives. Reporting each one would evict 
 bounded ring's real diagnostics with repetitions of a fact already recorded.
 """
 
+FINAL_FLUSH_TAIL_S = 1.5
+"""Longest quiet wait for the server's finals after the flush request.
+
+Also capped by the caller's `flush_timeout_s`: `close()` allows 0.5 s, and an internal
+wait longer than the caller's timeout meant the join returned with the worker and socket
+still live while `stop()` reported STOPPED.
+"""
+
+JOIN_GRACE_S = 0.5
+"""Slack beyond the flush tail for the loop to unwind and close the socket."""
+
 RECONNECT_ATTEMPTS = 2
 RECONNECT_BACKOFF_S = 0.5
 
@@ -168,6 +179,7 @@ class CloudSttBackend:
         self._closed = False
 
         self._dropped = 0
+        self._flush_timeout_s = FINAL_FLUSH_TAIL_S
         self._unfinalised = False
         self._final_seen = threading.Event()
         self._last_emitted_start = float("-inf")
@@ -188,6 +200,8 @@ class CloudSttBackend:
         self._closed = False
         self._stopping.clear()
         self._final_seen.clear()
+        self._unfinalised = False
+        self._flush_timeout_s = FINAL_FLUSH_TAIL_S
         self._emit_state(SttStreamState.STARTING)
 
         self._thread = threading.Thread(
@@ -219,6 +233,12 @@ class CloudSttBackend:
                 self._emit_state(SttStreamState.DEGRADED, f"dropped {self._dropped} frames")
         self._pending.append((pcm, t_capture))
         self._unfinalised = True
+        # Newly accepted audio invalidates the previous final. Without this, `_final_seen`
+        # latches on the *first* final of the session and never clears, so a later
+        # utterance that the server never finalises reports STOPPED instead of FAILED —
+        # the end of the interview dropped silently, by the very mechanism written to
+        # make that impossible. Rule 2 is a per-span guarantee, not a per-session one.
+        self._final_seen.clear()
         loop, wake = self._loop, self._wake
         if loop is None or wake is None:
             return
@@ -232,26 +252,49 @@ class CloudSttBackend:
     def stop(self, flush_timeout_s: float = 2.0) -> None:
         """Flush pending finals, then STOPPED (contract rule 6).
 
-        If audio the backend accepted has still produced no final when the timeout
-        expires, the stream goes FAILED first. Rule 2 permits exactly two outcomes for
-        acknowledged audio — a final, or FAILED — and quietly reporting STOPPED with a
-        span unaccounted for is neither.
+        Three things have to hold when this returns, and each was wrong at some point:
+
+        * **Audio accounted for.** If audio the backend accepted produced no final, the
+          stream goes FAILED first. Rule 2 permits a final or FAILED, and reporting
+          STOPPED with a span unaccounted for is neither.
+        * **The worker is actually stopped.** The flush tail inside `_session` is bounded
+          by the *caller's* timeout, so the join is not racing a longer internal wait.
+        * **No callbacks after this returns.** They are detached unconditionally at the
+          end. A worker that outlives its timeout would otherwise emit into a consumer
+          that believes the stream is over — and `FallbackSttBackend` would clear the
+          egress indicator while the socket was still open, which is FR20's false
+          privacy statement in its worst direction.
         """
         if self._thread is None:
             self._emit_state(SttStreamState.STOPPED)
             return
+        self._flush_timeout_s = flush_timeout_s
         self._stopping.set()
         loop, wake = self._loop, self._wake
         if loop is not None and wake is not None:
             with contextlib.suppress(RuntimeError):
                 loop.call_soon_threadsafe(wake.set)
-        self._thread.join(timeout=flush_timeout_s)
+
+        # Grace beyond the flush tail: the worker needs to unwind the loop and close the
+        # socket after its last await returns, and joining for exactly the tail would
+        # time out on a worker that is behaving correctly.
+        self._thread.join(timeout=flush_timeout_s + JOIN_GRACE_S)
+        alive = self._thread.is_alive()
+
         if self._unfinalised and not self._final_seen.is_set():
+            self._emit_state(SttStreamState.FAILED, "audio was accepted but never finalised")
+        if alive:
             self._emit_state(
                 SttStreamState.FAILED,
-                "audio was accepted but never finalised",
+                "worker did not stop within the timeout; callbacks detached",
             )
         self._emit_state(SttStreamState.STOPPED)
+
+        # Detached last, after every state above has been delivered. The thread is a
+        # daemon and will not outlive the process; what matters is that it can no longer
+        # reach a consumer that has been told the stream is over.
+        self._on_transcript = None
+        self._on_state = None
         self._thread = None
 
     def close(self) -> None:
@@ -406,8 +449,12 @@ class CloudSttBackend:
                 await connection.send(finalise)
             # Give the server its chance to flush finals before the socket goes.
             # `stop()` bounds the total wait; this only bounds the quiet tail.
+            # Bounded by the caller's timeout, not by a fixed constant: `close()` gives
+            # 0.5 s, and waiting 1.5 s here left `stop()` joining a worker that was
+            # still inside this await.
+            tail = min(FINAL_FLUSH_TAIL_S, self._flush_timeout_s)
             with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(receiver, timeout=1.5)
+                await asyncio.wait_for(receiver, timeout=tail)
         finally:
             receiver.cancel()
             await connection.close()

@@ -84,7 +84,7 @@ no Windows dependency at all. That is the second time a blanket label in this fi
 work, one milestone after the first, so the caution above has been rewritten to demand a
 falsifiable reason rather than a platform name.
 
-**Delivered** — 31 new tests, 282 total. `ruff`, `ruff format`, `mypy` clean.
+**Delivered** — 35 new tests, 286 total. `ruff`, `ruff format`, `mypy` clean.
 
 | Task | What exists | Notable coverage |
 |---|---|---|
@@ -160,6 +160,22 @@ puts `websockets` in the same `ignore_missing_imports` override as the Windows-o
 it is imported lazily inside the connector factories, so nothing needs it to type-check or to run
 the suite. Verified by uninstalling it and re-running both mypy and pytest, rather than by
 re-running with it still present.
+
+**PR #8 review round — three findings, all valid, all fixed.**
+
+| Severity | Finding | Why it mattered |
+|---|---|---|
+| P1 | **`_final_seen` latched on the first final of the session and never cleared.** | Rule 2 is a *per-span* guarantee. Audio accepted after the first final that the server never finalised reported STOPPED instead of FAILED — the end of the interview dropped silently, by the mechanism written to make that impossible. My tests missed it because none of them fed a second utterance. |
+| P1 | **`stop()` reported STOPPED with the worker still running.** `close()` allows 0.5 s while the flush tail waited a fixed 1.5 s, so the join could not succeed. The worker then emitted callbacks after `stop()` returned, and `FallbackSttBackend` cleared the egress indicator while the cloud socket was still open — FR20's false privacy statement, in its worst direction. | The internal tail is now bounded by the caller's timeout, the join gets a grace period, a surviving worker reports FAILED, and callbacks are detached unconditionally before `stop()` returns. |
+| P1 | **`additional_headers` requires `websockets >= 14`; the floor was `>= 12`.** 12.x and 13.x call it `extra_headers`, so at the declared minimum every connect raised `TypeError` before opening a socket and cloud STT fell back to local 100% of the time. | Floor raised to 14, with the coupling noted at both call sites. Nothing caught this locally because the container had 17.0.1 installed. |
+
+**A second CI-vs-local divergence in one milestone.** After the mypy failure, `pytest` then failed
+to collect: `from tests.conformance import ...` needs the repo root on `sys.path`, which
+`python -m pytest` provides by adding the cwd and the `pytest` console script that CI runs does
+not. Now imported as bare `conformance`, which works under both. **The dev container is not the
+CI environment**, and this milestone produced two separate failures whose entire cause was
+assuming otherwise. Reproduce with `PYTHONSAFEPATH=1 python -m pytest` before pushing anything
+that adds a dependency or a cross-module test import.
 
 **Not verified, and cannot be here — AS-8.** Both protocols are written from documentation and
 have never met a live endpoint. Message names (`CloseStream`, `start`/`end`), envelope shapes and

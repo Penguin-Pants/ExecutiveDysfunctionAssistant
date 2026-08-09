@@ -39,6 +39,10 @@ def websocket_connector(api_key: str, params: dict[str, str] | None = None) -> C
     """
 
     async def connect():  # type: ignore[no-untyped-def]
+        # `additional_headers` requires websockets >= 14; 12.x/13.x named it
+        # `extra_headers` and would raise TypeError before opening the socket,
+        # so cloud STT would fail on every connect and fall back to local. The
+        # dependency floor in pyproject.toml is pinned to match this call.
         import websockets
 
         return await websockets.connect(
