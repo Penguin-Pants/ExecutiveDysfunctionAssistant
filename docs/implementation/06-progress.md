@@ -61,6 +61,85 @@ conservative choice, just a broken one.
 
 ## Log
 
+### PRISM design system adopted · 2026-08-09
+
+The user supplied **PRISM**, their personal-brand design system, and asked for a UI mockup and for
+it to be folded into the plan. Both done.
+
+- **`docs/prism-design-system.md`** — the system itself, committed so the plan cites a versioned copy.
+- **Design §9b rewritten** from invented per-component tokens to PRISM's. **§9c added** for the app
+  chrome (editor, preflight, settings).
+- **Mockup published** covering all four overlay states, import review, preflight, and session
+  controls, plus the conflict resolutions.
+- **D-17/D-18/D-19** recorded; **OQ-5** opened.
+
+**Conflicts resolved rather than merged** — PRISM wins everywhere it disagreed with §9b: panel
+surface `#0B0F14 → --plum-950`, radius `12px → 20px`, confirmed state `#4C9AFF → --blue-500`,
+typography now specified as Plex Mono display / Plex Sans body.
+
+**Two findings worth carrying forward**
+
+> **D-18 — the overlay cannot follow PRISM's core layout rule.** §6 requires labels outside and
+> below the card, on the canvas. The overlay floats over someone else's video call and has no
+> canvas, so "outside the card" would mean drawing onto the call. It is the single documented
+> exemption; every other surface obeys the rule.
+
+> **OQ-5 — PRISM has no warning token, and this product needs one.** Its four semantic dots are
+> danger, info, success, highlight. A degraded match and data-leaving-the-device are none of those:
+> both mean "proceed, but know this", where red overstates and purple already means "new". Proposed
+> `--amber-500: #FFC93D`, taken from the existing `--grad-3` stop so it stays in-family. **The
+> mockup and §9b already assume it** — needs the user's approval or the documented `--purple-500`
+> fallback.
+
+**PR #5 review round.** Three findings, all valid, all fixed:
+
+1. **FR23's text-scaling contract was lost** in the §9b rewrite — I replaced the section wholesale
+   and dropped the height bounds and scaling rule, leaving only widths. That permitted a fixed-font
+   build that satisfies the tokens and still fails FR23. Restored with explicit bounds, an
+   interpolation formula, and a 13px floor.
+2. **The tracker's visual tokens were lost the same way** — T7.4's acceptance criterion cites §9b
+   for them. Restored, PRISM-native.
+3. **PRISM's dark-mode secondary token fails WCAG AA** — see OQ-6. My own mockup had the same
+   failure in two places, including the "nothing matched" message, which is the state the whole
+   observability argument rests on. Fixed and republished.
+
+Findings 1 and 2 share a cause worth remembering: **replacing a spec section wholesale silently
+drops requirements that other documents depend on.** Neither was a wrong decision — both were
+content that simply vanished. A section rewrite needs a diff read, not just a quality read.
+
+**D-U7 — the overlay leaves PRISM's palette.** The user directed that the overlay be translucent
+neutral gray rather than purple, overriding PRISM. Scoped to the overlay's surface, border and text
+only: PRISM keeps the typography, radius, spacing ladder and semantic rails there, and keeps the app
+chrome entirely. The reasoning holds independently of preference — a saturated panel tints the video
+behind it, a neutral translucent one does not.
+
+**D-U7a resolved — brightness is a user control (FR65), not a fixed pick.** Along with opacity
+(FR24), both are sliders. The measurement that shaped it: **a continuous brightness ramp has an
+unreadable middle.** At mid-gray, light text is 4.39:1 and dark text 3.71:1 — neither reaches the
+4.5:1 body copy needs. A free slider would let the user park the overlay on a setting where it
+cannot be read. So the control spans two bands (dark 0–25, light 75–100) and steps over the dead
+zone, with ink and both state rails swapping variants at the crossover.
+
+A second finding fell out of it: **PRISM's `--amber-500` is 1.0:1 on a light panel.** Adding a
+brightness control means every accent has to work at both ends of the range, not just the end it
+was designed for — so the degraded rail darkens to `#8A5A00` in the light band. Without that, the
+degraded state would have silently vanished at exactly the setting someone picks for a bright room.
+
+**OQ-5 and OQ-6 both resolved — PRISM absorbed both changes.** `--amber-500` is now its fifth
+palette dot; `--ink-400 #9C94A8` is now the dark-mode secondary text token. `docs/prism-design-system.md`
+carries a changelog recording why.
+
+~~**D-U7a is open and needs one word from the user:** "light gray" could mean dark-neutral with light
+text (which is what FR11, the user's own wording, describes) or a genuinely light panel with dark
+text. Both are rendered side by side in the mockup. A is the working default; the loser gets deleted
+rather than kept as a setting.~~
+
+**New build consequence:** IBM Plex Mono and Sans must ship inside the executable. OFL-licensed so
+bundling is permitted; a Latin subset adds roughly 1–2 MB, and a silent fallback to Consolas would
+quietly undo the identity.
+
+---
+
 ### M4 — Matching pipeline (+ T2.3) · T4.1–T4.6 complete · 2026-08-09
 
 **Delivered** — 72 new tests, 158 total. `ruff`, `ruff format`, `mypy` clean.

@@ -812,33 +812,174 @@ reports both, and the gate is the 900 ms figure.
 
 ---
 
-## 9b. Overlay Visual Specification *(closes review-B "missing #6")*
+## 9b. Overlay Visual Specification
 
-M5 was seven tasks with no visual specification; T5.3's "distinct styling tokens" had no referent.
+**The overlay does not use PRISM's palette (D-U7, user override).** It is a neutral translucent
+gray panel, not plum. PRISM governs every *other* surface (§9c) and still governs the overlay's
+typography, radius, spacing ladder, and semantic rail colours — so it reads as part of the same
+product without tinting the video behind it.
 
-| Token | Value |
+### Tokens — overlay only
+
+| Element | Value |
 |---|---|
-| Panel background | `#0B0F14` at user opacity (FR24, 20–100%, default 85%) |
-| Corner radius / padding | 12 px / 16 px |
-| Default size | 520 × 220 px, min 320 × 120, max 900 × 600 (FR23 supported range) |
-| Headline | 18 px semibold, `#F2F5F8`, single line, ellipsised |
-| Bullets | 16 px regular, `#C7D1DB`, max 3, each ellipsised at 2 lines |
-| Line height | 1.4 |
-| Transition (FR25) | 180 ms cross-fade + 8 px upward slide |
-| **Confirmed state** (FR51) | 3 px left border, `#4C9AFF` |
-| **Degraded state** (FR51) | 3 px left border, `#F5A623`, plus a `~` glyph before the headline |
-| Health strip (FR35) | 11 px, bottom-right, `#8A96A3`; **`ok` + empty content renders "nothing matched" in italic grey — never a blank panel** |
-| Capture indicator (FR7) | 8 px dot, top-**left**, `#4CD07D` while any stream is open; hollow ring while `WIPED`/`PAUSED` (devices held, nothing captured) |
-| Egress indicator (FR20) | Top-right, **two separate 8 px dots** so the paths are distinguishable per T8.5: left = cloud STT (`#F5A623`), right = LLM (`#F5A623`). One shared dot would collapse the `Egress` enum's `cloud_stt`/`llm`/`both` distinction |
-| Tracker checklist (FR12) | Docked below the bullets, 13 px, max 5 visible rows with scroll; `#8A96A3` unmarked, `#4CD07D` + check glyph when marked. Never displaces the snippet — the panel grows downward |
-| Capture-exclusion failure (FR14a) | Full-width `#D0454C` bar across the panel top, persistent |
+| Panel surface | `--ov-surface rgba(32,34,38,.70)` — neutral gray, **translucent**, user opacity 20–100% scales this (FR24) |
+| Backdrop | `blur(10px) saturate(120%)` — the call reads through as texture, not detail |
+| Panel border | `1px solid rgba(255,255,255,.14)` |
+| Corner radius | `20px` (PRISM) |
+| Padding | `--space-4 16px` (PRISM ladder) |
+| Headline | `--font-primary` (IBM Plex Mono) 600, `#F2F4F6` |
+| Bullets | `--font-secondary` (IBM Plex Sans) 400, `#D6D9DE`, max 3 |
+| Muted / no-match | `#A8ADB5` |
+| Size range (FR23) | default **420 × 220**, min **320 × 120**, max **900 × 600** |
+| Transition (FR25) | 180 ms cross-fade + 8 px rise |
+| **Confirmed** (FR51) | 3px left rail, `--blue-500 #2D7DF6` |
+| **Degraded** (FR51) | 3px left rail, `--amber-500 #FFC93D` **+ a `~` glyph before the headline** |
+| No-match | Italic muted line stating nothing matched — **never a blank panel** (FR35/OB-1) |
+| Capture indicator (FR7) | Accent-gradient chip, 34×16, `10px` radius. Flat `#3A3145` when not capturing |
+| Egress indicator (FR20) | 8px `--amber-500` dot, separate per path (cloud STT / LLM) |
+| Capture-exclusion failure (FR14a) | Full-width `--red-500` bar across the panel top, persistent |
+| Tracker checklist (FR12) | `--font-secondary` 13px, docked below the bullets, **max 5 rows then scroll**. Unmarked muted, marked `--green-500` + check glyph. **Never displaces the snippet** — the panel grows downward within the FR23 max height, and the checklist scrolls rather than pushing bullets out |
 
-The confirmed/degraded distinction is carried by **border colour plus a glyph**, not colour alone —
-FR51 requires distinguishability at a glance, and roughly 8% of men have a colour vision deficiency
-that makes blue/amber unreliable as the only channel.
+**Why neutral rather than PRISM's plum.** A saturated surface tints whatever is behind it, and
+behind this one is a live video call. A neutral translucent gray disappears against any feed;
+plum does not. This is the user's explicit instruction and it also happens to be the better call
+for a panel that must be glanceable over arbitrary content.
 
-Text scaling (FR23): font sizes scale linearly with panel height between the min and max, clamped
-to the stated values at the extremes, so text never clips and never shrinks below 11 px.
+### Brightness and opacity are user controls (FR65, FR24 — D-U7a)
+
+Not a fixed choice between dark and light. The user sets **brightness** and **opacity**
+independently, and the panel's ink and rails follow.
+
+**The range is two bands, not one continuous ramp**, because the middle of a neutral gray ramp is
+unreadable in both directions:
+
+| Panel | Light ink | Dark ink |
+|---|---|---|
+| `#141619` (darkest) | 16.4:1 | 1.0:1 |
+| `#2A2D31` (dark band edge) | 12.6:1 | 1.5:1 |
+| **`#6E7278` (mid-gray)** | **4.39:1** | **3.71:1** |
+| `#C2C5CA` (light band edge) | 1.6:1 | 10.4:1 |
+| `#E8EAEE` (lightest) | 1.1:1 | 14.9:1 |
+
+At mid-gray **neither** ink clears 4.5:1 for 15px body text. A naive slider therefore lets the user
+park the overlay on a setting where it cannot be read — on the one surface whose entire purpose is
+being read in under a second. So:
+
+| Band | Brightness | Panel | Ink | Confirmed rail | Degraded rail |
+|---|---|---|---|---|---|
+| **Dark** (default) | 0–25 | `#141619` → `#2A2D31` | `#F2F4F6` | `--blue-500 #2D7DF6` (≥3.5:1) | `--amber-500 #FFC93D` (≥9:1) |
+| **Light** | 75–100 | `#C2C5CA` → `#E8EAEE` | `#15171B` | `#0B4EA8` (≥4.5:1) | `#8A5A00` (≥3.4:1) |
+
+- The control **steps over 26–74**; it does not stop there. The user experiences one slider that
+  crosses a threshold, not two settings.
+- **Rails swap variants at the crossover.** PRISM's `--amber-500` is near-invisible on a light
+  ground (1.0:1 at the light band edge), so the light band uses the darkened form PRISM §9 now
+  documents. Without this the degraded state would silently vanish exactly when a user picked a
+  light panel.
+- Default brightness is **12** (dark band) — FR11's "dark semi-transparent panel, high-contrast
+  light text", which is what the user originally specified.
+
+**Opacity (FR24) interacts, and the guarantee is honest about where it stops.** The panel is
+translucent, so below full opacity it composites with whatever the call is showing and the effective
+contrast depends on content nobody controls. The measured figures above hold at **opacity ≥ 70%**.
+Below that the overlay renders ink with a 1px contrasting halo — the same technique broadcast
+captions use — and the contrast figures become best-effort rather than guaranteed. The settings
+control says so rather than implying a promise the physics does not support.
+
+### Text scaling (FR23) — restored
+
+An earlier draft of this section carried a scaling rule; the PRISM rewrite replaced the section
+wholesale and lost it, leaving only a width range. FR23 requires text to *scale* rather than clip
+across the supported range, so without this a fixed-font implementation would satisfy the tokens
+and still fail the requirement.
+
+Headline and bullet sizes interpolate **linearly with panel height** between the bounds above, and
+clamp outside them:
+
+| Panel height | Headline | Bullets |
+|---|---|---|
+| 120 (min) | 14px | 13px |
+| 220 (default) | 16px | 15px |
+| 600 (max) | 22px | 18px |
+
+```
+size(h) = clamp(size_min, size_min + (size_max - size_min) * (h - 120) / (600 - 120), size_max)
+```
+
+Three rules make this checkable:
+
+1. **Nothing renders below 13px** — PRISM's caption size is the floor, and below it the overlay
+   stops being glanceable, which is the only thing it exists to be.
+2. **Width drives wrapping, height drives size.** They are independent so FR23's resize and FR24's
+   opacity stay orthogonal, as the requirements state.
+3. **Ellipsis is the last resort, not the first.** A bullet clips only after scaling has hit the
+   floor: 2 lines maximum, then ellipsis. Clipping before the floor would be the failure FR23
+   names.
+
+**Why the headline is mono and the bullets are not.** PRISM makes Plex Mono the primary voice for
+display and labels, and Plex Sans the body face. That split lands well here for an independent
+reason: monospace is measurably slower to scan, and the bullets are the text read mid-sentence
+while holding eye contact. Identity goes on the headline; legibility wins on the body.
+
+**Colour is never the only channel.** The degraded state carries both an amber rail and a `~`
+glyph, because roughly 8% of men have a colour vision deficiency that makes a blue/amber
+distinction unreliable — and FR51 requires distinguishability at a glance.
+
+**The gradient chip appears exactly once per surface**, per PRISM §9. In the overlay it is the live
+capture indicator, which is precisely PRISM's stated use for it: a preview of current state.
+
+### Secondary text does not use PRISM's `--ink-600` (OQ-6)
+
+PRISM §1 says to "re-verify `--ink-600` at 80% against `--plum-900` if used for secondary text."
+Verified, and it fails:
+
+| Combination | Contrast | WCAG AA (4.5:1 for 15px body) |
+|---|---|---|
+| `--ink-600` @80% over `--plum-900` (composites to `#504B59`) | **1.96:1** | fails |
+| `--ink-600` solid over `--plum-950` | **2.51:1** | fails |
+| Proposed `--ink-400 #9C94A8` over `--plum-900` | 5.69:1 | passes |
+| Proposed `--ink-400 #9C94A8` over `--plum-950` | 6.06:1 | passes |
+
+Dark is PRISM's default mode, so this is the *default* rendering of all secondary copy, not an edge
+case. This app uses `--ink-400 #9C94A8` for dark-mode secondary text and does not wait on the
+system-level decision — an inaccessible default is not something to ship while a token question is
+open. **This applies to the app chrome (§9c); the overlay has its own neutral scale per D-U7, and
+every value in it clears AA against the panel surface.**
+
+### The one PRISM rule the overlay cannot follow
+
+PRISM §6 requires labels to sit **outside and below** the dark card, on the canvas. The overlay has
+no canvas — it floats over someone else's video call, so "outside the card" means drawing text onto
+the call itself. **The overlay is therefore the single documented exemption: its label lives inside
+the panel.** Every other surface (editor, preflight, settings) follows the rule as written.
+
+### Conflicts resolved
+
+| Property | Earlier §9b | PRISM | Resolution |
+|---|---|---|---|
+| Panel surface | `#0B0F14` | `--plum-950` | PRISM — warmer over video, and it is the brand anchor |
+| Radius | 12px | 20px / 10px | PRISM |
+| Typeface | unspecified | Mono + Sans | PRISM, split by role as above |
+| Confirmed | `#4C9AFF` | `--blue-500` | PRISM — semantic tokens are explicitly not to be remapped |
+| Degraded | `#F5A623` | *no warning token* | **Gap. See OQ-5.** |
+
+---
+
+## 9c. App Chrome (editor, preflight, settings)
+
+Follows PRISM without exemption: `--surface` cards at `20px` radius and `--space-6` padding, labels
+outside and below the card, buttons per PRISM §8 (`--purple-500` for accent, never the gradient),
+the 4px spacing ladder throughout.
+
+Three-state preflight rows use PRISM's semantic dots directly — `--green-500` ready,
+`--amber-500` warn, `--red-500` blocking — which maps exactly onto the block-vs-warn
+classification in §6.
+
+Secondary and descriptive copy uses `--ink-400 #9C94A8`, not `--ink-600`, for the contrast reason
+in §9b.
+
+**Mockup:** the published UI mockup renders every surface in this section and §9b.
 
 ---
 
@@ -857,6 +998,7 @@ to the stated values at the extremes, so text never clips and never shrinks belo
 | **`silero-vad`** (via `faster-whisper`'s bundled copy) | Silence detection for FR47 finalisation | Medium. The entire utterance model depends on it, and it was previously unlisted. Its 700 ms boundary behaviour is tuned in M2. |
 | `websockets` / `httpx` | Cloud STT backends | Low. Confined to backend modules. |
 | `PyInstaller` | Packaging | Medium. One-file extraction is an expected non-content write; the privacy allowlist accounts for it. |
+| **IBM Plex Mono + Sans** (bundled font files, not a package) | PRISM typography (§9b, §9c) | Low. Open Font License, so bundling is permitted. Must ship **inside** the executable — the app cannot fetch fonts at runtime, and a silent fallback to Consolas would quietly undo the identity. A Latin subset of the weights used adds roughly 1–2 MB. |
 
 **Platform APIs via `ctypes`:** `SetWindowDisplayAffinity` (FR14), WER dump suppression (FR16),
 `IMMNotificationClient` for device-change notifications (FR39a/b).
