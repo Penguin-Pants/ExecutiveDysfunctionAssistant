@@ -113,10 +113,26 @@ only: PRISM keeps the typography, radius, spacing ladder and semantic rails ther
 chrome entirely. The reasoning holds independently of preference — a saturated panel tints the video
 behind it, a neutral translucent one does not.
 
-**D-U7a is open and needs one word from the user:** "light gray" could mean dark-neutral with light
+**D-U7a resolved — brightness is a user control (FR65), not a fixed pick.** Along with opacity
+(FR24), both are sliders. The measurement that shaped it: **a continuous brightness ramp has an
+unreadable middle.** At mid-gray, light text is 4.39:1 and dark text 3.71:1 — neither reaches the
+4.5:1 body copy needs. A free slider would let the user park the overlay on a setting where it
+cannot be read. So the control spans two bands (dark 0–25, light 75–100) and steps over the dead
+zone, with ink and both state rails swapping variants at the crossover.
+
+A second finding fell out of it: **PRISM's `--amber-500` is 1.0:1 on a light panel.** Adding a
+brightness control means every accent has to work at both ends of the range, not just the end it
+was designed for — so the degraded rail darkens to `#8A5A00` in the light band. Without that, the
+degraded state would have silently vanished at exactly the setting someone picks for a bright room.
+
+**OQ-5 and OQ-6 both resolved — PRISM absorbed both changes.** `--amber-500` is now its fifth
+palette dot; `--ink-400 #9C94A8` is now the dark-mode secondary text token. `docs/prism-design-system.md`
+carries a changelog recording why.
+
+~~**D-U7a is open and needs one word from the user:** "light gray" could mean dark-neutral with light
 text (which is what FR11, the user's own wording, describes) or a genuinely light panel with dark
 text. Both are rendered side by side in the mockup. A is the working default; the loser gets deleted
-rather than kept as a setting.
+rather than kept as a setting.~~
 
 **New build consequence:** IBM Plex Mono and Sans must ship inside the executable. OFL-licensed so
 bundling is permitted; a Latin subset adds roughly 1–2 MB, and a silent fallback to Consolas would

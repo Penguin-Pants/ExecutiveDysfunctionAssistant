@@ -31,6 +31,7 @@ TS§ = [test strategy](./04-test-strategy.md) section
 | FR20 | PRD | D§7 | T5.7, T8.5 | Unit per egress path |
 | FR21 | PRD | D§9 | T8.4 | Fault injection |
 | FR22–27 | PRD | **D§9b** | T5.4, T5.5, T5.6 | Unit |
+| FR65 | D-U7a | **D§9b** | T5.4 | **Sweep the full control; every reachable setting clears 4.5:1** |
 | FR28 | Review A1 | D§4 | T3.2 | **`taskkill` × 10**, TS§3 |
 | FR29 | Review A1 | D§4 | T3.2, **T3.9** | Unit + restore UI |
 | FR30 | Review A1 | D§4 | T3.4 | Round-trip |

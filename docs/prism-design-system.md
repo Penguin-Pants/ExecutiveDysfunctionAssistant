@@ -1,6 +1,15 @@
 # PRISM — Jarrod Davis Personal Brand Design System BETA
 Derived from the "Color Picker" card reference.
 
+> **Changelog**
+> - **Added `--amber-500`** as a fifth palette dot for warning / degraded states. The four original
+>   dots covered danger, info, success and highlight, with nothing for "proceed, but know this".
+>   Drawn from the existing `--grad-3` stop so it is already in the family.
+> - **Added `--ink-400`** and remapped dark-mode secondary text to it. `--ink-600` at 80% over
+>   `--plum-900` composites to `#504B59` — 1.96:1, against the 4.5:1 that 15px body copy needs. Since
+>   dark is the default mode, that was the default rendering of all secondary copy. §1 already
+>   flagged this combination for re-verification; it did not pass.
+
 ## 1. Dark Mode
 
 Dark mode is the default and primary mode for PRISM. The system was built around a dark plum surface (`--plum-950`) as the identity anchor, light canvas is the supporting surface, not the reverse. Any implementation (site, deck, app) should default to dark mode on load.
@@ -22,17 +31,17 @@ Dark mode inverts which token plays "canvas" vs "card," it does not invert ink o
 | `--surface` (card bg) | `--plum-950` (`#1E1526`) | `--plum-900` (`#251A30`) |
 | `--surface-border` | `--plum-800` (`#33253F`) | `--plum-800` (`#33253F`), unchanged |
 | `--text-primary` | `--ink-900` (`#16151A`) | `--ink-inverse` (`#F5F3F7`) |
-| `--text-secondary` | `--ink-600` (`#5B5763`) | `--ink-600` at `80%` opacity |
+| `--text-secondary` | `--ink-600` (`#5B5763`) | `--ink-400` (`#9C94A8`) |
 | Accent gradient | unchanged | unchanged |
 | Palette dots | unchanged | unchanged |
 
-Do not remap `--red-500`, `--blue-500`, `--green-500`, `--purple-500`, or the accent gradient stops between modes. Semantic and signature colors stay fixed so a screenshot of either mode is still recognizably PRISM.
+Do not remap `--red-500`, `--blue-500`, `--green-500`, `--purple-500`, `--amber-500`, or the accent gradient stops between modes. Semantic and signature colors stay fixed so a screenshot of either mode is still recognizably PRISM.
 
 ### Rules
 
 - Labels: in dark mode, labels sit on the dark canvas using `--ink-inverse` (not `--ink-900`, which would fail contrast).
 - Shadow: dark-mode cards use a lighter, lower-opacity shadow or a subtle `1px` border instead of the light-mode drop shadow (`rgba` shadows barely register against a dark canvas). Suggested: `0 1px 0 rgba(255,255,255,0.04)` inset highlight + `1px solid var(--plum-800)` border.
-- Contrast check: `--ink-inverse` on `--plum-950` and `--ink-inverse` on `--plum-900` both exceed WCAG AA. Re-verify `--ink-600 at 80%` against `--plum-900` if used for secondary text.
+- Contrast check: `--ink-inverse` on `--plum-950` and `--ink-inverse` on `--plum-900` both exceed WCAG AA. **Dark-mode secondary text uses `--ink-400` (`#9C94A8`), not `--ink-600`** — 5.69:1 on `--plum-900` and 6.06:1 on `--plum-950`, both clearing AA. `--ink-600` at 80% measured 1.96:1 and must not be used for body copy on dark surfaces.
 - Toggling: if a manual light/dark toggle exists, persist the user's choice; don't re-default to dark on every load if they've chosen light.
 
 ## 2. Concept
@@ -56,7 +65,8 @@ The reference card is a dark plum tile with a warm-to-cool gradient swatch and f
 | Token | Hex | Use |
 |---|---|---|
 | `--ink-900` | `#16151A` | Primary text, headings, labels |
-| `--ink-600` | `#5B5763` | Secondary text |
+| `--ink-600` | `#5B5763` | Secondary text **on light surfaces only** |
+| `--ink-400` | `#9C94A8` | Secondary text **on dark surfaces** (AA-safe; see §1) |
 | `--ink-inverse` | `#F5F3F7` | Text on dark surfaces |
 
 ### Accent gradient (the swatch)
@@ -76,6 +86,7 @@ The reference card is a dark plum tile with a warm-to-cool gradient swatch and f
 | `--blue-500` | `#2D7DF6` | Info / primary action |
 | `--green-500` | `#34C77B` | Success |
 | `--purple-500` | `#A855F7` | Highlight / new |
+| `--amber-500` | `#FFC93D` | Warning / degraded — "proceed, but know this" |
 
 ## 4. Typography
 
@@ -179,4 +190,6 @@ Shared shape across all variants: `--font-primary` (IBM Plex Mono), 14px, weight
 - Dots are always flat, no gradients on dots, gradients are reserved for the "current value" chip.
 - Buttons never use the accent gradient, not even hero/CTA buttons. Use solid `--purple-500` for accent buttons instead.
 - Labels are always bold and sit on canvas, never inside the plum card.
-- Minimum contrast: `--ink-900` on `--canvas-100` and `--ink-inverse` on `--plum-950` both exceed WCAG AA.
+- Minimum contrast: `--ink-900` on `--canvas-100` and `--ink-inverse` on `--plum-950` both exceed WCAG AA. Dark-mode secondary copy uses `--ink-400`, never `--ink-600`.
+- `--amber-500` is a flat semantic dot like the others: no gradients on it, and it never substitutes for the accent gradient.
+- **`--amber-500` on light surfaces:** at `#FFC93D` it is near-invisible on `--canvas-100` (1.3:1). On light grounds use a darkened form (`#8A5A00`) for any indicator that must be seen.

@@ -846,16 +846,46 @@ behind this one is a live video call. A neutral translucent gray disappears agai
 plum does not. This is the user's explicit instruction and it also happens to be the better call
 for a panel that must be glanceable over arbitrary content.
 
-**OPEN — D-U7a: how light is "light gray"?** Two candidates are rendered in the mockup:
+### Brightness and opacity are user controls (FR65, FR24 — D-U7a)
 
-| | Surface | Text | Trade-off |
-|---|---|---|---|
-| **A (assumed default)** | `rgba(32,34,38,.70)` | light | Matches FR11's "dark semi-transparent panel, high-contrast light text". Recedes against bright feeds. |
-| **B** | `rgba(228,230,234,.80)` | dark | Reads like paper beside the monitor. Costs legibility over bright frames, and a pale panel pulls the eye more — which works against glancing. |
+Not a fixed choice between dark and light. The user sets **brightness** and **opacity**
+independently, and the panel's ink and rails follow.
 
-A is implemented as the default because it is what FR11 (the user's own wording) describes. **Awaiting
-the user's pick**; whichever loses gets deleted rather than kept as an option, since two overlay
-skins is a settings surface nobody asked for.
+**The range is two bands, not one continuous ramp**, because the middle of a neutral gray ramp is
+unreadable in both directions:
+
+| Panel | Light ink | Dark ink |
+|---|---|---|
+| `#141619` (darkest) | 16.4:1 | 1.0:1 |
+| `#2A2D31` (dark band edge) | 12.6:1 | 1.5:1 |
+| **`#6E7278` (mid-gray)** | **4.39:1** | **3.71:1** |
+| `#C2C5CA` (light band edge) | 1.6:1 | 10.4:1 |
+| `#E8EAEE` (lightest) | 1.1:1 | 14.9:1 |
+
+At mid-gray **neither** ink clears 4.5:1 for 15px body text. A naive slider therefore lets the user
+park the overlay on a setting where it cannot be read — on the one surface whose entire purpose is
+being read in under a second. So:
+
+| Band | Brightness | Panel | Ink | Confirmed rail | Degraded rail |
+|---|---|---|---|---|---|
+| **Dark** (default) | 0–25 | `#141619` → `#2A2D31` | `#F2F4F6` | `--blue-500 #2D7DF6` (≥3.5:1) | `--amber-500 #FFC93D` (≥9:1) |
+| **Light** | 75–100 | `#C2C5CA` → `#E8EAEE` | `#15171B` | `#0B4EA8` (≥4.5:1) | `#8A5A00` (≥3.4:1) |
+
+- The control **steps over 26–74**; it does not stop there. The user experiences one slider that
+  crosses a threshold, not two settings.
+- **Rails swap variants at the crossover.** PRISM's `--amber-500` is near-invisible on a light
+  ground (1.0:1 at the light band edge), so the light band uses the darkened form PRISM §9 now
+  documents. Without this the degraded state would silently vanish exactly when a user picked a
+  light panel.
+- Default brightness is **12** (dark band) — FR11's "dark semi-transparent panel, high-contrast
+  light text", which is what the user originally specified.
+
+**Opacity (FR24) interacts, and the guarantee is honest about where it stops.** The panel is
+translucent, so below full opacity it composites with whatever the call is showing and the effective
+contrast depends on content nobody controls. The measured figures above hold at **opacity ≥ 70%**.
+Below that the overlay renders ink with a 1px contrasting halo — the same technique broadcast
+captions use — and the contrast figures become best-effort rather than guaranteed. The settings
+control says so rather than implying a promise the physics does not support.
 
 ### Text scaling (FR23) — restored
 
