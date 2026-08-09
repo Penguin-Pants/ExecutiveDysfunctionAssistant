@@ -75,7 +75,18 @@ warn_redundant_casts = true
 module = "interview_prep_recall.stt.interface"
 strict = true
 
-# Optional/Windows-only third-party packages without stubs.
+# Optional third-party packages CI does not install, or that ship no stubs.
+# `websockets` lives in the [cloud] extra and is imported lazily inside the connector
+# factories, so the backends type-check and run without it — but mypy still resolves the
+# import and fails the run. Same category as the Windows-only packages below.
 [[tool.mypy.overrides]]
-module = ["keyring", "keyring.*", "soxr", "pyaudiowpatch", "faster_whisper", "sentence_transformers"]
+module = [
+    "keyring",
+    "keyring.*",
+    "soxr",
+    "pyaudiowpatch",
+    "faster_whisper",
+    "sentence_transformers",
+    "websockets",
+]
 ignore_missing_imports = true

@@ -152,6 +152,15 @@ indicator too early. Split into `_switching` (guard) and `_switch_complete` (an 
 predated the ignore rules, so git kept tracking them. 24 files untracked. The `.pyc` files were
 also stale 3.11 bytecode for a 3.12 target.
 
+**CI went red on mypy, and the cause is worth a standing note.** `websockets` is in the `[cloud]`
+extra; CI installs `[dev]`. I had `pip install`ed it into the dev container to build against, so
+mypy resolved it locally and failed on the runner. **The dev container is not the CI environment,
+and a green local run is not evidence about CI whenever a new dependency is involved.** The fix
+puts `websockets` in the same `ignore_missing_imports` override as the Windows-only packages —
+it is imported lazily inside the connector factories, so nothing needs it to type-check or to run
+the suite. Verified by uninstalling it and re-running both mypy and pytest, rather than by
+re-running with it still present.
+
 **Not verified, and cannot be here — AS-8.** Both protocols are written from documentation and
 have never met a live endpoint. Message names (`CloseStream`, `start`/`end`), envelope shapes and
 timestamp semantics are all assumptions. Everything *around* the wire is tested; the wire is not.
