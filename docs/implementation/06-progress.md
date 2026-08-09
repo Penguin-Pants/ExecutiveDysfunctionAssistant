@@ -61,6 +61,42 @@ conservative choice, just a broken one.
 
 ## Log
 
+### PRISM design system adopted · 2026-08-09
+
+The user supplied **PRISM**, their personal-brand design system, and asked for a UI mockup and for
+it to be folded into the plan. Both done.
+
+- **`docs/prism-design-system.md`** — the system itself, committed so the plan cites a versioned copy.
+- **Design §9b rewritten** from invented per-component tokens to PRISM's. **§9c added** for the app
+  chrome (editor, preflight, settings).
+- **Mockup published** covering all four overlay states, import review, preflight, and session
+  controls, plus the conflict resolutions.
+- **D-17/D-18/D-19** recorded; **OQ-5** opened.
+
+**Conflicts resolved rather than merged** — PRISM wins everywhere it disagreed with §9b: panel
+surface `#0B0F14 → --plum-950`, radius `12px → 20px`, confirmed state `#4C9AFF → --blue-500`,
+typography now specified as Plex Mono display / Plex Sans body.
+
+**Two findings worth carrying forward**
+
+> **D-18 — the overlay cannot follow PRISM's core layout rule.** §6 requires labels outside and
+> below the card, on the canvas. The overlay floats over someone else's video call and has no
+> canvas, so "outside the card" would mean drawing onto the call. It is the single documented
+> exemption; every other surface obeys the rule.
+
+> **OQ-5 — PRISM has no warning token, and this product needs one.** Its four semantic dots are
+> danger, info, success, highlight. A degraded match and data-leaving-the-device are none of those:
+> both mean "proceed, but know this", where red overstates and purple already means "new". Proposed
+> `--amber-500: #FFC93D`, taken from the existing `--grad-3` stop so it stays in-family. **The
+> mockup and §9b already assume it** — needs the user's approval or the documented `--purple-500`
+> fallback.
+
+**New build consequence:** IBM Plex Mono and Sans must ship inside the executable. OFL-licensed so
+bundling is permitted; a Latin subset adds roughly 1–2 MB, and a silent fallback to Consolas would
+quietly undo the identity.
+
+---
+
 ### M4 — Matching pipeline (+ T2.3) · T4.1–T4.6 complete · 2026-08-09
 
 **Delivered** — 72 new tests, 158 total. `ruff`, `ruff format`, `mypy` clean.

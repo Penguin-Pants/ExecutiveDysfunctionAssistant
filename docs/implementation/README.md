@@ -14,7 +14,8 @@ restating them — so a change in one place propagates by reference, not by copy
 | 06 | [**Progress**](./06-progress.md) | **What is built, what is verified, what is blocked, and the next action.** Start here when resuming after a gap. |
 
 **Upstream sources:** [product plan](../interviewpreprecallprd.md) ·
-[safety review](../build-plan-safety-review.md)
+[safety review](../build-plan-safety-review.md) ·
+[PRISM design system](../prism-design-system.md) — governs every UI surface (D-17)
 
 ## ID scheme
 

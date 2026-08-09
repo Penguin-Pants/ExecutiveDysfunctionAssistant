@@ -58,6 +58,9 @@ product described in the PRD.
 | **D-10** | **Matching runs only on the interviewer stream.** The mic stream feeds the progress tracker exclusively. | The product surfaces prep in response to what the interviewer asks (D-U2's stated intent). Matching on the user's own speech would surface notes about what they just said. | Low. |
 | **D-11** | **One stage-2 LLM call in flight at a time, plus one pending slot; latest-issued wins.** A superseded in-flight request is **not cancelled** — Python cannot cancel a blocking call on a pool thread — it runs to its 5 s timeout and its response is discarded by the sequence gate. See design §5a for the dispatch policy. *(Corrected: this previously said superseded requests "are cancelled", which the design explicitly says is impossible and must never be relied on.)* | FR32 as amended. Also bounds cost and rate-limit exposure (RC-5). | Low. |
 | **D-12** | **`keyring` (Windows Credential Manager backend) for API keys**; no custom credential code. | FR19. | Low. |
+| **D-17** | **PRISM is the design system for every UI surface.** It supersedes the tokens design §9b previously invented for the overlay. | A real design system beats per-component tokens, and this is the user's own brand system. | Low now; high once the overlay is built. |
+| **D-18** | **The overlay is exempt from PRISM §6's "labels sit outside the card" rule.** Every other surface obeys it. | The overlay floats over a video call and has no canvas; "outside the card" would mean drawing onto the call. | Low. |
+| **D-19** | **Headline in Plex Mono, bullets in Plex Sans.** | PRISM assigns mono to display and sans to body, and the split serves legibility: monospace scans more slowly, and the bullets are what gets read mid-sentence. | Low. |
 
 ## Assumptions — unverified, and what breaks if wrong
 
@@ -79,3 +82,4 @@ product described in the PRD.
 | **OQ-2** | Is τ_visible (snippet auto-clear, 25 s default) right for real interview pacing? | M5, then rehearsal in G2. |
 | **OQ-3** | Should the progress tracker require headphones outright rather than warning? | M7, after D-8's echo detection is measured. |
 | **OQ-4** | Local matching model (Ollama) as a fully-offline alternative to stage 2. PRD §10b. | Post-v1, informed by OQ-1. |
+| **OQ-5** | **PRISM has no warning token.** Its four semantic dots are danger, info, success, highlight. Two states here are none of those: a degraded match, and data leaving the device. Both mean "proceed, but know this" — red overstates them and purple already means "new". Proposal: add `--amber-500: #FFC93D`, taken from the existing `--grad-3` stop so it stays in-family. Implemented in the mockup and in §9b pending approval; the fallback is `--purple-500` for both, at the cost that blue and purple are harder to separate at a glance than blue and amber, on the one surface where glanceability is the point. | **Needs the user.** Blocks nothing, but the mockup already assumes the proposal. |

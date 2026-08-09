@@ -812,33 +812,74 @@ reports both, and the gate is the 900 ms figure.
 
 ---
 
-## 9b. Overlay Visual Specification *(closes review-B "missing #6")*
+## 9b. Overlay Visual Specification — PRISM
 
-M5 was seven tasks with no visual specification; T5.3's "distinct styling tokens" had no referent.
+**The overlay is styled by [PRISM](../prism-design-system.md), the personal-brand design system.**
+An earlier version of this section invented its own tokens for one component; a real design system
+supersedes that. Values below are PRISM's, not restatements — where the two disagreed, PRISM won
+and the change is recorded in the table.
 
-| Token | Value |
+### Tokens
+
+| Element | Value |
 |---|---|
-| Panel background | `#0B0F14` at user opacity (FR24, 20–100%, default 85%) |
-| Corner radius / padding | 12 px / 16 px |
-| Default size | 520 × 220 px, min 320 × 120, max 900 × 600 (FR23 supported range) |
-| Headline | 18 px semibold, `#F2F5F8`, single line, ellipsised |
-| Bullets | 16 px regular, `#C7D1DB`, max 3, each ellipsised at 2 lines |
-| Line height | 1.4 |
-| Transition (FR25) | 180 ms cross-fade + 8 px upward slide |
-| **Confirmed state** (FR51) | 3 px left border, `#4C9AFF` |
-| **Degraded state** (FR51) | 3 px left border, `#F5A623`, plus a `~` glyph before the headline |
-| Health strip (FR35) | 11 px, bottom-right, `#8A96A3`; **`ok` + empty content renders "nothing matched" in italic grey — never a blank panel** |
-| Capture indicator (FR7) | 8 px dot, top-**left**, `#4CD07D` while any stream is open; hollow ring while `WIPED`/`PAUSED` (devices held, nothing captured) |
-| Egress indicator (FR20) | Top-right, **two separate 8 px dots** so the paths are distinguishable per T8.5: left = cloud STT (`#F5A623`), right = LLM (`#F5A623`). One shared dot would collapse the `Egress` enum's `cloud_stt`/`llm`/`both` distinction |
-| Tracker checklist (FR12) | Docked below the bullets, 13 px, max 5 visible rows with scroll; `#8A96A3` unmarked, `#4CD07D` + check glyph when marked. Never displaces the snippet — the panel grows downward |
-| Capture-exclusion failure (FR14a) | Full-width `#D0454C` bar across the panel top, persistent |
+| Panel surface | `--plum-950 #1E1526` at user opacity (FR24, 20–100%, default 92%) |
+| Panel border | `1px solid --plum-800 #33253F` |
+| Corner radius | `20px` panel, `10px` inner chips and buttons |
+| Padding | `--space-4 16px` (the overlay is compact; app cards use `--space-6 24px`) |
+| Headline | `--font-primary` (IBM Plex Mono) 16px/600, `--ink-inverse #F5F3F7` |
+| Bullets | `--font-secondary` (IBM Plex Sans) 15px/400, `#DCD6E2`, max 3 |
+| Default size | 420 × auto, min 320 wide, max 900 (FR23 range) |
+| Transition (FR25) | 180 ms cross-fade + 8 px rise |
+| **Confirmed** (FR51) | 3px left rail, `--blue-500 #2D7DF6` |
+| **Degraded** (FR51) | 3px left rail, `--amber-500 #FFC93D` **+ a `~` glyph before the headline** |
+| No-match | Italic `#7C7488` line stating nothing matched — **never a blank panel** (FR35/OB-1) |
+| Capture indicator (FR7) | The PRISM **accent-gradient chip**, 34×16, `10px` radius. Flat `#3A3145` when not capturing |
+| Egress indicator (FR20) | 8px `--amber-500` dot, separate per path (cloud STT / LLM) |
+| Capture-exclusion failure (FR14a) | Full-width `--red-500 #F0473E` bar across the panel top, persistent |
 
-The confirmed/degraded distinction is carried by **border colour plus a glyph**, not colour alone —
-FR51 requires distinguishability at a glance, and roughly 8% of men have a colour vision deficiency
-that makes blue/amber unreliable as the only channel.
+**Why the headline is mono and the bullets are not.** PRISM makes Plex Mono the primary voice for
+display and labels, and Plex Sans the body face. That split lands well here for an independent
+reason: monospace is measurably slower to scan, and the bullets are the text read mid-sentence
+while holding eye contact. Identity goes on the headline; legibility wins on the body.
 
-Text scaling (FR23): font sizes scale linearly with panel height between the min and max, clamped
-to the stated values at the extremes, so text never clips and never shrinks below 11 px.
+**Colour is never the only channel.** The degraded state carries both an amber rail and a `~`
+glyph, because roughly 8% of men have a colour vision deficiency that makes a blue/amber
+distinction unreliable — and FR51 requires distinguishability at a glance.
+
+**The gradient chip appears exactly once per surface**, per PRISM §9. In the overlay it is the live
+capture indicator, which is precisely PRISM's stated use for it: a preview of current state.
+
+### The one PRISM rule the overlay cannot follow
+
+PRISM §6 requires labels to sit **outside and below** the dark card, on the canvas. The overlay has
+no canvas — it floats over someone else's video call, so "outside the card" means drawing text onto
+the call itself. **The overlay is therefore the single documented exemption: its label lives inside
+the panel.** Every other surface (editor, preflight, settings) follows the rule as written.
+
+### Conflicts resolved
+
+| Property | Earlier §9b | PRISM | Resolution |
+|---|---|---|---|
+| Panel surface | `#0B0F14` | `--plum-950` | PRISM — warmer over video, and it is the brand anchor |
+| Radius | 12px | 20px / 10px | PRISM |
+| Typeface | unspecified | Mono + Sans | PRISM, split by role as above |
+| Confirmed | `#4C9AFF` | `--blue-500` | PRISM — semantic tokens are explicitly not to be remapped |
+| Degraded | `#F5A623` | *no warning token* | **Gap. See OQ-5.** |
+
+---
+
+## 9c. App Chrome (editor, preflight, settings)
+
+Follows PRISM without exemption: `--surface` cards at `20px` radius and `--space-6` padding, labels
+outside and below the card, buttons per PRISM §8 (`--purple-500` for accent, never the gradient),
+the 4px spacing ladder throughout.
+
+Three-state preflight rows use PRISM's semantic dots directly — `--green-500` ready,
+`--amber-500` warn, `--red-500` blocking — which maps exactly onto the block-vs-warn
+classification in §6.
+
+**Mockup:** the published UI mockup renders every surface in this section and §9b.
 
 ---
 
@@ -857,6 +898,7 @@ to the stated values at the extremes, so text never clips and never shrinks belo
 | **`silero-vad`** (via `faster-whisper`'s bundled copy) | Silence detection for FR47 finalisation | Medium. The entire utterance model depends on it, and it was previously unlisted. Its 700 ms boundary behaviour is tuned in M2. |
 | `websockets` / `httpx` | Cloud STT backends | Low. Confined to backend modules. |
 | `PyInstaller` | Packaging | Medium. One-file extraction is an expected non-content write; the privacy allowlist accounts for it. |
+| **IBM Plex Mono + Sans** (bundled font files, not a package) | PRISM typography (§9b, §9c) | Low. Open Font License, so bundling is permitted. Must ship **inside** the executable — the app cannot fetch fonts at runtime, and a silent fallback to Consolas would quietly undo the identity. A Latin subset of the weights used adds roughly 1–2 MB. |
 
 **Platform APIs via `ctypes`:** `SetWindowDisplayAffinity` (FR14), WER dump suppression (FR16),
 `IMMNotificationClient` for device-change notifications (FR39a/b).
