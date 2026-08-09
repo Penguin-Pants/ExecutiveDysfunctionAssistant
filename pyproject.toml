@@ -1,0 +1,81 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "interview-prep-recall"
+version = "0.1.0"
+description = "Always-on-top interview prep recall overlay for Windows"
+requires-python = ">=3.11"
+
+# Runtime dependencies are declared but deliberately NOT all installed in the
+# Linux dev container. See docs/implementation/06-progress.md "Environment split".
+dependencies = [
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+# Windows-only runtime. Cannot be installed or exercised on the Linux dev box.
+windows = [
+    "PySide6>=6.6",
+    "pyaudiowpatch>=0.2.12",
+    "faster-whisper>=1.0",
+    "soxr>=0.3.7",
+    "keyring>=24",
+]
+# Heavy ML stack. Pulled in for real embedding runs; unit tests use a fake
+# embedder against the same Protocol, so CI does not need torch.
+embeddings = [
+    "sentence-transformers>=2.6",
+]
+cloud = [
+    "anthropic>=0.39",
+    "websockets>=12",
+    "httpx>=0.27",
+]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=5",
+    "mypy>=1.10",
+    "ruff>=0.5",
+]
+
+[tool.setuptools.packages.find]
+include = ["interview_prep_recall*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "device: requires real audio hardware; runs only on the Windows target machine",
+    "windows: requires Windows APIs; runs only on the Windows target machine",
+    "slow: soak and long-running tests; nightly only",
+]
+filterwarnings = ["error::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# Specs are prose; formatting their fenced code blocks creates diff churn.
+extend-exclude = ["docs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.mypy]
+# The shipping target is 3.12 (design §10), so type-check for 3.12 even though the
+# Linux dev container runs 3.11. Pinning this to 3.11 made mypy fail to parse numpy's
+# own stubs on CI, which use `type` statements: analysing for an older version than
+# the dependencies are written for is not a safer choice, just a broken one.
+python_version = "3.12"
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+# The STT interface is the one module T0.2 requires to pass --strict.
+[[tool.mypy.overrides]]
+module = "interview_prep_recall.stt.interface"
+strict = true
+
+# Optional/Windows-only third-party packages without stubs.
+[[tool.mypy.overrides]]
+module = ["keyring", "keyring.*", "soxr", "pyaudiowpatch", "faster_whisper", "sentence_transformers"]
+ignore_missing_imports = true

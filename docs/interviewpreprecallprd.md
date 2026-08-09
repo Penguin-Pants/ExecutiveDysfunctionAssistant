@@ -211,27 +211,26 @@ Two stages, run on every transcribed utterance:
 2. **LLM selection (only if stage 1 returns candidates).** Send the utterance plus the candidate note snippets (with IDs) to `claude-haiku-4-5-20251001`, with one tool defined and `tool_choice` forced to it:
 
 ```python
-tools = [{
-    "name": "select_note",
-    "description": "Select the single best-matching prepared note for the live question, or none.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "note_id": {
-                "type": "string",
-                "enum": [*current_note_ids, "none"]
-            }
+tools = [
+    {
+        "name": "select_note",
+        "description": "Select the single best-matching prepared note for the live question, or none.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"note_id": {"type": "string", "enum": [*current_note_ids, "none"]}},
+            "required": ["note_id"],
         },
-        "required": ["note_id"]
     }
-}]
+]
 
 response = client.messages.create(
     model="claude-haiku-4-5-20251001",
     max_tokens=50,
     tools=tools,
     tool_choice={"type": "tool", "name": "select_note"},
-    messages=[{"role": "user", "content": f"Live question: {utterance}\n\nCandidates:\n{candidate_notes}"}]
+    messages=[
+        {"role": "user", "content": f"Live question: {utterance}\n\nCandidates:\n{candidate_notes}"}
+    ],
 )
 ```
 
