@@ -61,8 +61,8 @@ TS§ = [test strategy](./04-test-strategy.md) section
 | FR53 | D-10 | D§1 | T4.6 ✅ | Unit |
 | FR54 | New (FR13 gap) | D§5 | T5.5 | Unit |
 | FR55 | Review A22 | D§1 | T5.4 | Off-screen recovery |
-| FR56 | US-G2 | D§1 | T7.1 | **Loopback-must-not-mark** |
-| FR57 | D-8 | D§1 | T7.2, T7.3 | Paired echo fixtures |
+| FR56 | US-G2 | D§1 | T7.1 | **Loopback-must-not-mark**, with a positive control |
+| FR57 | D-8 | D§1, **D§5a** | T7.2 (blocked), **T7.3 done** | Both directions of arrival; interviewer span proven still to match |
 | FR58 | Review A2 | **D§6** | T6.3 | SHA before/after |
 | FR59 | Review A2 | D§6 | T6.3 | Late-response test |
 | FR60 | New (DI-3) | D§4 | T3.7, T3.8 | Unit |
