@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -29,6 +30,21 @@ from interview_prep_recall.notes.model import SCHEMA_VERSION, NoteSet
 
 BACKUP_DEPTH = 5
 """FR29."""
+
+_UNSAFE_STEM = re.compile(r"[^A-Za-z0-9 ._-]")
+
+
+def safe_stem(name: str, fallback: str) -> str:
+    """Filename stem from a user-chosen note-set name.
+
+    Names are free text and routinely contain path characters — "Product / Program
+    Manager" is an ordinary role title, not an attack. Unsanitised it becomes a
+    subdirectory that does not exist, and an imported name containing `../` escapes
+    the destination the user picked. The original name is preserved inside the
+    exported content; only the filename is normalised.
+    """
+    cleaned = _UNSAFE_STEM.sub("_", name).strip(" .")
+    return cleaned or fallback
 
 
 class NotesStoreError(Exception):
@@ -213,8 +229,9 @@ class NotesStore:
         """
         dest_dir = Path(dest_dir)
         dest_dir.mkdir(parents=True, exist_ok=True)
-        json_path = dest_dir / f"{note_set.name or note_set.id}.json"
-        md_path = dest_dir / f"{note_set.name or note_set.id}.md"
+        stem = safe_stem(note_set.name, fallback=note_set.id)
+        json_path = dest_dir / f"{stem}.json"
+        md_path = dest_dir / f"{stem}.md"
 
         json_path.write_text(
             json.dumps(note_set.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8"

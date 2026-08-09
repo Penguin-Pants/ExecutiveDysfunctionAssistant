@@ -27,6 +27,27 @@ def new_id() -> str:
     return str(uuid.uuid4())
 
 
+class InvalidIdError(ValueError):
+    """An id that is not a UUID reached a boundary that builds a filesystem path.
+
+    Note-set ids are interpolated into filenames by both the store and the embedding
+    index, so an id like `../../escaped` from an imported bundle would place a later
+    save outside the application root. Ids arrive from JSON that the user may have
+    edited or received from someone else, so "we always generate them" is not a
+    guarantee — it is an assumption about a file we do not control.
+    """
+
+
+def validate_id(value: str, *, label: str = "id") -> str:
+    try:
+        parsed = uuid.UUID(value)
+    except (ValueError, AttributeError, TypeError) as exc:
+        raise InvalidIdError(f"{label} {value!r} is not a valid UUID") from exc
+    if str(parsed) != value:
+        raise InvalidIdError(f"{label} {value!r} is not in canonical UUID form")
+    return value
+
+
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
@@ -46,6 +67,12 @@ class Note:
     id: str = field(default_factory=new_id)
     created_at: str = field(default_factory=_now)
     updated_at: str = field(default_factory=_now)
+
+    def __post_init__(self) -> None:
+        # Validated at construction, not only on load: FR41 makes UUID4 a property of
+        # every note id, and a note built in code can reach a NoteSet, an index key,
+        # or a stage-2 enum just as easily as one parsed from a file.
+        validate_id(self.id, label="note id")
 
     @property
     def embed_text(self) -> str:
@@ -93,7 +120,7 @@ class Note:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Note:
         return cls(
-            id=data["id"],
+            id=validate_id(data["id"], label="note id"),
             headline=data["headline"],
             body=data.get("body", ""),
             bullets=list(data.get("bullets", [])),
@@ -113,6 +140,9 @@ class NoteSet:
     updated_at: str = field(default_factory=_now)
 
     def __post_init__(self) -> None:
+        validate_id(self.id, label="note set id")
+        for note in self.notes:
+            validate_id(note.id, label="note id")
         self._assert_unique_ids()
 
     def _assert_unique_ids(self) -> None:
@@ -168,11 +198,19 @@ class NoteSet:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> NoteSet:
-        raw = data.get("notes", [])
+        # A missing or mistyped `notes` key is corruption, not an empty note set.
+        # Defaulting to [] would make load_or_recover report success, skip the
+        # backups entirely, and show the user every note deleted — the precise
+        # opposite of FR44's never-start-empty guarantee.
+        if "notes" not in data:
+            raise ValueError("note set has no 'notes' key")
+        raw = data["notes"]
+        if not isinstance(raw, list):
+            raise ValueError(f"'notes' must be a list, got {type(raw).__name__}")
         # order_index is authoritative on load; array order is a serialisation detail.
         ordered = sorted(raw, key=lambda d: d.get("order_index", 0))
         return cls(
-            id=data["id"],
+            id=validate_id(data["id"], label="note set id"),
             name=data["name"],
             created_at=data.get("created_at", _now()),
             updated_at=data.get("updated_at", _now()),

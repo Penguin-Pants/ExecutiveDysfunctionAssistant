@@ -303,3 +303,89 @@ def test_store_writes_only_under_its_root(app_data: Path) -> None:
     written = {p.resolve() for p in app_data.rglob("*") if p.is_file()}
     assert written
     assert all(str(p).startswith(str(app_data.resolve()) + os.sep) for p in written)
+
+
+# ---- path-safety and corruption boundaries (from PR review) ----
+
+
+def test_non_uuid_noteset_id_is_rejected() -> None:
+    """A JSON-controlled id reaches `path_for`, so it must be validated first."""
+    from interview_prep_recall.notes.model import InvalidIdError
+
+    with pytest.raises(InvalidIdError):
+        NoteSet(name="evil", id="../../escaped")
+
+
+def test_traversal_id_in_an_imported_bundle_cannot_escape(app_data: Path, tmp_path: Path) -> None:
+    """The concrete attack: import a crafted bundle, then save writes outside the root."""
+    from interview_prep_recall.notes.store import NoteSetCorruptError
+
+    crafted = tmp_path / "crafted.json"
+    crafted.write_text(
+        json.dumps(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "id": "../../escaped",
+                "name": "evil",
+                "notes": [],
+            }
+        )
+    )
+    store = NotesStore(app_data)
+    with pytest.raises(NoteSetCorruptError):
+        store.import_bundle(crafted)
+
+
+def test_non_uuid_note_id_is_rejected() -> None:
+    from interview_prep_recall.notes.model import InvalidIdError
+
+    with pytest.raises(InvalidIdError):
+        Note(headline="q?", id="not-a-uuid")
+
+
+def test_missing_notes_key_is_corruption_not_an_empty_set(app_data: Path) -> None:
+    """Otherwise the UI shows every note deleted and recovery is never offered."""
+    store = NotesStore(app_data)
+    ns = make_set()
+    store.save(ns)
+    store.save(ns)
+
+    path = store.path_for(ns.id)
+    raw = json.loads(path.read_text())
+    del raw["notes"]
+    path.write_text(json.dumps(raw))
+
+    with pytest.raises(NoteSetCorruptError):
+        store.load(ns.id)
+
+    recovered, was_recovered = store.load_or_recover(ns.id)
+    assert was_recovered and len(recovered.notes) == 3
+
+
+def test_malformed_notes_value_is_corruption(app_data: Path) -> None:
+    store = NotesStore(app_data)
+    ns = make_set()
+    store.save(ns)
+    path = store.path_for(ns.id)
+    raw = json.loads(path.read_text())
+    raw["notes"] = {"not": "a list"}
+    path.write_text(json.dumps(raw))
+    with pytest.raises(NoteSetCorruptError):
+        store.load(ns.id)
+
+
+@pytest.mark.parametrize(
+    "name", ["Product / Program Manager", "../escape", "Acme: Senior PM", "  ..  "]
+)
+def test_export_filenames_are_sanitised(app_data: Path, tmp_path: Path, name: str) -> None:
+    """Names are free text; a role title with a slash is ordinary, not an attack."""
+    store = NotesStore(app_data)
+    ns = make_set(name=name)
+    dest = tmp_path / "export"
+    json_path, md_path = store.export_bundle(ns, dest)
+
+    for path in (json_path, md_path):
+        assert path.parent.resolve() == dest.resolve()
+        assert path.exists()
+    # The original name survives inside the content, only the filename is normalised.
+    assert store.import_bundle(json_path).name == name

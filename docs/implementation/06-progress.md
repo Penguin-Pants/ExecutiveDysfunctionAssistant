@@ -14,7 +14,7 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 |---|---|---|
 | **M0 — Scaffold** | ✅ Complete | 20 tests passing, lint + format + mypy clean |
 | **M1 — Audio capture spike** | ⛔ Blocked | Needs the Windows machine. **AS-2 gate.** |
-| **M2 — STT interface & local backend** | 🟡 Partly doable here | Interface + assembler + conformance suite can be written on Linux; `faster-whisper` and the AS-1 gate need Windows |
+| **M2 — STT interface & local backend** | 🟡 Started | **T2.1 interface written** (design §2 contract, `mypy --strict`). Assembler + conformance suite still to do here; `faster-whisper` and the AS-1 gate need Windows |
 | **M3 — Notes store & indexing** | 🟢 Logic complete | T3.1–T3.6 done. T3.7–T3.9 are Qt UI, deferred to Windows |
 | **M4 — Matching pipeline** | ⏭ Next | Buildable here except the T4.7 measurement, which needs real fixtures |
 | **M5–M9** | ⬜ Not started | Mostly Windows/UI |
@@ -55,9 +55,47 @@ conservative choice, just a broken one.
 
 ## Log
 
+### PR #3 review round · 2026-08-09
+
+CI's first Windows run went red, and the automated review found five issues. All valid.
+
+**CI failure — mypy version pin.** `python_version = "3.11"` matched the container; CI runs 3.12,
+where numpy 2.5's stubs use `type` statements a 3.11 parser cannot read, so mypy died parsing a
+dependency before checking any project code. Fixed to 3.12. The two settings mean opposite things
+and must not be "aligned": ruff's `target-version` is the floor that keeps source runnable in the
+container, mypy's `python_version` is the target that ships.
+
+**Review findings, all fixed**
+
+| Severity | Finding | Fix |
+|---|---|---|
+| P1 | **Path traversal via imported note-set id.** A JSON-controlled `id` reached `path_for()`, so a bundle with `"id": "../../escaped"` would make a later save write outside the app root. | `validate_id()` enforces canonical UUID at every construction and load boundary. Store surfaces it as `NoteSetCorruptError`. |
+| P1 | **Missing `notes` key read as an empty note set.** `data.get("notes", [])` meant a file that lost its notes array loaded "successfully" with zero notes — `recovered=False`, backups never consulted, UI showing every note deleted. The exact opposite of FR44. | Missing or mistyped `notes` is now corruption and routes to recovery. |
+| P1 | **Diagnostics value heuristic was insufficient.** Rejecting whitespace and long strings still accepts `"yes"`, `"No."`, or any single token, so `ring.record("stt", text=utterance)` leaked whenever the utterance was short. | Added `ALLOWED_FIELDS` — a **field-name** allowlist. The value heuristic remains as a second layer, but the name check is what holds the guarantee, because it fires regardless of what the value looks like. |
+| P2 | **`stt/interface.py` did not exist** although mypy's strict override named it, so CI passed without type-checking any STT contract. | Wrote it (T2.1). It is the D-2 "written first" module and was fully specified in design §2. |
+| P2 | **Export filename taken from the raw note-set name.** "Product / Program Manager" is an ordinary role title and became a non-existent subdirectory; an imported `../` name escaped the chosen destination. | `safe_stem()` sanitises the filename; the original name is preserved inside the content. |
+
+**Decision recorded**
+
+> **D-16 — Content guards must reject field *names*, not just values.** The ring's original design
+> validated only what was passed. No value-shaped rule can separate a short transcript token from a
+> structural identifier, so the guarantee was unenforceable at exactly the point it mattered. The
+> allowlist inverts it: an unregistered field name fails at the call site whatever the value is.
+>
+> Same shape as D-13 two commits earlier — that one was credentials passing the value check, this
+> one is short content passing it. Both were the value heuristic being asked to do a job it cannot
+> do. **Seventh instance of this project's characteristic defect.**
+
+**Note on tests.** Adding the field allowlist made two existing tests pass for the *wrong reason* —
+they used unregistered field names, so they raised on the name check rather than the length/type
+rule they claimed to test. Both were rewritten to use registered fields. A test that passes for the
+wrong reason is the same failure mode in miniature.
+
+---
+
 ### M3 — Notes store & indexing · logic complete · 2026-08-09
 
-**Delivered** — 51 new tests, 71 total. `ruff`, `ruff format`, `mypy` clean.
+**Delivered** — 51 new tests (89 total after the PR #3 review round). `ruff`, `ruff format`, `mypy` clean.
 
 | Task | What exists | Notable coverage |
 |---|---|---|

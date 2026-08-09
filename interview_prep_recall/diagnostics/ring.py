@@ -3,12 +3,19 @@
 Records *structural* events only — timestamps, component states, latencies, error
 codes, match/no-match decisions. Never transcript text and never note content.
 
-The no-content guarantee is enforced structurally rather than by convention: field
-values must be scalars, and string values must be short and free of whitespace. Any
-transcript utterance or note body contains spaces and is rejected at the call site,
-so a well-meaning `ring.record("match", question=utterance.text)` raises instead of
-silently leaking. That is the difference between a rule and a guarantee — the safety
-review's recurring finding was tests that confirm a claim rather than the property.
+The no-content guarantee is enforced structurally rather than by convention, at two
+levels:
+
+1. **Field names must be on an allowlist** (`ALLOWED_FIELDS`). This is what actually
+   holds the line: `ring.record("match", question=utterance.text)` raises because
+   `question` is not a registered field, whatever the value happens to look like.
+2. **Values must be scalars**, and strings must be short, whitespace-free, and free of
+   any registered secret.
+
+Level 2 alone was the original design and it was not sufficient — a value heuristic
+accepts short content such as "yes" or a single-token name, so an accidental leak
+would pass whenever the utterance happened to be brief. Rejecting the field name
+catches it at the call site regardless of the value.
 
 The buffer is never written to disk automatically (FR16). `export()` returns a
 structure the *user* may choose to save (FR36).
@@ -38,6 +45,58 @@ character-class check, so the guard has to be told what the secrets are.
 """
 
 _ALLOWED_SCALARS = (bool, int, float)
+
+ALLOWED_FIELDS: set[str] = {
+    # identity and routing
+    "stream",
+    "backend",
+    "state",
+    "note_id",
+    "noteset_id",
+    "session",
+    "seq",
+    "nonce",
+    # measurements
+    "latency_ms",
+    "duration_ms",
+    "lag_s",
+    "depth",
+    "count",
+    "dropped",
+    "candidates",
+    "similarity",
+    "threshold",
+    "tokens_in",
+    "tokens_out",
+    "generation",
+    "bytes",
+    # outcomes
+    "status",
+    "code",
+    "reason",
+    "degraded",
+    "recovered",
+    "ok",
+    "retry",
+    "cause",
+}
+"""Field names a diagnostic event may carry.
+
+An allowlist rather than a value heuristic, because the heuristic cannot work: a
+character-class check that rejects prose still accepts "yes", "No." or a single-token
+name, so `ring.record("stt", text=utterance)` would leak whenever the utterance
+happened to be short. Rejecting the *field name* catches that at the call site
+regardless of the value, which is the only version of this guarantee that holds.
+
+Extend deliberately via `register_field`, not by adding a value that happens to pass.
+"""
+
+
+def register_field(name: str) -> None:
+    """Permit a new structural field. Deliberately explicit — see ALLOWED_FIELDS."""
+    if not _SAFE_STR.match(name):
+        raise DiagnosticContentError(f"field name {name!r} is not identifier-shaped")
+    ALLOWED_FIELDS.add(name)
 
 
 class DiagnosticContentError(ValueError):
@@ -128,6 +187,12 @@ class DiagnosticRing:
             secrets = self._secrets
         _validate("event", event, secrets)
         for key, value in fields.items():
+            if key not in ALLOWED_FIELDS:
+                raise DiagnosticContentError(
+                    f"field {key!r} is not a registered structural field. Diagnostics "
+                    "record structure, not content — if this is genuinely structural, "
+                    "add it via register_field()."
+                )
             _validate(key, value, secrets)
 
         entry = DiagnosticEvent(

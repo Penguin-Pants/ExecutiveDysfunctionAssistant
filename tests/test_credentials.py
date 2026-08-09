@@ -54,15 +54,15 @@ def test_storing_a_key_arms_the_diagnostic_guard() -> None:
     guarantee: the store tells the ring what to refuse.
     """
     ring = DiagnosticRing()
-    ring.record("llm_call", token=SECRET)  # accepted: guard not yet armed
+    ring.record("llm_call", code=SECRET)  # accepted: guard not yet armed
 
     store = CredentialStore(backend=InMemoryCredentialBackend(), ring=ring)
     store.set("anthropic", SECRET)
 
     with pytest.raises(DiagnosticContentError, match="registered secret"):
-        ring.record("llm_call", token=SECRET)
+        ring.record("llm_call", code=SECRET)
     with pytest.raises(DiagnosticContentError, match="registered secret"):
-        ring.record("llm_call", header=f"Bearer{SECRET}")
+        ring.record("llm_call", reason=f"Bearer{SECRET}")
 
 
 def test_guard_survives_purge() -> None:
@@ -70,7 +70,7 @@ def test_guard_survives_purge() -> None:
     CredentialStore(backend=InMemoryCredentialBackend(), ring=ring).set("anthropic", SECRET)
     ring.clear()
     with pytest.raises(DiagnosticContentError):
-        ring.record("llm_call", token=SECRET)
+        ring.record("llm_call", code=SECRET)
 
 
 def test_repr_never_leaks_the_secret(credentials: CredentialStore) -> None:
@@ -93,7 +93,7 @@ def test_secret_absent_from_app_data_and_diagnostics(
     CredentialStore(backend=InMemoryCredentialBackend(), ring=ring).set("anthropic", SECRET)
     ring.record("llm_call", status=200, latency_ms=512.0)
     with pytest.raises(DiagnosticContentError):
-        ring.record("llm_call", api_key=SECRET)
+        ring.record("llm_call", code=SECRET)
 
     for path in app_data.rglob("*"):
         if path.is_file():

@@ -20,9 +20,9 @@ NOTE_BODY = "In Q3 the design review deadlocked and I wrote a trade-off document
 def test_capacity_is_bounded_and_evicts_oldest() -> None:
     ring = DiagnosticRing(capacity=10)
     for i in range(25):
-        ring.record("tick", n=i)
+        ring.record("tick", count=i)
     assert len(ring) == 10
-    assert [e.fields["n"] for e in ring.snapshot()] == list(range(15, 25))
+    assert [e.fields["count"] for e in ring.snapshot()] == list(range(15, 25))
 
 
 def test_default_capacity_matches_task_spec() -> None:
@@ -38,16 +38,53 @@ def test_rejects_transcript_and_note_text(ring: DiagnosticRing, text: str) -> No
     assert len(ring) == 0
 
 
-def test_rejects_long_strings(ring: DiagnosticRing) -> None:
+def test_rejects_unregistered_field_names(ring: DiagnosticRing) -> None:
+    """The allowlist, not the value heuristic, is what holds the guarantee."""
+    with pytest.raises(DiagnosticContentError, match="not a registered structural field"):
+        ring.record("stt", text="yes")
+    assert len(ring) == 0
+
+
+@pytest.mark.parametrize("short_content", ["yes", "No.", "Anthropic"])
+def test_short_content_cannot_sneak_in_via_an_unregistered_field(
+    ring: DiagnosticRing, short_content: str
+) -> None:
+    """A value heuristic alone accepts these; the field allowlist does not.
+
+    This is the hole the first implementation had: transcript content that happens to
+    be brief and unbroken passes every character-class check there is.
+    """
     with pytest.raises(DiagnosticContentError):
-        ring.record("x", detail="a" * 65)
+        ring.record("stt", utterance=short_content)
+
+
+def test_register_field_extends_the_allowlist(ring: DiagnosticRing) -> None:
+    from interview_prep_recall.diagnostics.ring import register_field
+
+    with pytest.raises(DiagnosticContentError):
+        ring.record("custom", queue_name="q_audio_mic")
+    register_field("queue_name")
+    ring.record("custom", queue_name="q_audio_mic")
+    assert len(ring) == 1
+
+
+def test_rejects_long_strings(ring: DiagnosticRing) -> None:
+    """Uses a registered field so the length rule is what is under test."""
+    with pytest.raises(DiagnosticContentError, match="max"):
+        ring.record("x", reason="a" * 65)
 
 
 def test_rejects_non_scalar_values(ring: DiagnosticRing) -> None:
-    with pytest.raises(DiagnosticContentError):
-        ring.record("x", payload={"text": TRANSCRIPT})
-    with pytest.raises(DiagnosticContentError):
-        ring.record("x", payload=[TRANSCRIPT])
+    """Registered field again — otherwise this would pass on the name check alone."""
+    with pytest.raises(DiagnosticContentError, match="only bool/int/float/str/None"):
+        ring.record("x", code={"text": TRANSCRIPT})
+    with pytest.raises(DiagnosticContentError, match="only bool/int/float/str/None"):
+        ring.record("x", code=[TRANSCRIPT])
+
+
+def test_rejects_prose_in_a_registered_field(ring: DiagnosticRing) -> None:
+    with pytest.raises(DiagnosticContentError, match="whitespace"):
+        ring.record("x", reason="two words")
 
 
 def test_accepts_structural_fields(ring: DiagnosticRing) -> None:
@@ -87,7 +124,7 @@ def test_thread_safe_under_concurrent_writers() -> None:
 
     def worker(worker_id: int) -> None:
         for i in range(200):
-            ring.record("tick", worker=worker_id, n=i)
+            ring.record("tick", generation=worker_id, count=i)
 
     threads = [threading.Thread(target=worker, args=(w,)) for w in range(8)]
     for t in threads:
