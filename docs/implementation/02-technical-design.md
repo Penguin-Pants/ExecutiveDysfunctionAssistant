@@ -44,8 +44,8 @@ flowchart TB
     IDX --> S1
     IDX --> PT
 
-    SM -.echo detection.-> ECHO[Echo suppressor]
-    ECHO -.suppress.-> QI
+    QI -.compare text.-> ECHO[Echo suppressor<br/>drops echoed MIC spans]
+    ECHO -.suppress.-> PT
 
     SESS[Session Manager<br/>state machine + purge] --> capture
     SESS --> stt
@@ -459,7 +459,7 @@ change to this block invalidates T4.7's measurement and must be re-run.
 
 ```python
 # Owned exclusively by the matching worker thread. LLM pool threads never mutate it;
-# they post results back to the matching worker's inbox queue, which drains them here.
+# they post results onto `q_match_results` (bounded 4), which the matching worker drains here.
 self._session_nonce: uuid.UUID    # regenerated on every session start AND every purge
 self._latest_issued: int          # incremented at dispatch
 
@@ -512,43 +512,66 @@ mid-call was undefined, and the three plausible policies produce visibly differe
 
 ```
 dispatch(u):
-    if in_flight is None:  issue(u)                       # goes now
-    else:                  pending = u                    # REPLACES any older pending
+    seq = next_seq()          # ADVANCES _latest_issued here, at QUEUE time, not at issue time
+    if in_flight is None:  issue(u, seq)
+    else:                  pending = (u, seq)   # replaces any older pending
+
 on_complete(result):
-    gate(result)                                          # nonce + latest-issued (§5)
-    if pending: issue(pending); pending = None
+    gate(result)              # nonce + seq == _latest_issued (§5)
+    in_flight = None
+    if pending: issue(*pending); pending = None
 ```
+
+**`_latest_issued` must advance when an utterance is *queued*, not when its request is issued.**
+An earlier version of this block advanced it at issue time, which left a hole: with A in flight and
+B sitting in `pending`, `_latest_issued` still held A's sequence, so A passed the gate and rendered
+a note for the previous question before B was even dispatched — exactly the stale render the
+newest-wins policy exists to prevent. Advancing at queue time makes A fail the gate the moment B
+arrives.
 
 - The in-flight call is **never cancelled** — it cannot be. It runs to completion or its 5 s
   timeout, and the sequence gate discards it if superseded.
 - The pending slot holds **at most one** utterance, always the newest. An utterance displaced from
   the pending slot is dropped without a call, which is what bounds cost (FR40) and rate-limit
   exposure.
-- `_latest_issued` advances at **issue** time, so a superseded in-flight result fails the gate. This
-  is why the stale result cannot render — the failure mode a plain "debounce the newcomer" reading
-  would have produced.
+- A superseded in-flight result fails the gate because its sequence is already behind. This is why
+  the stale result cannot render — the failure mode a plain "debounce the newcomer" reading would
+  have produced.
 - Worst-case added latency for the newest question is one in-flight call, capped at the 5 s timeout.
-- **The matching worker's inbox queue is bounded at 4** and drop-oldest, consistent with §8's rule
-  that every inter-stage queue is bounded. It was previously the one unbounded queue.
+- **`q_match_results` — the LLM caller's completion channel back to the matching worker — is bounded
+  at 4**, drop-oldest, consistent with §8's rule that every inter-stage queue is bounded. It was
+  previously unnamed and unbounded. **It is a different queue from `q_utterance_interviewer`
+  (depth 8)**: that one carries inbound utterances from the assembler, this one carries outbound
+  LLM completions back. Two queues feed the matching worker, and they are not the same thing.
 
 ### Runtime echo suppression (item 5)
 
 Preflight measures audio cross-correlation once (τ_echo 0.70) and caches it. **Runtime suppression
-is text-domain**, and runs in the matching worker before embedding:
+is text-domain, and it drops the echoed *mic* span — not the interviewer utterance.**
 
-- An interviewer utterance is suppressed if a **user** utterance overlaps it within ±1.5 s and their
-  normalised token overlap (Jaccard on lowercased word sets) ≥ **τ_echo_text = 0.80**.
-- Rationale for text rather than continuous audio correlation: the audio streams are already
-  consumed by two independent STT backends with different internal buffering, so aligning their PCM
-  at runtime would mean retaining and time-warping both — expensive, and it re-introduces the
-  retained-audio problem FR16 exists to avoid. Comparing transcripts is cheap and needs nothing
-  extra held.
-- **Ordering:** the mic assembler emits before the matching worker dequeues, because mic utterances
-  are not gated on an LLM round trip. If the user utterance has not arrived within 300 ms, the
-  interviewer utterance proceeds unsuppressed — a missed suppression is a wrong-note risk, not a
-  correctness failure, and blocking on it would add latency to every question.
-- Lives in `audio/echo.py` (preflight, audio-domain) and `matching/pipeline.py` (runtime,
-  text-domain). Both are named because they are genuinely different mechanisms.
+- A **user (mic) utterance** is discarded before it reaches the tracker if an **interviewer**
+  utterance overlaps it within ±1.5 s and their normalised token overlap (Jaccard on lowercased
+  word sets) ≥ **τ_echo_text = 0.80**.
+- The interviewer utterance always proceeds to matching, untouched.
+
+**Direction matters, and an earlier version of this section had it backwards.** When the user is on
+speakers, the duplicated audio *is* the interviewer's real question bleeding into the mic. Suppressing
+the interviewer span would throw away the genuine question — the thing the whole product exists to
+match — while the echoed mic copy still reached the tracker and marked a talking point the user never
+said. That is precisely the attribution failure FR56 and FR57 exist to prevent, implemented backwards.
+The mic copy is the artefact; it is the one to drop.
+
+- Rationale for text rather than continuous audio correlation: the two streams are consumed by
+  independent STT backends with different internal buffering, so aligning their PCM at runtime would
+  mean retaining and time-warping both — expensive, and it re-introduces the retained-audio problem
+  FR16 exists to avoid. Comparing transcripts is cheap and holds nothing extra.
+- **Ordering:** interviewer utterances are never delayed waiting for a mic comparison. The tracker
+  holds each mic utterance for up to 300 ms to see whether a matching interviewer utterance arrives;
+  if none does, it marks normally. Delay lands on the tracker, which is not latency-critical, rather
+  than on matching, which is.
+- Lives in `audio/echo.py` (preflight, audio-domain) and `tracker/progress.py` (runtime, text-domain,
+  mic-side). Both are named because they are genuinely different mechanisms operating on different
+  streams.
 
 ### Chunk → `headline` / `body` mapping (item 6)
 

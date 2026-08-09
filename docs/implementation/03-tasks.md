@@ -128,7 +128,7 @@ own §12 open risk and it gets answered here, not assumed.
 | Task | Requirements | Acceptance criteria |
 |---|---|---|
 | **T6.1** Session state machine | D-7 | All transitions in design §6 exercised; illegal transitions raise. |
-| **T6.2** Purge | FR15 | **Audio** buffers are `bytearray` and post-purge bytes are zero. **Transcript text is `str`** — assert no application-held reference survives (weakref sweep). Do **not** assert transcript memory is zeroed; that assertion is unsatisfiable and would pass vacuously. |
+| **T6.2** Purge | FR15 | **Audio** buffers are `bytearray` and post-purge bytes are zero. **Transcript text is `str`** — verify via the object-identity sweep in FR15 (`gc.get_referrers` over recorded `id()`s, plus weakrefs on the `TranscriptEvent`/`Utterance` containers, which unlike `str` support them). Do **not** assert transcript memory is zeroed; unsatisfiable, and it would pass vacuously. |
 | **T6.3** Panic clear scope + in-flight neutralisation | FR58, FR59, FR64 | Note files byte-identical before/after. **Socket cancelled** (asyncio); **LLM response discarded via nonce** after its 5 s timeout — not cancelled, because it cannot be. No post-purge render. Resume from `WIPED` completes in ≤1 s without preflight re-run. |
 | **T6.4** WER dump suppression + FR16 allowlist harness | FR16 | Process Monitor trace over a 45-min simulated session shows no writes outside the allowlist and no session content in any written file. |
 | **T6.5** Preflight readiness check | FR38 | Each precondition failed in turn produces the correct block-vs-warn classification. |
@@ -143,7 +143,7 @@ own §12 open risk and it gets answered here, not assumed.
 |---|---|---|
 | **T7.1** Mic-only tracking against `track_progress` notes | FR12, FR56 | Speaking a tracked point marks it within 5 s; the same phrase played through loopback only does **not** mark it. |
 | **T7.2** Echo detection in preflight | FR57 | Over speakers: warning fires. Over headphones: no warning. Measured cross-correlation logged to the ring buffer. |
-| **T7.3** Runtime echo suppression | FR57, D-8 | Spans detected as mic echo are excluded from the interviewer stream. |
+| **T7.3** Runtime echo suppression | FR57, FR56, D-8 | Play a question through speakers so it reaches both streams: assert the **interviewer utterance still matches normally**, and assert the echoed **mic** utterance does **not** mark a tracked point. Both assertions required — passing only the first would mean the echo is being dropped from the wrong stream. |
 | **T7.4** Checklist rendering in overlay | FR12 | Built to §9b's tracker tokens; visible without displacing the snippet; respects FR37's off switch. |
 
 ---

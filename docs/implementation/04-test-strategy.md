@@ -69,9 +69,12 @@ against the **packaged** build, not just the dev build — PyInstaller changes t
 
 - **Zeroing (audio only):** hold a `memoryview` of the audio buffer across purge; assert all bytes
   zero. Asserting "the variable is `None`" would pass while the memory still holds the audio.
-- **Transcript:** assert no application-held reference survives (weakref sweep). **Do not assert
-  zeroed memory** — transcript text is `str` (design §6), so that assertion is unsatisfiable and
-  would pass vacuously, which is the exact defect class this suite exists to catch.
+- **Transcript:** `str` does not support weak references (`weakref.ref("x")` raises `TypeError`), so
+  the sweep runs on identities and containers: record `id()` of each transcript string in a
+  debug-only registry, `gc.collect()` after purge, assert `gc.get_referrers()` yields no application
+  object for any recorded id, and assert no live `TranscriptEvent`/`Utterance` remains. **Do not
+  assert zeroed memory** — unsatisfiable for `str` (design §6), and it would pass vacuously, which
+  is the exact defect class this suite exists to catch.
 - **Scope:** SHA-256 every note file before and after panic clear; assert identical (FR58).
 - **In-flight:** a mock LLM client that completes 500 ms *after* purge; assert the response is
   discarded and nothing renders (FR59).
@@ -105,9 +108,18 @@ A test that only checks "it doesn't crash" would pass while latency drifts to mi
 
 ### FR57 — echo detection
 
-Uses the paired headphone/speaker fixtures. Speaker recording must warn; headphone recording must
-not. Also assert the measured cross-correlation is logged, so a threshold regression is diagnosable
-rather than just a flipped boolean.
+**Preflight:** paired headphone/speaker fixtures. Speaker recording must warn; headphone recording
+must not. Assert the measured cross-correlation is logged, so a threshold regression is diagnosable
+rather than a flipped boolean.
+
+**Runtime — both assertions are required, and the second is the one that catches a backwards
+implementation.** Play a question through speakers so it reaches both streams:
+
+1. The **interviewer** utterance still reaches matching and can produce a snippet.
+2. The echoed **mic** utterance does **not** mark a tracked point.
+
+A suppressor wired to the wrong stream passes a test that checks only "no duplicate processing" —
+it would silently discard the real question while the echo still marked the checklist.
 
 ### FR36 — diagnostics contain no content
 
