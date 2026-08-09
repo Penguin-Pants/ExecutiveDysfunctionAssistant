@@ -113,9 +113,9 @@ class SessionManager:
         monitor: HealthMonitor | None = None,
         on_state_change: Callable[[SessionState, SessionState], None] | None = None,
     ) -> None:
-        self.hooks = hooks or PurgeHooks()
-        self.ring = ring or DiagnosticRing()
-        self.monitor = monitor or HealthMonitor()
+        self.hooks = PurgeHooks() if hooks is None else hooks
+        self.ring = DiagnosticRing() if ring is None else ring
+        self.monitor = HealthMonitor() if monitor is None else monitor
         self.on_state_change = on_state_change
         self.switches = DegradationSwitches()
 

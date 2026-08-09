@@ -133,3 +133,40 @@ def test_thread_safe_under_concurrent_writers() -> None:
         t.join()
 
     assert len(ring) == 1600
+
+
+def test_an_empty_ring_is_falsy_and_must_never_be_defaulted_away() -> None:
+    """`DiagnosticRing.__len__` makes a fresh ring falsy, so the common idiom
+    `self.ring = ring or DiagnosticRing()` silently **discards** an injected one and
+    writes to an orphan nobody can read.
+
+    Found while building the cloud backends: a test passed a ring, asserted on its
+    contents, and got zero events while the component reported everything normally.
+    It was present in already-merged code — `MatchingPipeline`, `SessionManager` and
+    `preflight` all had it — so diagnostics from those components went to an object
+    with no reader whenever the caller supplied a ring.
+
+    This is the project's recurring defect in dependency-injection form: the
+    injection appears to succeed, and only an assertion on identity reveals it did not.
+    """
+    assert not DiagnosticRing(), "an empty ring is falsy — that is what makes the idiom unsafe"
+
+
+def test_every_component_keeps_the_ring_it_was_given() -> None:
+    """One assertion per injection site. Identity, not behaviour: a component writing
+    to the wrong ring behaves perfectly right up until someone reads the export."""
+    from interview_prep_recall.matching.pipeline import MatchingPipeline
+    from interview_prep_recall.session.manager import SessionManager
+    from interview_prep_recall.session.preflight import Preflight
+    from interview_prep_recall.stt.cloud import CloudSttBackend
+    from interview_prep_recall.stt.fallback import FallbackSttBackend
+
+    async def connector():  # type: ignore[no-untyped-def]
+        raise AssertionError("never connected in this test")
+
+    ring = DiagnosticRing()
+    assert SessionManager(ring=ring).ring is ring
+    assert Preflight({}, ring=ring).ring is ring
+    assert CloudSttBackend(connector, ring=ring).ring is ring
+    assert FallbackSttBackend(CloudSttBackend(connector), CloudSttBackend, ring=ring).ring is ring
+    assert MatchingPipeline(None, None, lambda result: None, ring=ring).ring is ring  # type: ignore[arg-type]

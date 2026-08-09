@@ -106,7 +106,7 @@ class Preflight:
             raise ValueError(f"probes for unknown checks: {sorted(unknown)}")
         self.probes = probes
         self.cloud_enabled = cloud_enabled
-        self.ring = ring or DiagnosticRing()
+        self.ring = DiagnosticRing() if ring is None else ring
 
     def applicable(self) -> list[Check]:
         return [c for c in CHECKS if self.cloud_enabled or not c.cloud_only]
