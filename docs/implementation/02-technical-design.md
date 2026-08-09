@@ -812,33 +812,50 @@ reports both, and the gate is the 900 ms figure.
 
 ---
 
-## 9b. Overlay Visual Specification — PRISM
+## 9b. Overlay Visual Specification
 
-**The overlay is styled by [PRISM](../prism-design-system.md), the personal-brand design system.**
-An earlier version of this section invented its own tokens for one component; a real design system
-supersedes that. Values below are PRISM's, not restatements — where the two disagreed, PRISM won
-and the change is recorded in the table.
+**The overlay does not use PRISM's palette (D-U7, user override).** It is a neutral translucent
+gray panel, not plum. PRISM governs every *other* surface (§9c) and still governs the overlay's
+typography, radius, spacing ladder, and semantic rail colours — so it reads as part of the same
+product without tinting the video behind it.
 
-### Tokens
+### Tokens — overlay only
 
 | Element | Value |
 |---|---|
-| Panel surface | `--plum-950 #1E1526` at user opacity (FR24, 20–100%, default 92%) |
-| Panel border | `1px solid --plum-800 #33253F` |
-| Corner radius | `20px` panel, `10px` inner chips and buttons |
-| Padding | `--space-4 16px` (the overlay is compact; app cards use `--space-6 24px`) |
-| Headline | `--font-primary` (IBM Plex Mono) 16px/600, `--ink-inverse #F5F3F7` |
-| Bullets | `--font-secondary` (IBM Plex Sans) 15px/400, `#DCD6E2`, max 3 |
+| Panel surface | `--ov-surface rgba(32,34,38,.70)` — neutral gray, **translucent**, user opacity 20–100% scales this (FR24) |
+| Backdrop | `blur(10px) saturate(120%)` — the call reads through as texture, not detail |
+| Panel border | `1px solid rgba(255,255,255,.14)` |
+| Corner radius | `20px` (PRISM) |
+| Padding | `--space-4 16px` (PRISM ladder) |
+| Headline | `--font-primary` (IBM Plex Mono) 600, `#F2F4F6` |
+| Bullets | `--font-secondary` (IBM Plex Sans) 400, `#D6D9DE`, max 3 |
+| Muted / no-match | `#A8ADB5` |
 | Size range (FR23) | default **420 × 220**, min **320 × 120**, max **900 × 600** |
 | Transition (FR25) | 180 ms cross-fade + 8 px rise |
 | **Confirmed** (FR51) | 3px left rail, `--blue-500 #2D7DF6` |
 | **Degraded** (FR51) | 3px left rail, `--amber-500 #FFC93D` **+ a `~` glyph before the headline** |
-| No-match | Italic `#7C7488` line stating nothing matched — **never a blank panel** (FR35/OB-1) |
-| Capture indicator (FR7) | The PRISM **accent-gradient chip**, 34×16, `10px` radius. Flat `#3A3145` when not capturing |
+| No-match | Italic muted line stating nothing matched — **never a blank panel** (FR35/OB-1) |
+| Capture indicator (FR7) | Accent-gradient chip, 34×16, `10px` radius. Flat `#3A3145` when not capturing |
 | Egress indicator (FR20) | 8px `--amber-500` dot, separate per path (cloud STT / LLM) |
-| Capture-exclusion failure (FR14a) | Full-width `--red-500 #F0473E` bar across the panel top, persistent |
-| Tracker checklist (FR12) | `--font-secondary` 13px, docked below the bullets, **max 5 rows then scroll**. Unmarked `--ink-400`, marked `--green-500` + check glyph. **Never displaces the snippet** — the panel grows downward within the FR23 max height, and the checklist scrolls rather than pushing bullets out |
-| Secondary text | `--ink-400 #9C94A8` — **not** PRISM's `--ink-600`, which fails WCAG AA on both dark surfaces. See OQ-6 |
+| Capture-exclusion failure (FR14a) | Full-width `--red-500` bar across the panel top, persistent |
+| Tracker checklist (FR12) | `--font-secondary` 13px, docked below the bullets, **max 5 rows then scroll**. Unmarked muted, marked `--green-500` + check glyph. **Never displaces the snippet** — the panel grows downward within the FR23 max height, and the checklist scrolls rather than pushing bullets out |
+
+**Why neutral rather than PRISM's plum.** A saturated surface tints whatever is behind it, and
+behind this one is a live video call. A neutral translucent gray disappears against any feed;
+plum does not. This is the user's explicit instruction and it also happens to be the better call
+for a panel that must be glanceable over arbitrary content.
+
+**OPEN — D-U7a: how light is "light gray"?** Two candidates are rendered in the mockup:
+
+| | Surface | Text | Trade-off |
+|---|---|---|---|
+| **A (assumed default)** | `rgba(32,34,38,.70)` | light | Matches FR11's "dark semi-transparent panel, high-contrast light text". Recedes against bright feeds. |
+| **B** | `rgba(228,230,234,.80)` | dark | Reads like paper beside the monitor. Costs legibility over bright frames, and a pale panel pulls the eye more — which works against glancing. |
+
+A is implemented as the default because it is what FR11 (the user's own wording) describes. **Awaiting
+the user's pick**; whichever loses gets deleted rather than kept as an option, since two overlay
+skins is a settings surface nobody asked for.
 
 ### Text scaling (FR23) — restored
 
@@ -897,7 +914,8 @@ Verified, and it fails:
 Dark is PRISM's default mode, so this is the *default* rendering of all secondary copy, not an edge
 case. This app uses `--ink-400 #9C94A8` for dark-mode secondary text and does not wait on the
 system-level decision — an inaccessible default is not something to ship while a token question is
-open.
+open. **This applies to the app chrome (§9c); the overlay has its own neutral scale per D-U7, and
+every value in it clears AA against the panel surface.**
 
 ### The one PRISM rule the overlay cannot follow
 

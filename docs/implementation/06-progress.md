@@ -107,6 +107,17 @@ Findings 1 and 2 share a cause worth remembering: **replacing a spec section who
 drops requirements that other documents depend on.** Neither was a wrong decision — both were
 content that simply vanished. A section rewrite needs a diff read, not just a quality read.
 
+**D-U7 — the overlay leaves PRISM's palette.** The user directed that the overlay be translucent
+neutral gray rather than purple, overriding PRISM. Scoped to the overlay's surface, border and text
+only: PRISM keeps the typography, radius, spacing ladder and semantic rails there, and keeps the app
+chrome entirely. The reasoning holds independently of preference — a saturated panel tints the video
+behind it, a neutral translucent one does not.
+
+**D-U7a is open and needs one word from the user:** "light gray" could mean dark-neutral with light
+text (which is what FR11, the user's own wording, describes) or a genuinely light panel with dark
+text. Both are rendered side by side in the mockup. A is the working default; the loser gets deleted
+rather than kept as a setting.
+
 **New build consequence:** IBM Plex Mono and Sans must ship inside the executable. OFL-licensed so
 bundling is permitted; a Latin subset adds roughly 1–2 MB, and a silent fallback to Consolas would
 quietly undo the identity.
