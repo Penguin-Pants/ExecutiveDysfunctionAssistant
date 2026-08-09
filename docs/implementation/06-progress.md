@@ -17,9 +17,12 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | **M2 — STT interface & local backend** | 🟡 Started | **T2.1 interface + T2.3 assembler done.** T2.2 (`faster-whisper`) and T2.4 (AS-1 gate) need Windows |
 | **M3 — Notes store & indexing** | 🟢 Logic complete | T3.1–T3.6 done. T3.7–T3.9 are Qt UI, deferred to Windows |
 | **M4 — Matching pipeline** | 🟢 T4.1–T4.6 complete | T4.7 **blocked**: needs the user's labelled fixtures |
-| **M5–M9** | ⬜ Not started | Mostly Windows/UI |
+| **M5 — Overlay UI** | ⛔ Blocked | Qt + `SetWindowDisplayAffinity`; needs Windows. Fully specified (design §9b) |
+| **M6 — Session lifecycle** | 🟢 Logic complete | T6.1–T6.3, T6.5 classification, T6.6 backpressure, T6.7 done. T6.4 and the OS trigger paths need Windows |
+| **M7–M9** | ⬜ Not started | Windows/UI |
 
-**Next action:** nothing further is buildable on Linux without new inputs. The remaining work
+**Next action:** nothing further is buildable on Linux without new inputs. M6's logic is done;
+what remains of it is device- and OS-bound. The remaining work
 splits cleanly:
 
 - **Needs the Windows machine:** M1 (AS-2 gate), T2.2 + T2.4 (AS-1 gate), M5 overlay, M6 session
@@ -60,6 +63,78 @@ conservative choice, just a broken one.
 ---
 
 ## Log
+
+### M6 — Session lifecycle · logic complete · 2026-08-09
+
+**M5 was skipped deliberately, not overlooked.** It is next on the critical path and entirely
+Qt + `SetWindowDisplayAffinity`, so it cannot be built or verified here. It is fully specified
+(design §9b/§9c) and waits on the Windows machine. M6's state machine and health model were named
+in this document as the buildable-ahead work, so that is what was built.
+
+**Delivered** — 59 new tests, 217 total. `ruff`, `ruff format`, `mypy` clean.
+
+| Task | What exists | Notable coverage |
+|---|---|---|
+| T6.1 | `session/manager.py` — seven states, explicit transition table, illegal transitions raise | Every state observed as actually traversed; each illegal transition from IDLE raises |
+| T6.2 | Purge with fixed hook ordering | `cancel_network` proven to run **first**; health reset; **note files SHA-identical across a panic clear** |
+| T6.3 | Panic clear → `WIPED`, resumable | Resume needs no preflight re-run; a machine event cannot undo it |
+| T6.5 | `session/preflight.py` — the block/warn classification with injected probes | Each of the 9 checks failed **in turn**; missing probe fails rather than passes; throwing probe is a failure not a crash |
+| T6.6 | `BoundedFrameQueue` (design §1a) + per-stream worker supervision | Depth flat across 10,000 pushes; drop-oldest verified; restart budget per stream **and per session** |
+| T6.7 | Degradation switches | Toggle mid-session with no restart, health follows |
+
+**Decisions made while implementing**
+
+> **D-20 — the restart budget resets when preflight passes.** `reset_supervision()` existed with
+> zero call sites, so the counter persisted for the process lifetime: a stream that crashed in one
+> session was held from its *first* crash in the next. FR61 is worded per session.
+
+> **D-21 — `BoundedFrameQueue.push` always copies into a `bytearray`.** Two independent reasons,
+> either sufficient: `zero()` cannot wipe immutable `bytes`, so storing them made FR15's audio
+> guarantee silently false; and WASAPI callbacks reuse a scratch buffer, so holding the caller's
+> array by reference would let the next callback overwrite an already-queued frame. That second one
+> is silent audio corruption which would have surfaced as unexplained transcription errors with
+> nothing pointing back at the queue.
+
+> **D-22 — a panic clear is undone only by the user.** `resume()` from `WIPED` now refuses
+> `automatic=True`. A stray device-return callback firing after the button was pressed would
+> otherwise restart capture the user had just deliberately stopped.
+
+> **Design §7 gained two fields.** It named `no audio detected (Ns)` and `NOT hidden from screen
+> share` as derived states but carried no field either could be derived from, so neither was
+> expressible. `silence_s` and `capture_excluded` added.
+
+**Two tests were passing for the wrong reason and were rewritten.** `test_every_state_is_reachable`
+added `PURGING` and `STOPPING` to its set as *literals*, so it passed even if the manager skipped
+both entirely — it asserted only that the enum members exist. And the zeroing test covered only the
+`bytearray` path, so `zero()`'s silent no-op on `bytes` went uncaught. **Ninth and tenth instances
+of this project's recurring defect**, and the first time two landed in the same phase.
+
+**PR #6 review round — four more findings, all valid, all fixed**
+
+| Severity | Finding | Fix |
+|---|---|---|
+| P1 | **A second `pause()` overwrote the cause before validating.** A lock callback arriving while the user was already paused left `LOCK` behind even though the transition raised — so the next unlock would restart capture the user had deliberately stopped. The same failure D-22 closed on the panic-clear path, reachable by a different route. | Validate before recording. |
+| P1 | **The LLM switch never reached the pipeline.** `set_switch("llm_matching", False)` flipped a detached config object and lit the local-only indicator while `MatchingPipeline` kept calling the API. The UI would have told the user their question text stayed on the device while it did not. | `attach_matching()`; toggling unattached now raises rather than degrading quietly. |
+| P1 | **A throwing purge hook aborted the whole purge.** `cancel_network` runs first and closing an already-broken socket is the plausible failure — so capture would keep running with nothing cleared, and panic clear would fail precisely on the degraded session that needs it. | Every step runs; failures are collected and reported. |
+| P2 | **`ring.clear()` had zero call sites** despite a docstring saying "called on session purge". Ended-session events leaked into the next session's export and crowded the bounded ring. | Cleared during purge, with the purge outcome recorded after so it survives. |
+
+Two of these — the LLM switch and `ring.clear()` — are the **same shape as D-20**: a method that exists, is documented as being called, and is called by nothing. That is now three in one milestone. Worth checking for directly rather than waiting for review to find the next one.
+
+**A process note.** One of these fixes silently did not apply: a string replacement missed because `ruff format` had reshaped the target onto one line, and the test suite still passed because the *old* behaviour was what the existing test expected. Only re-reading the file caught it. A patch that fails to match is not an error — it is a no-op that looks like success.
+
+**Deferred — genuinely out of scope here, not forgotten**
+
+| Item | Why | Where it lands |
+|---|---|---|
+| **T6.4** ProcMon FR16 allowlist trace | Windows-only tooling | Windows machine |
+| **T6.5** real device/network probes | WASAPI, registry, network | Windows; classification logic is done and tested |
+| **T6.6 sleep/lock + device-loss triggers** | Needs `WM_POWERBROADCAST` and `IMMNotificationClient`, which design §1 places in `audio/devices.py` and `watchdog.py` | M1/T1.4 on Windows |
+
+**Stated plainly: T6.6's "lock/unlock resumes" criterion is not met by this phase.** The state
+machine reacts correctly *if* something calls `pause(PauseCause.LOCK)`, and that something does not
+exist yet. `PauseCause.LOCK` and `DEVICE_LOST` are currently reachable only from test code.
+
+---
 
 ### PRISM design system adopted · 2026-08-09
 
