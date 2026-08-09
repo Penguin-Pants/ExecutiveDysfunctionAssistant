@@ -144,18 +144,24 @@ be implementable locally.
 
 ```python
 class SttStreamState(Enum):
-    STARTING = auto(); READY = auto(); DEGRADED = auto()
-    RECONNECTING = auto(); FAILED = auto(); STOPPED = auto()
+    STARTING = auto()
+    READY = auto()
+    DEGRADED = auto()
+    RECONNECTING = auto()
+    FAILED = auto()
+    STOPPED = auto()
+
 
 @dataclass(frozen=True)
 class TranscriptEvent:
-    stream_id: str          # "interviewer" | "user"
+    stream_id: str  # "interviewer" | "user"
     text: str
     is_final: bool
-    t_start: float          # seconds, monotonic, relative to start()
+    t_start: float  # seconds, monotonic, relative to start()
     t_end: float
     confidence: float | None
     backend: str
+
 
 @dataclass(frozen=True)
 class StateEvent:
@@ -163,13 +169,19 @@ class StateEvent:
     state: SttStreamState
     detail: str | None
 
+
 class SttBackend(Protocol):
     name: str
     supports_interim: bool
 
-    def start(self, stream_id: str, sample_rate: int, channels: int,
-              on_transcript: Callable[[TranscriptEvent], None],
-              on_state: Callable[[StateEvent], None]) -> None: ...
+    def start(
+        self,
+        stream_id: str,
+        sample_rate: int,
+        channels: int,
+        on_transcript: Callable[[TranscriptEvent], None],
+        on_state: Callable[[StateEvent], None],
+    ) -> None: ...
     def feed(self, pcm: bytes, t_capture: float) -> None: ...
     def stop(self, flush_timeout_s: float = 2.0) -> None: ...
     def close(self) -> None: ...
@@ -460,13 +472,14 @@ change to this block invalidates T4.7's measurement and must be re-run.
 ```python
 # Owned exclusively by the matching worker thread. LLM pool threads never mutate it;
 # they post results onto `q_match_results` (bounded 4), which the matching worker drains here.
-self._session_nonce: uuid.UUID    # regenerated on every session start AND every purge
-self._latest_issued: int          # incremented at dispatch
+self._session_nonce: uuid.UUID  # regenerated on every session start AND every purge
+self._latest_issued: int  # incremented at dispatch
+
 
 def on_result(result):
     if result.nonce != self._session_nonce or result.seq != self._latest_issued:
         diagnostics.record("stale_response_discarded", seq=result.seq)
-        return                    # superseded, or belongs to a purged session
+        return  # superseded, or belongs to a purged session
     render(result)
 ```
 
@@ -690,13 +703,13 @@ Any result arriving after step 1 is discarded by the sequence gate, whose counte
 ```python
 @dataclass
 class Health:
-    loopback: Status   # ok | degraded | failed | off
-    mic:      Status
-    stt_interviewer: Status   # per stream, so FR61's per-stream failure is expressible
-    stt_user:        Status
-    matching: Status   # ok | local_only | failed | off
-    egress:   Egress   # none | cloud_stt | llm | both
-    lag:      float    # seconds behind realtime
+    loopback: Status  # ok | degraded | failed | off
+    mic: Status
+    stt_interviewer: Status  # per stream, so FR61's per-stream failure is expressible
+    stt_user: Status
+    matching: Status  # ok | local_only | failed | off
+    egress: Egress  # none | cloud_stt | llm | both
+    lag: float  # seconds behind realtime
 ```
 
 The single most important property: **`matching=ok` with an empty overlay means "nothing in your

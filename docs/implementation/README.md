@@ -11,6 +11,7 @@ restating them — so a change in one place propagates by reference, not by copy
 | 03 | [Tasks](./03-tasks.md) | The work, in dependency order, with acceptance criteria |
 | 04 | [Test Strategy](./04-test-strategy.md) | How each guarantee is verified, including the ones that resist automation |
 | 05 | [Traceability](./05-traceability.md) | Requirement → design → task → test, with no gaps |
+| 06 | [**Progress**](./06-progress.md) | **What is built, what is verified, what is blocked, and the next action.** Start here when resuming after a gap. |
 
 **Upstream sources:** [product plan](../interviewpreprecallprd.md) ·
 [safety review](../build-plan-safety-review.md)

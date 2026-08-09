@@ -1,0 +1,23 @@
+Metadata-Version: 2.4
+Name: interview-prep-recall
+Version: 0.1.0
+Summary: Always-on-top interview prep recall overlay for Windows
+Requires-Python: >=3.11
+Requires-Dist: numpy>=1.26
+Provides-Extra: windows
+Requires-Dist: PySide6>=6.6; extra == "windows"
+Requires-Dist: pyaudiowpatch>=0.2.12; extra == "windows"
+Requires-Dist: faster-whisper>=1.0; extra == "windows"
+Requires-Dist: soxr>=0.3.7; extra == "windows"
+Requires-Dist: keyring>=24; extra == "windows"
+Provides-Extra: embeddings
+Requires-Dist: sentence-transformers>=2.6; extra == "embeddings"
+Provides-Extra: cloud
+Requires-Dist: anthropic>=0.39; extra == "cloud"
+Requires-Dist: websockets>=12; extra == "cloud"
+Requires-Dist: httpx>=0.27; extra == "cloud"
+Provides-Extra: dev
+Requires-Dist: pytest>=8; extra == "dev"
+Requires-Dist: pytest-cov>=5; extra == "dev"
+Requires-Dist: mypy>=1.10; extra == "dev"
+Requires-Dist: ruff>=0.5; extra == "dev"
