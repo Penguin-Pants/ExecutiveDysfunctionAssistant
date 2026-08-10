@@ -20,20 +20,28 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | **M5 — Overlay UI** | ⛔ Blocked | Qt + `SetWindowDisplayAffinity`; needs Windows. Fully specified (design §9b) |
 | **M6 — Session lifecycle** | 🟢 Logic complete | T6.1–T6.3, T6.5 classification, T6.6 backpressure, T6.7 done. T6.4 and the OS trigger paths need Windows |
 | **M7 — Progress tracker** | 🟢 T7.1 + T7.3 complete | Marking and text-domain echo suppression done. T7.2 needs paired audio fixtures; T7.4 is Qt |
-| **M8–M9** | ⬜ Not started | Cloud backends, packaging — both Windows |
+| **M8 — Cloud STT backends** | 🟢 T8.1–T8.5 complete | Deepgram, ElevenLabs, fallback, egress. Protocols unverified against a live endpoint (**AS-8**) |
+| **M9 — Packaging & first run** | ⛔ Blocked | T9.1–T9.3 are Qt; T9.4 is PyInstaller on Windows; T9.5 needs live vendor docs |
 
-**Next action:** nothing further is buildable on Linux without new inputs. Every task whose logic
-is platform-free has now been implemented. The remaining work splits cleanly:
+**Next action:** with M8 done, nothing further is buildable on Linux without new inputs — but
+that sentence has now been wrong twice, so treat it as a claim to re-test rather than a fact.
+The remaining work splits cleanly:
 
 - **Needs the Windows machine:** M1 (AS-2 gate), T2.2 + T2.4 (AS-1 gate), M5 overlay, T6.4's
-  ProcMon trace and M6's OS trigger paths, T7.4's checklist rendering, M8 cloud backends,
-  M9 packaging.
+  ProcMon trace and M6's OS trigger paths, T7.4's checklist rendering, T9.1–T9.4.
 - **Needs the user's fixtures:** T4.7 (the OQ-1 gate) and T7.2 (paired headphone/speaker audio).
+- **Needs a vendor key:** AS-8 — the two cloud protocols are implemented from documentation and
+  have never met a live endpoint. Everything *around* them is tested; the wire format is not.
 
-**A caution about this list.** An earlier version of it said "M7 tracker device tests" and that
-blanket phrase hid two buildable tasks for a whole milestone — T7.3 is text-domain by design and
-needed no device at all. When a milestone is marked blocked here, name the *task*, not the
-milestone, or the same thing happens again.
+**A caution about this list, now with two instances.** An earlier version said "M7 tracker device
+tests", and that blanket phrase hid two buildable tasks for a whole milestone. The very next
+version said "M8–M9 — cloud backends, packaging, **both Windows**", which hid an entire milestone:
+cloud STT is websockets and asyncio and has no Windows dependency whatsoever.
+
+Both errors were mine, both were written *into this file as a summary*, and both were then trusted
+on the next read. When a milestone is marked blocked here, name the *task* and the *reason*, and
+make the reason specific enough to be falsifiable — "Windows" is not; "needs
+`SetWindowDisplayAffinity`" is.
 
 ---
 
@@ -67,6 +75,116 @@ conservative choice, just a broken one.
 ---
 
 ## Log
+
+### M8 — Cloud STT backends · T8.1–T8.5 complete · 2026-08-09
+
+**This milestone was labelled "Windows" and was not.** The status table said "M8–M9 — cloud
+backends, packaging — both Windows". Cloud STT is a WebSocket client and an asyncio loop; it has
+no Windows dependency at all. That is the second time a blanket label in this file hid buildable
+work, one milestone after the first, so the caution above has been rewritten to demand a
+falsifiable reason rather than a platform name.
+
+**Delivered** — 35 new tests, 286 total. `ruff`, `ruff format`, `mypy` clean.
+
+| Task | What exists | Notable coverage |
+|---|---|---|
+| **T2.1 (completed)** | `tests/conformance.py` — the T2.1 suite as a reusable artifact | It did not previously exist. `test_stt_interface.py` checked that a null object satisfied the Protocol *shape*, which is a typing check: a backend could violate all eight semantic rules and pass |
+| T8.1 | `stt/deepgram.py` over raw `websockets` | Passes the conformance suite unmodified |
+| T8.2 | `stt/elevenlabs.py` | Same suite, same plumbing, zero shared protocol code |
+| T8.3 | Key in the credential store, header not URL | Grep test over a diagnostic export; the ring's secret guard rejects the key in any field |
+| T8.4 | `stt/fallback.py` — `FallbackSttBackend` | Socket dies → local takes over → FR21 notice; switches once under repeated failures; primary closed even after the switch |
+| T8.5 | `EgressMonitor` | Both paths independently settable and independently reported (FR20); dark after fallback, lit while cloud runs |
+
+`stt/cloud.py` holds everything structural — the loop, the bounded queue, the capture clock, the
+finalisation guarantee — so the two backends share all of the plumbing and none of the protocol.
+That is what makes "both pass the same suite" a real claim rather than a coincidence.
+
+**The conformance suite got a negative control.** `test_the_suite_actually_fails_a_broken_backend`
+feeds it a backend that raises from `feed()` and asserts the suite rejects it. A conformance suite
+that passes everything is worth nothing, and this project has enough history of tests that pass
+while the property is broken to justify checking the checker.
+
+**Two checks were deliberately kept *out* of the shared suite.** Rule 1's drop-and-report-DEGRADED
+half needs a stalled transport — against a double that drains instantly nothing overflows, so
+asserting DEGRADED there would fail a *correct* backend. Rules 2, 3 and 5 need scripted server
+output only a specific protocol can produce. Both live per backend, with the reason recorded in
+the suite's docstring so nobody "completes" it later by moving them in.
+
+**Decisions made while implementing**
+
+> **D-25 — the capture clock re-anchors on every connect.** Found in self-review, with no test
+> covering it. A reconnect gives the vendor a new stream numbered from zero while `sent_s` keeps
+> accumulating, so the first post-reconnect event mapped tens of seconds backwards; the ordering
+> guard then correctly discarded it — *and every event after it*. The stream would report READY
+> and transcribe nothing for the rest of the session. The worst shape available: a silent failure
+> on the recovery path that exists to prevent an outage.
+
+> **D-26 — `x = y or Default()` is banned for injected collaborators.** `DiagnosticRing.__len__`
+> makes an empty ring falsy, so the idiom silently discarded an injected ring and wrote to an
+> orphan object with no reader. **This was live in already-merged code** — `MatchingPipeline`,
+> `SessionManager` and `Preflight` all had it. Every affected site now uses `is None`, and
+> `test_every_component_keeps_the_ring_it_was_given` asserts *identity* at each one.
+>
+> The project's recurring defect in dependency-injection form, and the **eleventh** instance: the
+> injection appears to succeed, the component behaves perfectly, and the only symptom is an empty
+> export nobody reads until they need it. I found it because a test I wrote asserted on an
+> injected ring and got zero events — had I asserted on behaviour instead, it would still be there.
+
+> **D-27 — cloud egress is lit before the socket opens, cleared only after it closes.** Fixed a
+> real ordering bug: a primary that fails inside `start()` triggers the fallback on the backend
+> thread, which put the indicator out — and then `start()` lit it again, leaving it claiming cloud
+> egress for the rest of a session running entirely locally. The error is now always in the
+> over-reporting direction, which is the only safe one for a privacy indicator.
+
+> **D-28 — frames in flight during a fallback are dropped, not replayed.** Replaying
+> double-transcribes the overlap, so the assembler builds two utterances from one span and matching
+> fires twice on the same question. A missing half-second beats a duplicated question.
+
+**A defect I introduced and caught: `switched` meant two different things.** The re-entry guard is
+set at the *top* of `_switch()` so a second FAILED event cannot start a second switch. Exposing
+that same flag as the public `switched` property told callers the local backend was live and the
+egress indicator settled while both were still mid-flight — and a test waiting on it then read the
+indicator too early. Split into `_switching` (guard) and `_switch_complete` (an `Event`, with
+`wait_for_switch()` for callers verifying FR21's 5 s bound).
+
+**Repository hygiene, folded in at the user's direction.** `__pycache__/*.pyc` and
+`interview_prep_recall.egg-info/` were tracked on `main` despite `.gitignore` covering both — they
+predated the ignore rules, so git kept tracking them. 24 files untracked. The `.pyc` files were
+also stale 3.11 bytecode for a 3.12 target.
+
+**CI went red on mypy, and the cause is worth a standing note.** `websockets` is in the `[cloud]`
+extra; CI installs `[dev]`. I had `pip install`ed it into the dev container to build against, so
+mypy resolved it locally and failed on the runner. **The dev container is not the CI environment,
+and a green local run is not evidence about CI whenever a new dependency is involved.** The fix
+puts `websockets` in the same `ignore_missing_imports` override as the Windows-only packages —
+it is imported lazily inside the connector factories, so nothing needs it to type-check or to run
+the suite. Verified by uninstalling it and re-running both mypy and pytest, rather than by
+re-running with it still present.
+
+**PR #8 review round — three findings, all valid, all fixed.**
+
+| Severity | Finding | Why it mattered |
+|---|---|---|
+| P1 | **`_final_seen` latched on the first final of the session and never cleared.** | Rule 2 is a *per-span* guarantee. Audio accepted after the first final that the server never finalised reported STOPPED instead of FAILED — the end of the interview dropped silently, by the mechanism written to make that impossible. My tests missed it because none of them fed a second utterance. |
+| P1 | **`stop()` reported STOPPED with the worker still running.** `close()` allows 0.5 s while the flush tail waited a fixed 1.5 s, so the join could not succeed. The worker then emitted callbacks after `stop()` returned, and `FallbackSttBackend` cleared the egress indicator while the cloud socket was still open — FR20's false privacy statement, in its worst direction. | The internal tail is now bounded by the caller's timeout, the join gets a grace period, a surviving worker reports FAILED, and callbacks are detached unconditionally before `stop()` returns. |
+| P1 | **`additional_headers` requires `websockets >= 14`; the floor was `>= 12`.** 12.x and 13.x call it `extra_headers`, so at the declared minimum every connect raised `TypeError` before opening a socket and cloud STT fell back to local 100% of the time. | Floor raised to 14, with the coupling noted at both call sites. Nothing caught this locally because the container had 17.0.1 installed. |
+
+**A second CI-vs-local divergence in one milestone.** After the mypy failure, `pytest` then failed
+to collect: `from tests.conformance import ...` needs the repo root on `sys.path`, which
+`python -m pytest` provides by adding the cwd and the `pytest` console script that CI runs does
+not. Now imported as bare `conformance`, which works under both. **The dev container is not the
+CI environment**, and this milestone produced two separate failures whose entire cause was
+assuming otherwise. Reproduce with `PYTHONSAFEPATH=1 python -m pytest` before pushing anything
+that adds a dependency or a cross-module test import.
+
+**Not verified, and cannot be here — AS-8.** Both protocols are written from documentation and
+have never met a live endpoint. Message names (`CloseStream`, `start`/`end`), envelope shapes and
+timestamp semantics are all assumptions. Everything *around* the wire is tested; the wire is not.
+Deepgram's flush message is the specific one I am least sure of — `CloseStream` closes the stream,
+where `Finalize` may be the correct request to flush pending finals. Verify with a real key
+alongside T9.5, and do not treat the green suite as evidence about the protocol.
+
+---
 
 ### M6 — Session lifecycle · logic complete · 2026-08-09
 
@@ -412,8 +530,9 @@ wrong reason is the same failure mode in miniature.
 
 - **The three gates are not checkboxes.** T1.2, T2.4 and T4.7 are measurements that can change the
   architecture. A bad number changes the plan; it does not get waived.
-- **This project's recurring defect is a test that passes while the guarantee is broken.** Four
-  instances so far: the PRD's absolute no-disk claim, the zeroed-`bytearray` purge assertion, the
+- **This project's recurring defect is a test that passes while the guarantee is broken.** Eleven
+  instances so far, the latest being an injected `DiagnosticRing` silently replaced by an orphan
+  because an empty ring is falsy (D-26). Four early instances: the PRD's absolute no-disk claim, the zeroed-`bytearray` purge assertion, the
   `weakref`-on-`str` sweep, and D-13 above. When writing a test for a privacy or correctness
   guarantee, verify the property, not the claim.
 - **Fixtures are the long pole and only the user can make them.** Real prep notes, two or three

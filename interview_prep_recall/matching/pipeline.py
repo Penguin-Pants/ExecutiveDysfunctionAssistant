@@ -123,7 +123,7 @@ class MatchingPipeline:
         self.prefilter = prefilter
         self.selector = selector
         self.on_result = on_result
-        self.ring = ring or DiagnosticRing()
+        self.ring = DiagnosticRing() if ring is None else ring
         self.runner = runner or InlineRunner()
         self.call_ceiling = call_ceiling
         self._sleep = sleep
