@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from interview_prep_recall.notes.index import EmbeddingIndex
-from interview_prep_recall.notes.model import Note, NoteSet
+from interview_prep_recall.notes.model import ContextSet, Note
 from interview_prep_recall.stt.assembler import Utterance
 from interview_prep_recall.tracker.progress import (
     ECHO_HOLD_S,
@@ -36,8 +36,8 @@ class WordEmbedder:
         return out
 
 
-def build(app_data: Path) -> tuple[ProgressTracker, NoteSet]:
-    note_set = NoteSet(
+def build(app_data: Path) -> tuple[ProgressTracker, ContextSet]:
+    note_set = ContextSet(
         name="prep",
         notes=[
             Note(headline="conflict", track_progress=True),

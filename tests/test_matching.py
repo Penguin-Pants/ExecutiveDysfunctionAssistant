@@ -27,7 +27,7 @@ from interview_prep_recall.matching.selector import (
     parse_response,
 )
 from interview_prep_recall.notes.index import EmbeddingIndex
-from interview_prep_recall.notes.model import Note, NoteSet
+from interview_prep_recall.notes.model import ContextSet, Note
 from interview_prep_recall.stt.assembler import Utterance
 
 # ---------------- fakes ----------------
@@ -103,7 +103,7 @@ def utt(text: str, stream: str = "interviewer", context: str = "") -> Utterance:
     return Utterance(stream, text, 0.0, 1.0, context)
 
 
-def build(app_data: Path, n_extra: int = 0) -> tuple[Prefilter, NoteSet]:
+def build(app_data: Path, n_extra: int = 0) -> tuple[Prefilter, ContextSet]:
     notes = [
         Note(headline="Tell me about a conflict on your team?", tags=["conflict"]),
         Note(headline="Describe your leadership style?", tags=["leadership"]),
@@ -111,7 +111,7 @@ def build(app_data: Path, n_extra: int = 0) -> tuple[Prefilter, NoteSet]:
         Note(headline="Walk me through the migration project?", tags=["migration"]),
     ]
     notes += [Note(headline=f"Filler question about python {i}?") for i in range(n_extra)]
-    note_set = NoteSet(name="test", notes=notes)
+    note_set = ContextSet(name="test", notes=notes)
     embedder = WordEmbedder()
     index = EmbeddingIndex(app_data, embedder)
     index.build(note_set)

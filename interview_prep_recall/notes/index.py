@@ -25,7 +25,7 @@ from typing import Protocol
 
 import numpy as np
 
-from interview_prep_recall.notes.model import NoteSet
+from interview_prep_recall.notes.model import ContextSet
 
 INDEX_SCHEMA_VERSION = 1
 
@@ -135,7 +135,7 @@ class EmbeddingIndex:
 
     # ---------- build ----------
 
-    def build(self, note_set: NoteSet, *, persist: bool = True) -> IndexStats:
+    def build(self, note_set: ContextSet, *, persist: bool = True) -> IndexStats:
         cached = self._load_cache(note_set.id)
         full_rebuild = cached is None
 

@@ -6,7 +6,7 @@ import pytest
 
 from interview_prep_recall.notes.importer import (
     ChunkStrategy,
-    build_note_set,
+    build_context_set,
     detect_strategy,
     import_text,
     propose_bullets,
@@ -122,9 +122,9 @@ def test_import_always_requires_review_before_save() -> None:
     assert import_text(MD, "n.md").needs_review is True
 
 
-def test_build_note_set_verifies_bullets() -> None:
+def test_build_context_set_verifies_bullets() -> None:
     result = import_text(MD, "notes.md")
-    note_set = build_note_set("Acme", result.proposals)
+    note_set = build_context_set("Acme", result.proposals)
     note_set.verify()
     assert len(note_set.notes) == 2
     assert all(n.id for n in note_set.notes)

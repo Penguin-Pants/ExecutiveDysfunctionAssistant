@@ -330,11 +330,11 @@ def test_purge_never_touches_notes(app_data, tmp_path) -> None:  # type: ignore[
     destroys the user's prep, so it is asserted against real files."""
     import hashlib
 
-    from interview_prep_recall.notes.model import Note, NoteSet
+    from interview_prep_recall.notes.model import ContextSet, Note
     from interview_prep_recall.notes.store import NotesStore
 
     store = NotesStore(app_data)
-    ns = NoteSet(name="prep", notes=[Note(headline="Tell me about a conflict?")])
+    ns = ContextSet(name="prep", notes=[Note(headline="Tell me about a conflict?")])
     path = store.save(ns)
     before = hashlib.sha256(path.read_bytes()).hexdigest()
 

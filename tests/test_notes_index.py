@@ -12,7 +12,7 @@ from interview_prep_recall.notes.index import (
     EmbeddingIndex,
     model_slug,
 )
-from interview_prep_recall.notes.model import Note, NoteSet
+from interview_prep_recall.notes.model import ContextSet, Note
 
 
 class FakeEmbedder:
@@ -40,8 +40,8 @@ class FakeEmbedder:
         return sum(len(c) for c in self.calls)
 
 
-def make_set(n: int = 3) -> NoteSet:
-    return NoteSet(
+def make_set(n: int = 3) -> ContextSet:
+    return ContextSet(
         name="s", notes=[Note(headline=f"Question {i}?", body=f"Body {i}") for i in range(n)]
     )
 
@@ -163,6 +163,6 @@ def test_vector_lookup_by_note_id(app_data: Path) -> None:
 
 def test_empty_note_set_builds_without_error(app_data: Path) -> None:
     index = EmbeddingIndex(app_data, FakeEmbedder())
-    stats = index.build(NoteSet(name="empty"))
+    stats = index.build(ContextSet(name="empty"))
     assert stats.total == 0
     assert index.vectors.shape[0] == 0
