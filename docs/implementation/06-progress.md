@@ -22,13 +22,21 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | **M7 — Progress tracker** | 🟢 T7.1 + T7.3 complete | Marking and text-domain echo suppression done. T7.2 needs paired audio fixtures; T7.4 is Qt |
 | **M8 — Cloud STT backends** | 🟢 T8.1–T8.5 complete | Deepgram, ElevenLabs, fallback, egress. Protocols unverified against a live endpoint (**AS-8**) |
 | **M9 — Packaging & first run** | ⛔ Blocked | T9.1–T9.3 are Qt; T9.4 is PyInstaller on Windows; T9.5 needs live vendor docs |
+| **M10 — Typed context sources** | 📋 Specified | Five kinds (company, role, interviewer, prep, resume). Additive. T10.1–T10.6 buildable now |
+| **M11 — Post-interview report** | 📋 Specified | Reverses a v1 non-goal and rewrites FR16. Depends on M10. Most tasks buildable now |
 
-**Next action:** with M8 done, nothing further is buildable on Linux without new inputs — but
-that sentence has now been wrong twice, so treat it as a claim to re-test rather than a fact.
+**Next action: M10, tasks T10.1–T10.6.** The user requested two new features on 2026-08-10 and
+they are specified in `07-context-sources-and-report.md`. Most of both is platform-free.
+
+The previous version of this line said nothing further was buildable on Linux. That was true of
+the *then-known* scope and is now moot — but note it had already been wrong twice on its own terms
+before new scope arrived. Treat any such claim here as one to re-test.
 The remaining work splits cleanly:
 
 - **Needs the Windows machine:** M1 (AS-2 gate), T2.2 + T2.4 (AS-1 gate), M5 overlay, T6.4's
-  ProcMon trace and M6's OS trigger paths, T7.4's checklist rendering, T9.1–T9.4.
+  ProcMon trace and M6's OS trigger paths, T7.4's checklist rendering, T9.1–T9.4, T10.7's per-kind
+  overlay marking, T11.10's report view, and T11.2's DPAPI binding (its envelope and listing
+  logic are testable here behind a Protocol).
 - **Needs the user's fixtures:** T4.7 (the OQ-1 gate) and T7.2 (paired headphone/speaker audio).
 - **Needs a vendor key:** AS-8 — the two cloud protocols are implemented from documentation and
   have never met a live endpoint. Everything *around* them is tested; the wire format is not.
@@ -75,6 +83,49 @@ conservative choice, just a broken one.
 ---
 
 ## Log
+
+### Scope change — typed context sources & post-interview report · specified · 2026-08-10
+
+The user asked for two features: five separately-categorized context sources (company, job
+description, interviewer, prep notes, resume), and a post-interview report analyzing the whole
+meeting. Specified in `07-context-sources-and-report.md` as **M10** and **M11**. Nothing built yet.
+
+**M11 reverses a stated v1 non-goal and makes the product's strongest claim false.** Design §11
+listed "any post-call artifact" as out of scope. More importantly, "nothing the user says or hears
+is written to disk" was the sharpest thing this product promised, and D-U8 trades it for a
+persisted transcript. **FR16 is rewritten rather than reinterpreted** — an untouched FR16 sitting
+next to a transcript-writing feature is worse than either choice alone, because the next reader
+builds against a guarantee the code does not keep.
+
+Three requirements were amended in place for the same reason: FR42's "user-authored" (a job
+description is supplied, not authored — the property is the absence of generation, not authorship),
+FR58's panic-clear blast radius, and FR63's consent disclosure.
+
+**The overlay's retrieval-only guarantee is untouched and FR79 exists to keep it that way.** The
+risk was never the report itself; it is that a generated-text surface shipping in the same app
+becomes the argument for relaxing the overlay path later. FR79 makes that structurally
+unavailable — no import path from the report module to the overlay snippet API.
+
+**D-31 is the load-bearing decision.** Every report finding must cite the utterance it rests on or
+be rejected before display. The overlay cannot fabricate because it cannot generate; the report
+must generate, so anchoring is the equivalent protection. Without it, the report is a model's
+impression of an interview it did not attend, delivered to someone who will believe it about
+themselves.
+
+**PR #9 review round — five findings, all valid, all fixed. One was a live data-loss path.**
+
+| Severity | Finding | Why it mattered |
+|---|---|---|
+| P1 | **No migration for existing schema-v1 note files.** T10.1 made `kind` mandatory and T10.2 replaced `NoteSet`, with no migration mentioned anywhere. Existing files would load as corrupt, and FR44's recovery would find every backup equally unreadable. | A user upgrading opens the app to find their prep notes gone — the exact catastrophe M3 was built to prevent, reintroduced by a feature that never mentions the notes store. Now T10.2a/FR73a–c/D-33. |
+| P1 | **FR16's verification still said "no session content in any written file"** after its statement was rewritten for D-U8. | A conforming implementation fails its own test. Statement and test drifting apart is this project's recurring defect — notable here because for once it would have *failed correct code* rather than passing broken code. |
+| P1 | **No M11 task owned the FR20 egress indicator.** The whole transcript leaving the device is the largest egress event in the product. | The report path could ship with the privacy indicator dark during the biggest upload it will ever make. D-27 in M8 was this same failure in the other direction, one milestone earlier. Now FR81a, owned by T11.7. |
+| P2 | **Absence-based findings could not satisfy FR78.** | Two of four rubric dimensions produce their best findings by absence — the point you meant to make and never did. Demanding an utterance index forces the generator to drop the best findings or fabricate a citation. Now two evidence kinds, plus FR78a making the tracker the single adjudicator of coverage. |
+| P2 | D-U9 pointed at FR84 (retention) for consent re-acknowledgement instead of FR85. | Anyone implementing from the decision table builds the wrong gate. |
+
+**Open and flagged: OQ-7 / D-32.** Panic clear is scoped to the in-progress session only, sparing
+previously saved ones. Argued both ways in the spec. Wants confirmation before T11.9 is built.
+
+---
 
 ### M8 — Cloud STT backends · T8.1–T8.5 complete · 2026-08-09
 
