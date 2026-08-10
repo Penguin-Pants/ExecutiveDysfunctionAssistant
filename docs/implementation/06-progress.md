@@ -23,10 +23,17 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | **M8 — Cloud STT backends** | 🟢 T8.1–T8.5 complete | Deepgram, ElevenLabs, fallback, egress. Protocols unverified against a live endpoint (**AS-8**) |
 | **M9 — Packaging & first run** | ⛔ Blocked | T9.1–T9.3 are Qt; T9.4 is PyInstaller on Windows; T9.5 needs live vendor docs |
 | **M10 — Typed context sources** | 🟢 T10.1–T10.6 + migration complete | Five kinds, per-kind caps and thresholds, schema v1→v2 migration. T10.7 is Qt |
-| **M11 — Post-interview report** | 📋 Specified | Reverses a v1 non-goal and rewrites FR16. Depends on M10. Most tasks buildable now |
+| **M11 — Post-interview report** | 🟢 T11.1, T11.3–T11.9 complete | Record, evidence binding, encrypted store, retention, generation. T11.2's DPAPI binding and T11.10 need Windows |
 
-**Next action: M11, tasks T11.1 and T11.3–T11.9.** M10's platform-free work is done. M11 is the
-post-interview report; OQ-7 is closed (D-U11 made panic non-destructive), so nothing blocks it.
+**Next action: nothing further is buildable on Linux.** Every task whose logic is platform-free
+across M0–M11 is now implemented. That claim has been wrong twice before, so re-test it rather
+than trusting it — but this time the remaining list is genuinely three categories of external
+dependency, not a mislabelled milestone.
+
+The one piece of wiring that has no home yet is the **composition root**: `app.py` is still a stub,
+so `ReportGenerator.local_only` mirrors the FR37 switch without being driven by it, and the session
+record is not attached to the assembler. Both are M9/T11.10 work and are recorded as follow-ups
+below rather than invented here.
 
 The previous version of this line said nothing further was buildable on Linux. That was true of
 the *then-known* scope and is now moot — but note it had already been wrong twice on its own terms
@@ -83,6 +90,68 @@ conservative choice, just a broken one.
 ---
 
 ## Log
+
+### M11 — Post-interview report · T11.1, T11.3–T11.9 complete · 2026-08-10
+
+**Delivered** — 46 new tests, 371 total. `ruff`, `ruff format`, `mypy` clean.
+
+| Task | What exists |
+|---|---|
+| T11.1 | `report/record.py` — ordered, bounded, finals-only `SessionRecord` |
+| T11.2 | `report/store.py` — encrypted store, listing, deletion; `platform/win_dpapi.py` for the binding |
+| T11.3 | Retention sweep, 30-day default, `None` means never |
+| T11.4 | `report/generator.py` — four sections plus both summaries, absent sources declared |
+| T11.5 | `report/evidence.py` — presence and absence evidence, verified before display |
+| T11.6 | `report/separation.py` — static import guard, FR79 |
+| T11.7 | Per-run confirmation with payload size; egress lit across the call |
+| T11.8 | `report/consent.py` — versioned re-acknowledgement, FR85 |
+| T11.9 | `delete_all()` — the only route to destroying history under D-U11 |
+
+**The record is the only structure allowed to grow with session length.** FR33 forbids that
+everywhere else, so FR76 makes the exception explicit and FR75 bounds it at 4 hours or 5,000
+utterances. **Truncation stops recording rather than dropping the oldest** — dropping oldest would
+silently lose the opening while the report claimed to cover the whole meeting. Both are bad; only
+one is visible, and the report states it.
+
+**Evidence is what makes this feature trustworthy at all.** The overlay cannot fabricate because it
+cannot generate. The report must generate, so every finding is anchored: presence cites utterance
+indices that must all resolve, absence cites a source chunk. `test_an_invented_index_is_rejected`
+uses `(0, 99)` deliberately — one fabricated index inside real ones is the shape a
+plausible-but-wrong citation actually takes, so partial validation would miss it.
+
+**FR78a gives coverage a single adjudicator.** The prompt is *told* which points the tracker
+recorded as uncovered, rather than being asked to work it out. A model that re-derives coverage
+produces a second opinion the verifier then rejects wholesale — and if it slipped through, the user
+would hold a report contradicting the checklist they watched during the interview, with no
+principled way to choose.
+
+**Rejected findings are counted and surfaced, never silently dropped.** A report that quietly
+discarded a third of the model's output would read as complete while being nothing of the sort.
+
+**No cipher fallback off Windows.** `default_cipher()` raises rather than degrading. Storing an
+interview transcript under weaker protection than FR82 promises would be a false privacy statement
+about a third party's words — the exact class of defect this project keeps digging out of its own
+tests, aimed at a person instead of a buffer.
+
+**Review round — four confirmed issues, all fixed before push**
+
+| # | Issue | Why it mattered |
+|---|---|---|
+| 1 | **`ReportConsent` had zero call sites.** | Fourth instance of D-20 in this codebase. Consent is now **required** by `ReportGenerator` — no `None` default — and checked at generation, the moment the interviewer's words actually leave the device. Checking only in a UI that does not exist yet is precisely D-23, where the local-only switch lit an indicator while the pipeline kept calling the API. |
+| 2 | **`purge_root()` had zero call sites**, with a docstring claiming the UI used it. | Same shape, no redeeming enforcement value. Deleted rather than kept "for later". |
+| 3 | **`delete_all()` was O(n²) decryptions.** Each `delete()` reindexed, and reindexing decrypts every remaining transcript. | On the one operation a user runs when they want their data gone quickly. Now deletes files first and reindexes once. |
+| 4 | **`started_at` was actually store time**, and it is the field the retention sweep deletes on. | Renamed `stored_at`. A field that decides deletion must not be named for something it is not measuring. |
+
+**Deferred, named at task level**
+
+| Item | Why |
+|---|---|
+| **T11.2's DPAPI binding** | `platform/win_dpapi.py` is written and cannot be exercised here. Everything around it is tested through the injected `Cipher` Protocol |
+| **T11.10** report view and export | Qt |
+| **`local_only` is not driven by `DegradationSwitches`** | Needs the composition root. `app.py` is a stub; inventing an attach mechanism without it would be speculative. **This is the D-23 shape and must be wired when `app.py` lands** |
+| **`SessionRecord` is not attached to the assembler** | Same reason. Nothing feeds the record in production yet |
+
+---
 
 ### M10 — Typed context sources · T10.1–T10.6 + migration complete · 2026-08-10
 
