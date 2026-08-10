@@ -66,6 +66,24 @@ class ReversingCipher:
         return ciphertext[::-1]
 
 
+def _tool_response(payload: dict):  # type: ignore[no-untyped-def]
+    """Shaped like a real forced-tool reply: a `tool_use` block carrying parsed input.
+
+    The generator forces `tool_choice`, so this is the only response shape it can
+    legitimately receive. A double that returned a text block would test a path the API
+    is configured never to take.
+    """
+
+    class _Block:
+        type = "tool_use"
+        input = payload
+
+    class _Response:
+        content = [_Block()]
+
+    return _Response()
+
+
 class ScriptedClient:
     """Returns a canned response and records what it was sent."""
 
@@ -78,14 +96,7 @@ class ScriptedClient:
         self.requests.append(kwargs)
         if self.boom is not None:
             raise self.boom
-
-        class _Block:
-            text = json.dumps(self.payload)
-
-        class _Response:
-            content = [_Block()]
-
-        return _Response()
+        return _tool_response(self.payload)
 
 
 # ---------- T11.1: the record (FR74, FR75, FR76) ----------
@@ -501,11 +512,15 @@ def test_a_malformed_response_degrades_to_no_findings(app_data) -> None:  # type
     """A garbled reply must not raise mid-report."""
 
     class GarbledClient(ScriptedClient):
+        """Answers with prose despite `tool_choice` requiring a tool call — the shape
+        that used to land as a silently empty report."""
+
         def create(self, **kwargs):  # type: ignore[no-untyped-def]
             self.requests.append(kwargs)
 
             class _Block:
-                text = "not json at all"
+                type = "text"
+                text = "Here is my review in prose."
 
             class _Response:
                 content = [_Block()]
@@ -759,3 +774,128 @@ def test_delete_all_reindexes_once_not_per_session(app_data) -> None:  # type: i
 
     assert store.list_sessions() == []
     assert decrypts <= 8, f"delete-all decrypted {decrypts} times for 8 sessions"
+
+
+# ---------- PR #13 review round ----------
+
+
+def test_the_request_forces_the_report_tool(app_data) -> None:  # type: ignore[no-untyped-def]
+    """Without a forced tool the Messages API answers in prose, and the parser accepts
+    only one JSON shape — so a perfectly good review lands as an empty report whose every
+    section reads "Nothing notable to report here". A report that looks complete and
+    contains nothing is worse than a failure, because nothing signals it."""
+    client = ScriptedClient()
+    generator = ReportGenerator(consent=_consent(app_data), client=client)
+    generator.generate(
+        _record_with(2),
+        _context_set([SourceKind.PREP]),
+        missed_note_ids=frozenset(),
+        confirm=lambda _: True,
+    )
+
+    request = client.requests[0]
+    assert request["tool_choice"] == {"type": "tool", "name": "submit_report"}
+    schema = request["tools"][0]["input_schema"]
+    section_enum = schema["properties"]["findings"]["items"]["properties"]["section"]["enum"]
+    assert set(section_enum) == {s.value for s in ReportSection}
+
+
+def test_source_bodies_reach_the_model(app_data) -> None:  # type: ignore[no-untyped-def]
+    """`headline` is the anticipated question; `body` is the prepared answer. Prep
+    coverage and resume use cannot be judged from headlines — the answer text *is* what
+    is being assessed. The stage-2 selector excludes bodies deliberately and still does;
+    that path has a latency budget and this one does not."""
+    client = ScriptedClient()
+    context_set = ContextSet(
+        name="Acme",
+        notes=[
+            Note(
+                headline="Tell me about a migration",
+                body="I cut deploy time by 60% on the Postgres cutover.",
+                kind=SourceKind.PREP,
+            )
+        ],
+    )
+    ReportGenerator(consent=_consent(app_data), client=client).generate(
+        _record_with(2), context_set, missed_note_ids=frozenset(), confirm=lambda _: True
+    )
+
+    prompt = client.requests[0]["messages"][0]["content"]
+    assert "cut deploy time by 60%" in prompt
+
+
+def test_an_enormous_body_is_capped(app_data) -> None:  # type: ignore[no-untyped-def]
+    """One pathological chunk — a whole resume pasted as a single note — must not push
+    the transcript out of the context window, which is the thing the report needs."""
+    client = ScriptedClient()
+    context_set = ContextSet(
+        name="Acme",
+        notes=[Note(headline="Resume", body="x" * 50_000, kind=SourceKind.RESUME)],
+    )
+    ReportGenerator(consent=_consent(app_data), client=client).generate(
+        _record_with(2), context_set, missed_note_ids=frozenset(), confirm=lambda _: True
+    )
+
+    prompt = client.requests[0]["messages"][0]["content"]
+    assert "truncated" in prompt
+    assert len(prompt) < 10_000
+
+
+def test_mixed_type_indices_are_rejected_whole_not_filtered(app_data) -> None:  # type: ignore[no-untyped-def]
+    """Dropping the bad element from [0, "99"] leaves (0,), which resolves — so the
+    finding is accepted even though an index the model supplied never did. That defeats
+    the all-indices rule for exactly the shape a sloppy response takes."""
+    payload = {
+        "findings": [
+            {"section": "craft", "text": "You did a thing.", "indices": [0, "99"]},
+        ]
+    }
+    generator = ReportGenerator(consent=_consent(app_data), client=ScriptedClient(payload))
+    report = generator.generate(
+        _record_with(3),
+        _context_set([SourceKind.PREP]),
+        missed_note_ids=frozenset(),
+        confirm=lambda _: True,
+    )
+
+    assert report.findings.accepted == ()
+    assert report.discarded == 1
+
+
+def test_malformed_items_are_counted_not_silently_dropped(app_data) -> None:  # type: ignore[no-untyped-def]
+    """These never reach `verify()`, so without counting them the tally reads zero while
+    the parser threw away most of the response — an incomplete report presenting as
+    complete."""
+    payload = {
+        "findings": [
+            {"section": "craft", "text": "Good.", "indices": [0]},  # survives
+            {"section": "not_a_section", "text": "x", "indices": [0]},
+            {"section": "craft", "text": "", "indices": [0]},
+            "not even an object",
+        ]
+    }
+    generator = ReportGenerator(consent=_consent(app_data), client=ScriptedClient(payload))
+    report = generator.generate(
+        _record_with(3),
+        _context_set([SourceKind.PREP]),
+        missed_note_ids=frozenset(),
+        confirm=lambda _: True,
+    )
+
+    assert len(report.findings.accepted) == 1
+    assert report.discarded == 3
+    assert report.to_dict()["rejected_findings"] == 3
+
+
+def test_a_clean_response_discards_nothing(app_data) -> None:  # type: ignore[no-untyped-def]
+    """Positive control: the counting tests above would pass against a parser that
+    discarded everything."""
+    payload = {"findings": [{"section": "craft", "text": "Good.", "indices": [0]}]}
+    generator = ReportGenerator(consent=_consent(app_data), client=ScriptedClient(payload))
+    report = generator.generate(
+        _record_with(3),
+        _context_set([SourceKind.PREP]),
+        missed_note_ids=frozenset(),
+        confirm=lambda _: True,
+    )
+    assert report.discarded == 0

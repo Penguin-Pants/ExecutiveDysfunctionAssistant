@@ -93,7 +93,7 @@ conservative choice, just a broken one.
 
 ### M11 — Post-interview report · T11.1, T11.3–T11.9 complete · 2026-08-10
 
-**Delivered** — 46 new tests, 371 total. `ruff`, `ruff format`, `mypy` clean.
+**Delivered** — 52 new tests, 377 total. `ruff`, `ruff format`, `mypy` clean.
 
 | Task | What exists |
 |---|---|
@@ -141,6 +141,20 @@ tests, aimed at a person instead of a buffer.
 | 2 | **`purge_root()` had zero call sites**, with a docstring claiming the UI used it. | Same shape, no redeeming enforcement value. Deleted rather than kept "for later". |
 | 3 | **`delete_all()` was O(n²) decryptions.** Each `delete()` reindexed, and reindexing decrypts every remaining transcript. | On the one operation a user runs when they want their data gone quickly. Now deletes files first and reindexes once. |
 | 4 | **`started_at` was actually store time**, and it is the field the retention sweep deletes on. | Renamed `stored_at`. A field that decides deletion must not be named for something it is not measuring. |
+
+**PR #13 review round — four findings, all valid, all fixed.**
+
+| Severity | Finding | Why it mattered |
+|---|---|---|
+| P1 | **The request forced no response shape.** With the real Messages API this permits ordinary prose, and the parser accepted only one undocumented JSON shape — so a perfectly good review would land as an **empty report whose every section read "Nothing notable to report here."** | A report that looks complete and contains nothing is worse than a failure, because nothing signals it. Now a forced `submit_report` tool with the section enum in its schema. **Not the same mechanism as FR10's stage-2 enum** and worth not conflating: there the forced tool makes fabrication impossible; here it only fixes the shape. Evidence binding, not the schema, is what keeps report text honest. |
+| P1 | **Only headlines were sent, never bodies.** `headline` is the anticipated question; `body` is the prepared answer. | Prep coverage, resume use and role fit are precisely judgments about the answer text, so three of the four rubric dimensions were being assessed against material the model never saw. Bodies now included, capped per chunk so one pasted resume cannot push the transcript out of the context window. **The stage-2 selector still excludes bodies deliberately** — that path is question-to-question on a latency budget, and its exclusion test still passes. The two paths differ on purpose. |
+| P2 | **Mixed-type indices were filtered, not rejected.** `[0, "99"]` became `(0,)`, which resolves, so the finding was accepted although an index the model supplied never did. | Defeats the all-indices rule for exactly the shape a sloppy response takes — and the all-indices rule is the reason `test_an_invented_index_is_rejected` uses `(0, 99)` in the first place. Now rejected whole. |
+| P2 | **Parser-discarded items were never counted.** Malformed entries never reach `verify()`, so the tally read zero while the parser had thrown away most of the response. | Same failure as silently dropping rejected findings, one layer earlier. `Report.discarded` now counts evidence rejections **and** parse failures together. |
+
+The first two are the ones worth remembering: **every test in this milestone passed against a
+generator that could not have worked against the real API.** The doubles returned exactly the shape
+the parser wanted, so the missing schema constraint was invisible, and no test asserted that source
+bodies reached the prompt because none of them looked at what the model was actually told.
 
 **CI went red on mypy again, and the cause is the mirror image of last time.** `ctypes.windll` does
 not exist off Windows, so `win_dpapi.py` needs `type: ignore[attr-defined]` for mypy in the Linux

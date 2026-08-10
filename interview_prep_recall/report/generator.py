@@ -14,7 +14,6 @@ for the whole call.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -60,6 +59,62 @@ SYSTEM_PROMPT = (
 )
 
 
+MAX_BODY_CHARS = 1_200
+"""Per-chunk cap on source body text sent for analysis.
+
+Bodies are included (see `_build_prompt`) because prep coverage and resume use cannot be
+judged from headlines alone. They are capped because a single pathological import — a
+whole resume pasted as one chunk — would otherwise dominate the context window and push
+the transcript out of it, which is the one thing the report actually needs.
+"""
+
+REPORT_TOOL: dict[str, Any] = {
+    "name": "submit_report",
+    "description": "Submit the interview review as structured, individually evidenced findings.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "findings": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "section": {
+                            "type": "string",
+                            "enum": [s.value for s in ReportSection],
+                        },
+                        "text": {"type": "string"},
+                        "indices": {
+                            "type": "array",
+                            "items": {"type": "integer"},
+                            "description": "Transcript indices this rests on (presence evidence).",
+                        },
+                        "source_note_id": {
+                            "type": "string",
+                            "description": "Note id never covered (absence evidence).",
+                        },
+                    },
+                    "required": ["section", "text"],
+                },
+            }
+        },
+        "required": ["findings"],
+    },
+}
+"""FR77's shape, enforced by the API rather than requested in prose.
+
+Without a forced tool the Messages API answers with ordinary text, and the parser accepts
+only one undocumented JSON shape — so a perfectly good prose review would land as an
+empty report whose every section reads "Nothing notable to report here." A report that
+looks complete and contains nothing is worse than a failure, because nothing signals it.
+
+Not the same mechanism as FR10's stage-2 enum, and worth not confusing them: there the
+forced tool makes fabrication *impossible*, which is the retrieval-only guarantee. Here
+it only fixes the response shape. Report text is generated, and evidence binding — not
+the schema — is what keeps it honest.
+"""
+
+
 class ReportUnavailableError(Exception):
     """Generation refused, with a reason the UI shows verbatim (FR80, FR81)."""
 
@@ -74,6 +129,12 @@ class Report:
     findings: VerifiedFindings
     truncated: bool
     absent_sources: tuple[SourceKind, ...]
+    discarded: int = 0
+    """Findings the model produced that did not survive — evidence rejections **plus**
+    items too malformed to become findings at all.
+
+    Both counted, because a report whose tally says zero while a third of the output was
+    dropped at the parser reads as complete and is not."""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -90,7 +151,7 @@ class Report:
                 }
                 for f in self.findings.accepted
             ],
-            "rejected_findings": self.findings.rejection_count,
+            "rejected_findings": self.discarded,
             "truncated": self.truncated,
             "absent_sources": [k.value for k in self.absent_sources],
         }
@@ -155,20 +216,24 @@ class ReportGenerator:
                 max_tokens=MAX_TOKENS,
                 temperature=0,
                 system=SYSTEM_PROMPT,
+                tools=[REPORT_TOOL],
+                tool_choice={"type": "tool", "name": REPORT_TOOL["name"]},
                 messages=[{"role": "user", "content": prompt}],
             )
         finally:
             self.egress.set_llm(False)
 
+        parsed = _parse_findings(response)
         findings = verify(
-            _parse_findings(response),
+            parsed.findings,
             record,
             missed_note_ids=missed_note_ids,
             known_note_ids=frozenset(n.id for n in context_set.notes),
         )
+        discarded = findings.rejection_count + parsed.malformed
         self.ring.record("report_generated", count=len(findings.accepted))
-        if findings.rejection_count:
-            self.ring.record("report_findings_rejected", count=findings.rejection_count)
+        if discarded:
+            self.ring.record("report_findings_rejected", count=discarded)
 
         absent = self._absent_sources(context_set)
         return Report(
@@ -176,6 +241,7 @@ class ReportGenerator:
             findings=findings,
             truncated=record.truncated,
             absent_sources=absent,
+            discarded=discarded,
         )
 
     # ---------- prompt ----------
@@ -187,7 +253,23 @@ class ReportGenerator:
         for kind in SourceKind:
             chunks = context_set.by_kind(kind)
             lines.append(f"{kind.value.upper()} ({len(chunks)} items)")
-            lines.extend(f"- id={n.id} | {n.headline}" for n in chunks)
+            for note in chunks:
+                # **Bodies included here, unlike the stage-2 selector.** There, headline
+                # and tags only: matching is question-to-question on a latency budget,
+                # and bodies are the prepared *answers*, which cost hundreds of tokens
+                # and bias selection toward long notes.
+                #
+                # The report has the opposite job and no latency budget. "Did you cover
+                # your prepared points, and did you use your strongest experience" cannot
+                # be judged from headlines — the answer text *is* the thing being
+                # assessed. The two paths differ deliberately; the selector's exclusion
+                # is still asserted by its own test.
+                body = note.body.strip().replace("\n", " ")
+                if len(body) > MAX_BODY_CHARS:
+                    body = body[:MAX_BODY_CHARS] + " […truncated]"
+                lines.append(f"- id={note.id} | {note.headline}")
+                if body:
+                    lines.append(f"    {body}")
             lines.append("")
         # The uncovered list comes from the tracker, and the prompt says so, because
         # FR78a makes the tracker the only adjudicator of coverage. A model asked to
@@ -235,51 +317,80 @@ class ReportGenerator:
         return sections
 
 
-def _parse_findings(response: Any) -> list[Finding]:
+@dataclass(frozen=True)
+class ParsedFindings:
+    findings: list[Finding]
+    malformed: int
+    """Items the parser could not turn into a finding at all.
+
+    Returned rather than swallowed. These never reach `verify()`, so they would otherwise
+    be invisible in the rejection tally — a report claiming zero discards while the
+    parser threw away half the response.
+    """
+
+
+def _parse_findings(response: Any) -> ParsedFindings:
     """Read findings out of the model's reply.
 
-    Anything malformed is dropped **here**, before verification, so a garbled response
-    degrades into fewer findings rather than an exception mid-report. The count still
-    reaches the user through the rejection tally.
+    Malformed items degrade into a count rather than an exception, so a partly-garbled
+    response still produces the findings that survived — but the user is told how many
+    did not.
     """
-    text = _response_text(response)
-    try:
-        payload = json.loads(text)
-    except (json.JSONDecodeError, TypeError):
-        return []
+    payload = _response_payload(response)
     raw = payload.get("findings") if isinstance(payload, dict) else None
     if not isinstance(raw, list):
-        return []
+        return ParsedFindings(findings=[], malformed=0)
 
     findings: list[Finding] = []
+    malformed = 0
     for item in raw:
         if not isinstance(item, dict):
+            malformed += 1
             continue
         try:
             section = ReportSection(item["section"])
         except (KeyError, ValueError):
+            malformed += 1
             continue
         text_value = item.get("text")
         if not isinstance(text_value, str) or not text_value.strip():
+            malformed += 1
             continue
+
         indices = item.get("indices") or []
-        source_note_id = item.get("source_note_id")
         if isinstance(indices, list) and indices:
-            evidence = Evidence(
-                kind=EvidenceKind.PRESENCE,
-                utterance_indices=tuple(i for i in indices if isinstance(i, int)),
-            )
+            # **Rejected whole, never filtered.** Dropping the non-integer element from
+            # [0, "99"] leaves (0,) — which resolves, so the finding is accepted even
+            # though an index the model supplied never did. That defeats the
+            # all-indices rule for exactly the shape a sloppy response takes.
+            if not all(isinstance(i, int) and not isinstance(i, bool) for i in indices):
+                malformed += 1
+                continue
+            evidence = Evidence(kind=EvidenceKind.PRESENCE, utterance_indices=tuple(indices))
         else:
+            source_note_id = item.get("source_note_id")
             evidence = Evidence(
                 kind=EvidenceKind.ABSENCE,
                 source_note_id=source_note_id if isinstance(source_note_id, str) else None,
             )
         findings.append(Finding(section=section, text=text_value, evidence=evidence))
-    return findings
+    return ParsedFindings(findings=findings, malformed=malformed)
 
 
-def _response_text(response: Any) -> str:
-    content = getattr(response, "content", None)
-    if isinstance(content, list) and content:
-        return str(getattr(content[0], "text", "") or "")
-    return str(content or "")
+def _response_payload(response: Any) -> dict[str, Any]:
+    """The forced tool call's input, or `{}`.
+
+    A response carrying no tool_use block is not something to salvage: `tool_choice`
+    required one, so its absence means the call did not do what was asked, and guessing
+    at prose would reintroduce the shape-drift the forced tool exists to remove.
+    """
+    for block in getattr(response, "content", None) or []:
+        if getattr(block, "type", None) == "tool_use":
+            payload = getattr(block, "input", None)
+            if isinstance(payload, dict):
+                return payload
+        # Some SDK shapes expose the parsed input without a discriminating `type`.
+        payload = getattr(block, "input", None)
+        if isinstance(payload, dict):
+            return payload
+    return {}
