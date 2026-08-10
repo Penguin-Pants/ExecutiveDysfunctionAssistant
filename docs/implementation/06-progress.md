@@ -18,7 +18,7 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | **M3 — Notes store & indexing** | 🟢 Logic complete | T3.1–T3.6 done. T3.7–T3.9 are Qt UI, deferred to Windows |
 | **M4 — Matching pipeline** | 🟢 T4.1–T4.6 complete | T4.7 **blocked**: needs the user's labelled fixtures |
 | **M5 — Overlay UI** | ⛔ Blocked | Qt + `SetWindowDisplayAffinity`; needs Windows. Fully specified (design §9b) |
-| **M6 — Session lifecycle** | 🟢 Logic complete | T6.1–T6.3, T6.5 classification, T6.6 backpressure, T6.7 done. T6.4 and the OS trigger paths need Windows |
+| **M6 — Session lifecycle** | 🟢 Logic complete · panic on hold (D-U11) | T6.1–T6.3, T6.5 classification, T6.6 backpressure, T6.7 done. T6.4 and the OS trigger paths need Windows |
 | **M7 — Progress tracker** | 🟢 T7.1 + T7.3 complete | Marking and text-domain echo suppression done. T7.2 needs paired audio fixtures; T7.4 is Qt |
 | **M8 — Cloud STT backends** | 🟢 T8.1–T8.5 complete | Deepgram, ElevenLabs, fallback, egress. Protocols unverified against a live endpoint (**AS-8**) |
 | **M9 — Packaging & first run** | ⛔ Blocked | T9.1–T9.3 are Qt; T9.4 is PyInstaller on Windows; T9.5 needs live vendor docs |
@@ -83,6 +83,46 @@ conservative choice, just a broken one.
 ---
 
 ## Log
+
+### Panic clear put on hold — now pauses only · built · 2026-08-10
+
+User direction (**D-U11**): the panic control should only pause the program. Implemented, not just
+specified — this changed merged, tested behaviour, so the code and its tests moved together.
+
+**What changed.** `panic_clear()` now calls `pause(PauseCause.PANIC)` and nothing else. No purge,
+no `WIPED`. Buffers, transcript, overlay content and tracker marks all survive; resume continues
+the session. `PANIC` is a distinct cause rather than a reuse of `USER` so health and diagnostics
+can tell the two apart, and so re-enabling the wipe is a change at one branch.
+
+**What this costs, stated plainly.** The product no longer has any in-session emergency data
+destruction, and it lands alongside D-U8, which made transcripts persist. Nothing is destroyable
+mid-interview any more. That is a coherent position but it is a real shift from D-U5, and FR87
+(delete-all, signposted at the panic surface) is now carrying weight it was not designed for.
+
+**`WIPED` is retained but unreachable (D-35).** No edges in, none out, and
+`test_wiped_is_unreachable_while_panic_is_on_hold` asserts it against the *transition table*
+rather than by driving paths — the claim is that no edge exists, which sampling cannot establish.
+
+**The WIPED branches in `resume()` and `end_session()` were deleted rather than left in place
+(D-36),** because unreachable code cannot be tested and untestable branches that handle impossible
+cases rot. D-22's reasoning survives in the decision record and is still enforced: `PANIC` is not
+in `AUTO_RESUME_CAUSES`, so a stray unlock cannot undo it.
+
+**Three purge tests were using `panic_clear()` as a convenient purge trigger.** They are about
+purge completeness, ordering and health reset — not about which control fires it — so they now
+drive `end_session()`, which still purges. Rewritten rather than deleted: the coverage was real.
+
+**OQ-7 is closed unresolved rather than answered.** A control that destroys nothing has no blast
+radius to argue about. The reasoning is preserved in `07-…` §3 so it returns intact if the hold lifts.
+
+**Process note, third instance.** One of my string replacements silently no-op'd again — a blank
+line between the two lines I targeted — and it was the *one* call in that batch where I did not
+write `assert old in t`. The tests caught it, but only because they were failing for an unrelated
+reason at the time. The rule has to be unconditional: every replacement asserts it matched.
+
+288 tests passing; ruff, ruff format and mypy clean.
+
+---
 
 ### Scope change — typed context sources & post-interview report · specified · 2026-08-10
 

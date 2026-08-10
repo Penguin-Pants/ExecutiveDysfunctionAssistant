@@ -78,12 +78,12 @@ def test_cannot_resume_from_running() -> None:
         started().resume()
 
 
-def test_every_state_is_actually_traversed() -> None:
+def test_every_reachable_state_is_actually_traversed() -> None:
     """Observes real transitions via the callback.
 
     An earlier version added PURGING and STOPPING to the set as literals, so it passed
-    even if the manager jumped RUNNING -> WIPED and skipped them entirely — asserting
-    only that the enum members exist.
+    even if the manager skipped both entirely — asserting only that the enum members
+    exist. The set is built from what the callback saw, for that reason.
     """
     seen: list[SessionState] = []
     m = SessionManager(on_state_change=lambda _old, new: seen.append(new))
@@ -94,8 +94,23 @@ def test_every_state_is_actually_traversed() -> None:
     m.panic_clear()
     m.resume()
     m.end_session()
-    assert set(seen) | {SessionState.IDLE} == set(SessionState)
+    reachable = set(SessionState) - {SessionState.WIPED}
+    assert set(seen) | {SessionState.IDLE} == reachable
     assert SessionState.PURGING in seen and SessionState.STOPPING in seen
+
+
+def test_wiped_is_unreachable_while_panic_is_on_hold() -> None:
+    """D-U11. Panic clear pauses instead of wiping, so nothing may enter WIPED.
+
+    Asserted against the transition table rather than by exercising paths, because the
+    point is that *no* path exists — a test that drove a few sequences and saw no WIPED
+    would pass just as happily if one obscure edge still pointed there.
+    """
+    from interview_prep_recall.session.manager import _ALLOWED
+
+    into_wiped = [s.name for s, targets in _ALLOWED.items() if SessionState.WIPED in targets]
+    assert not into_wiped, f"WIPED is reachable from {into_wiped}; panic clear is on hold"
+    assert _ALLOWED[SessionState.WIPED] == frozenset(), "WIPED must have no exits either"
 
 
 # ---------------- pause causes ----------------
@@ -153,40 +168,68 @@ def test_network_is_cancelled_before_local_state_is_cleared() -> None:
     m = SessionManager(hooks=hooks)
     m.request_start()
     m.preflight_result(blocked=False)
-    m.panic_clear()
+    m.end_session()
     assert order[0] == "network", "in-flight work must not outlive the purge"
 
 
-def test_panic_clear_lands_in_wiped_and_resumes_without_preflight() -> None:
-    """D-U5: an unambiguous stop *and* a fast recovery."""
+def test_panic_clear_pauses_and_resumes() -> None:
+    """D-U11: the control stops capture and nothing else."""
     m = started()
     m.panic_clear()
-    assert m.state is SessionState.WIPED
+    assert m.state is SessionState.PAUSED
+    assert m.pause_cause is PauseCause.PANIC
     m.resume()
     assert m.state is SessionState.RUNNING
 
 
-def test_panic_clear_is_not_undone_by_a_machine_event() -> None:
-    """A stray device-return callback must not restart capture the user just stopped."""
+def test_panic_clear_does_not_purge() -> None:
+    """The whole point of D-U11, and the assertion that would have caught a revert.
+
+    Every purge hook is recorded here; none may fire. Asserting only the resulting
+    state would pass just as well if the manager wiped everything and *then* paused.
+    """
+    fired: list[str] = []
+    hooks = PurgeHooks(
+        cancel_network=lambda: fired.append("network"),
+        stop_capture=lambda: fired.append("capture"),
+        zero_audio=lambda: fired.append("audio"),
+        drop_transcript=lambda: fired.append("transcript"),
+        clear_overlay=lambda: fired.append("overlay"),
+    )
+    m = SessionManager(hooks=hooks)
+    m.request_start()
+    m.preflight_result(blocked=False)
+    m.panic_clear()
+    assert fired == [], f"panic clear is on hold and must not purge; ran {fired}"
+    assert m.purge_order == []
+
+
+def test_panic_pause_is_not_undone_by_a_machine_event() -> None:
+    """D-22's reasoning outlives the WIPED state it was written for: a stray unlock or
+    device-return callback must not restart capture the user just stopped."""
     m = started()
     m.panic_clear()
-    with pytest.raises(IllegalTransition, match="undone only"):
+    with pytest.raises(IllegalTransition, match="automatic resume refused"):
         m.resume(automatic=True)
-    assert m.state is SessionState.WIPED
+    assert m.state is SessionState.PAUSED
+    assert m.pause_cause is PauseCause.PANIC
 
 
-def test_wiped_can_end_the_session_instead() -> None:
+def test_panic_clear_can_end_the_session_instead() -> None:
     m = started()
     m.panic_clear()
     m.end_session()
     assert m.state is SessionState.IDLE
 
 
-def test_panic_clear_from_paused() -> None:
+def test_panic_clear_from_a_user_pause_is_refused() -> None:
+    """PAUSED -> PAUSED is not a legal edge, and the existing pause must be preserved
+    rather than silently relabelled PANIC."""
     m = started()
     m.pause(PauseCause.USER)
-    m.panic_clear()
-    assert m.state is SessionState.WIPED
+    with pytest.raises(IllegalTransition):
+        m.panic_clear()
+    assert m.pause_cause is PauseCause.USER
 
 
 def test_a_second_pause_cannot_overwrite_a_deliberate_one() -> None:
@@ -204,7 +247,10 @@ def test_a_second_pause_cannot_overwrite_a_deliberate_one() -> None:
 def test_purge_completes_every_step_even_when_a_hook_throws() -> None:
     """`cancel_network` closing an already-broken socket is the plausible failure, and
     it runs first — aborting there would leave capture running and nothing cleared, so
-    panic clear would fail precisely on the degraded session that needs it."""
+    the purge would fail precisely on the degraded session that needs it.
+
+    Driven through `end_session()` since D-U11: panic clear no longer purges, and this
+    test is about purge completeness rather than about which control triggers it."""
     ran: list[str] = []
 
     def boom() -> None:
@@ -220,10 +266,10 @@ def test_purge_completes_every_step_even_when_a_hook_throws() -> None:
     m = SessionManager(hooks=hooks)
     m.request_start()
     m.preflight_result(blocked=False)
-    m.panic_clear()
+    m.end_session()
 
     assert ran == ["stop_capture", "zero_audio", "drop_transcript", "clear_overlay"]
-    assert m.state is SessionState.WIPED, "a failing hook must not strand the session"
+    assert m.state is SessionState.IDLE, "a failing hook must not strand the session"
     assert m.purge_failures == [("cancel_network", "OSError")]
 
 
@@ -245,7 +291,7 @@ def test_purge_failures_survive_the_ring_clear() -> None:
     m = SessionManager(hooks=hooks)
     m.request_start()
     m.preflight_result(blocked=False)
-    m.panic_clear()
+    m.end_session()
     events = [e.event for e in m.ring.snapshot()]
     assert "purge_hook_failed" in events
 
@@ -253,7 +299,7 @@ def test_purge_failures_survive_the_ring_clear() -> None:
 def test_purge_resets_health() -> None:
     m = started()
     m.monitor.update(loopback=Status.OK, matching=MatchingStatus.LOCAL_ONLY)
-    m.panic_clear()
+    m.end_session()
     assert m.monitor.health == Health()
 
 

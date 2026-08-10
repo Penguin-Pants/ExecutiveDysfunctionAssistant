@@ -161,15 +161,19 @@ FR85 matters because the original acknowledgement was to a weaker statement. Tre
 
 | ID | Requirement | Verification |
 |---|---|---|
-| **FR86** | Panic clear destroys the **in-progress** session's record and any ungenerated or unsaved report. It does **not** touch previously saved sessions, which are user data in the same class as notes (FR58). | Panic-clear mid-session with prior sessions stored; assert the live record is gone and prior sessions are byte-identical. |
-| **FR87** | Because FR86 leaves prior sessions intact, delete-all (FR83) is the documented way to destroy history, and the panic-clear UI says so. | Assert the affordance is present at the panic-clear surface. |
+| ~~**FR86**~~ | **Moot under D-U11.** The panic control no longer destroys anything, so it has no blast radius to scope. Restore this requirement only if the destructive behaviour comes off hold. | — |
+| **FR87** | **FR83's delete-all is the only route to destroying stored sessions**, and — since the panic control no longer destroys anything (D-U11) — the one a user reaching for panic actually needs. The panic surface says so. | Assert the affordance is present at the panic surface. |
 
-This split is the one I am least certain about and it deserves a second opinion before it is built.
-The case for it: someone who hits panic clear during interview #4 and thereby destroys interviews
-#1–3 has suffered a catastrophic, irreversible surprise, and panic clear is deliberately
-single-action with no confirmation (FR60). The case against it: a user hitting panic *means*
-"remove this from my machine", and a narrow reading may not be what they want. FR87 is the
-mitigation — the broader action exists and is signposted at the moment it would be wanted.
+**Resolved by D-U11, not by answering the question.** The user put the destructive panic path on
+hold: the control now only pauses. A control that destroys nothing has no blast radius to argue
+about, so FR86 is moot and OQ-7 is closed unresolved rather than decided.
+
+Worth keeping the reasoning, because it returns intact if the hold lifts: panic clear is
+single-action with no confirmation (FR60), so someone hitting it during interview #4 and thereby
+destroying #1–3 has suffered a catastrophic, irreversible surprise; against that, a user hitting
+panic plausibly means "remove this from my machine". FR87 survives regardless and gets *more*
+important under the hold — with panic now inert, delete-all is the only thing that destroys
+anything, and it is what a user reaching for panic actually wants.
 
 ---
 
@@ -200,7 +204,7 @@ mitigation — the broader action exists and is signposted at the moment it woul
 | **T11.6** Structural separation from the overlay path | FR79 | Renderer rejects report content; no import path |
 | **T11.7** Pre-send confirmation with size, every run, **and ownership of the FR20 egress indicator across the upload** | FR81, FR81a | Decline sends nothing; preference is not remembered; indicator lit for the whole call and dark after, including on failure |
 | **T11.8** Consent re-acknowledgement on first enable | FR85 | Fresh disclosure blocks despite prior FR63 ack |
-| **T11.9** Panic-clear scoping + signposted delete-all | FR86, FR87 | Prior sessions byte-identical after panic |
+| **T11.9** Signposted delete-all at the panic surface | FR87 | Affordance present. *(Scoping half dropped — D-U11 leaves panic with nothing to scope.)* |
 | **T11.10** Report view and export | — | **(Windows / Qt)** |
 
 ### Buildable on Linux now
@@ -235,6 +239,6 @@ failure mode this documentation set exists to prevent.
 
 | ID | Question | Needs |
 |---|---|---|
-| **OQ-7** | Is FR86's split — panic spares prior sessions — the right call? Argued both ways above. | User confirmation before T11.9 |
+| ~~**OQ-7**~~ | **Closed unresolved by D-U11.** Panic no longer destroys anything, so the question has no subject. Reopen with the destructive path. | — |
 | **OQ-8** | Does the report's quality justify a full-transcript call per session at Haiku rates on a 60-minute interview? Cost is bounded and small, but unmeasured. | Measure during T11.4, alongside T9.5 |
 | **OQ-9** | Should the interviewer kind support fetching from a public profile URL, or stay paste-only? Paste-only for now; fetching adds a network path and a scraping dependency to a product whose selling point is that little leaves the device. | Post-M10 |

@@ -34,7 +34,15 @@ class SessionState(Enum):
     STOPPING = auto()
     PURGING = auto()
     WIPED = auto()
-    """Panic-clear resting state (D-U5): capture stopped, buffers gone, devices held."""
+    """**On hold and currently unreachable** (D-U11).
+
+    Was the panic-clear resting state (D-U5): capture stopped, buffers gone, devices
+    held. The user put the destructive panic path on hold — the control now only pauses
+    — so nothing enters this state and nothing leaves it. The member is retained because
+    the state still describes a real behaviour that may return; `_ALLOWED` gives it no
+    edges in either direction, and `test_wiped_is_unreachable_while_panic_is_on_hold`
+    fails if any transition starts pointing here again without that being a decision.
+    """
 
 
 class PauseCause(Enum):
@@ -46,6 +54,15 @@ class PauseCause(Enum):
 
     DEVICE_LOST = auto()
     """FR39b. Auto-resumes when a device returns."""
+
+    PANIC = auto()
+    """D-U11. The panic control, which now pauses rather than wipes.
+
+    A distinct cause rather than a reuse of `USER`: health, diagnostics and the UI must
+    be able to tell "I chose to pause" from "I hit the panic control", and re-enabling
+    the destructive behaviour later should be a change at one branch rather than an
+    archaeology exercise. Never auto-resumes, for the same reason `USER` does not.
+    """
 
 
 AUTO_RESUME_CAUSES = frozenset({PauseCause.LOCK, PauseCause.DEVICE_LOST})
@@ -60,8 +77,9 @@ _ALLOWED: dict[SessionState, frozenset[SessionState]] = {
         {SessionState.RUNNING, SessionState.STOPPING, SessionState.PURGING}
     ),
     SessionState.STOPPING: frozenset({SessionState.PURGING}),
-    SessionState.PURGING: frozenset({SessionState.IDLE, SessionState.WIPED}),
-    SessionState.WIPED: frozenset({SessionState.RUNNING, SessionState.IDLE}),
+    SessionState.PURGING: frozenset({SessionState.IDLE}),
+    # Unreachable while panic clear is on hold (D-U11): no edges in, none out.
+    SessionState.WIPED: frozenset(),
 }
 
 
@@ -205,18 +223,12 @@ class SessionManager:
         A deliberate user pause never auto-resumes — otherwise pausing to think would
         silently undo itself.
         """
-        if self._state is SessionState.WIPED:
-            # A panic clear is a deliberate stop. Letting a machine event undo it —
-            # a device-return callback firing after the user hit the button — would
-            # silently restart capture they just chose to stop.
-            if automatic:
-                raise IllegalTransition(
-                    "automatic resume refused from WIPED: a panic clear is undone only by the user"
-                )
-            if not self._preflight_passed:
-                raise IllegalTransition("cannot resume from WIPED without a passed preflight")
-            self._to(SessionState.RUNNING)
-            return
+        # The WIPED branch that used to live here is gone with D-U11, not disabled in
+        # place: the state is unreachable, so the code could neither run nor be tested,
+        # and untestable branches that "handle" impossible cases rot silently. D-22's
+        # reasoning — a machine event must never undo a deliberate stop — is preserved
+        # in the decision record and is still enforced below, because PANIC is not in
+        # AUTO_RESUME_CAUSES.
         if automatic and self._pause_cause not in AUTO_RESUME_CAUSES:
             raise IllegalTransition(
                 f"automatic resume refused: paused by {self._pause_cause} — "
@@ -226,18 +238,28 @@ class SessionManager:
         self._to(SessionState.RUNNING)
 
     def end_session(self) -> None:
-        if self._state is SessionState.WIPED:
-            self._to(SessionState.IDLE)
-            return
         self._to(SessionState.STOPPING)
         self._purge()
         self._to(SessionState.IDLE)
 
     def panic_clear(self) -> None:
-        """US-F3 / D-U5. Wipes, stops capture, and stays resumable."""
-        self._to(SessionState.PURGING)
-        self._purge()
-        self._to(SessionState.WIPED)
+        """**Pauses only. Does not wipe** (D-U11, superseding D-U5/US-F3).
+
+        The destructive behaviour is on hold at the user's direction: this stops capture
+        and nothing else. Buffers, transcript, overlay content and tracker marks all
+        survive, and `resume()` continues the session where it left off.
+
+        Kept as a distinct entry point rather than folded into `pause()` so the control
+        keeps its own identity — `PauseCause.PANIC` is what makes the difference visible
+        in health and diagnostics, and what makes re-enabling the wipe a change here
+        rather than a search through call sites.
+
+        **The name is now wrong and is kept deliberately.** `app.py` and the UI bind to
+        it, and renaming it to `panic_pause` across an unbuilt UI would make the eventual
+        revert a wider diff than the change being reverted. If the hold becomes permanent,
+        rename it then.
+        """
+        self.pause(PauseCause.PANIC)
 
     # ---------- purge ----------
 
