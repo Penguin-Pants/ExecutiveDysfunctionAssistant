@@ -75,7 +75,7 @@ against the **packaged** build, not just the dev build — PyInstaller changes t
   object for any recorded id, and assert no live `TranscriptEvent`/`Utterance` remains. **Do not
   assert zeroed memory** — unsatisfiable for `str` (design §6), and it would pass vacuously, which
   is the exact defect class this suite exists to catch.
-- **Scope:** SHA-256 every note file before and after panic clear; assert identical (FR58).
+- **Scope:** SHA-256 every note file before and after **session purge**; assert identical (FR58). *(Was "panic clear" — panic no longer purges, D-U11.)*
 - **In-flight:** a mock LLM client that completes 500 ms *after* purge; assert the response is
   discarded and nothing renders (FR59).
 

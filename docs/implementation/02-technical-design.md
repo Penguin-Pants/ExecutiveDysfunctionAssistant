@@ -619,17 +619,18 @@ stateDiagram-v2
     PAUSED --> STOPPING: end session
     STOPPING --> PURGING
     PURGING --> IDLE
-    RUNNING --> PURGING: panic clear (FR59)
-    PAUSED --> PURGING: panic clear
-    PURGING --> WIPED: panic clear path (D-U5)
-    WIPED --> RUNNING: resume (no preflight re-run)
-    WIPED --> IDLE: end session
+    RUNNING --> PAUSED: panic control (FR64a)
+    PAUSED --> PAUSED: panic promotes the cause to PANIC
 ```
 
-**`WIPED` is the panic-clear resting state** (D-U5). Capture is stopped, every buffer is cleared,
-and the overlay is empty — so the app is demonstrably not listening — but devices stay open and
-preflight results stay valid, making resume a ~1 s single click rather than a ~10 s restart.
-`PURGING → IDLE` remains the path for a normal end-of-session.
+`WIPED` and the `PURGING → WIPED` edge are **on hold and unreachable** (D-U11): the panic control
+now only pauses. The state is retained with no edges in either direction; nothing may enter it.
+
+~~**`WIPED` is the panic-clear resting state** (D-U5).~~ **Withdrawn by D-U11.** The panic control
+pauses and does nothing else: capture stops, everything else survives, and `resume()` continues the
+session. Devices stay open and preflight stays valid, so recovery is a single click either way —
+that part of D-U5's rationale survives the hold. `PURGING → IDLE` is now the **only** purge path,
+reached solely by ending the session.
 
 ### Preflight classification *(FR38 — closes review-B A6; T6.5 was untestable without this)*
 

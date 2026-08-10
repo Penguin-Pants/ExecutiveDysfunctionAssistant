@@ -120,6 +120,17 @@ line between the two lines I targeted — and it was the *one* call in that batc
 write `assert old in t`. The tests caught it, but only because they were failing for an unrelated
 reason at the time. The rule has to be unconditional: every replacement asserts it matched.
 
+**PR #10 review round — two findings, both valid.**
+
+| Severity | Finding | Why it mattered |
+|---|---|---|
+| P1 | **Panic from an existing machine pause left the old cause in place.** `PAUSED -> PAUSED` is illegal, so delegating to `pause()` raised and `DEVICE_LOST`/`LOCK` survived — the next device return or unlock would auto-resume capture *after the user pressed panic*. FR64a forbids exactly that. A regression introduced by this commit: the old code accepted panic from `PAUSED`. | Panic now **promotes** the cause without a transition. Promotion only ever removes auto-resume, so it is safe from any cause and needs no per-cause branching. Tested parametrized over **every** cause, so a new auto-resumable cause added later cannot escape it. |
+| P2 | **FR59, design §6 and T6.3 still prescribed the panic-purges-then-WIPEDs behaviour.** Following T6.3 as written would have restored what D-U11 removes. | FR59 **reassigned to session purge rather than deleted** — panic no longer triggers it, but the ordering guarantee is real and `end_session()` is where it lives now. Deleting it would have dropped a live guarantee along with its dead trigger. T6.3 split into purge (T6.3) and panic (T6.3a). |
+
+The P1 is worth dwelling on: my own test asserted panic from a `USER` pause *raises*, and I wrote
+that test believing the raise was correct. It is defensible for `USER` and actively unsafe for the
+two machine causes, and testing the one benign case is what made the hole invisible.
+
 288 tests passing; ruff, ruff format and mypy clean.
 
 ---

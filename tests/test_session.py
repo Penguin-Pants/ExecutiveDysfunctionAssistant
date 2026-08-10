@@ -18,6 +18,7 @@ from interview_prep_recall.session.health import (
     Status,
 )
 from interview_prep_recall.session.manager import (
+    AUTO_RESUME_CAUSES,
     IllegalTransition,
     PauseCause,
     PurgeHooks,
@@ -222,14 +223,35 @@ def test_panic_clear_can_end_the_session_instead() -> None:
     assert m.state is SessionState.IDLE
 
 
-def test_panic_clear_from_a_user_pause_is_refused() -> None:
-    """PAUSED -> PAUSED is not a legal edge, and the existing pause must be preserved
-    rather than silently relabelled PANIC."""
+@pytest.mark.parametrize("cause", list(PauseCause))
+def test_panic_from_any_existing_pause_promotes_the_cause(cause) -> None:  # type: ignore[no-untyped-def]
+    """The regression this nearly shipped with.
+
+    `PAUSED -> PAUSED` is illegal, so delegating straight to `pause()` raised and left
+    the old cause in place. With `LOCK` or `DEVICE_LOST` that is a real safety hole:
+    the next unlock or device return auto-resumes capture *after the user pressed
+    panic*, which FR64a forbids outright.
+
+    Parametrized over every cause rather than the two dangerous ones, so a new
+    auto-resumable cause added later cannot quietly escape the promotion.
+    """
     m = started()
-    m.pause(PauseCause.USER)
-    with pytest.raises(IllegalTransition):
-        m.panic_clear()
-    assert m.pause_cause is PauseCause.USER
+    m.pause(cause)
+    m.panic_clear()
+    assert m.state is SessionState.PAUSED
+    assert m.pause_cause is PauseCause.PANIC
+
+
+@pytest.mark.parametrize("cause", sorted(AUTO_RESUME_CAUSES, key=lambda c: c.name))
+def test_panic_defeats_auto_resume_from_a_machine_pause(cause) -> None:  # type: ignore[no-untyped-def]
+    """Asserts the consequence, not just the field. Checking `pause_cause` alone would
+    pass even if `AUTO_RESUME_CAUSES` later gained `PANIC`."""
+    m = started()
+    m.pause(cause)
+    m.panic_clear()
+    with pytest.raises(IllegalTransition, match="automatic resume refused"):
+        m.resume(automatic=True)
+    assert m.state is SessionState.PAUSED
 
 
 def test_a_second_pause_cannot_overwrite_a_deliberate_one() -> None:

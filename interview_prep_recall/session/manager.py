@@ -258,7 +258,18 @@ class SessionManager:
         it, and renaming it to `panic_pause` across an unbuilt UI would make the eventual
         revert a wider diff than the change being reverted. If the hold becomes permanent,
         rename it then.
+
+        **From an existing pause this promotes the cause instead of transitioning.**
+        `PAUSED -> PAUSED` is not a legal edge, so plain delegation would raise and leave
+        the old cause in place — and if that cause was `LOCK` or `DEVICE_LOST`, the next
+        unlock or device return would auto-resume capture *after the user pressed panic*.
+        Promotion only ever removes auto-resume, never adds it, so it is safe from any
+        pause cause and needs no special-casing per cause.
         """
+        if self._state is SessionState.PAUSED:
+            self._pause_cause = PauseCause.PANIC
+            self.ring.record("session_paused", cause=PauseCause.PANIC.name)
+            return
         self.pause(PauseCause.PANIC)
 
     # ---------- purge ----------

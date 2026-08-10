@@ -64,12 +64,13 @@ TS§ = [test strategy](./04-test-strategy.md) section
 | FR56 | US-G2 | D§1 | T7.1 | **Loopback-must-not-mark**, with a positive control |
 | FR57 | D-8 | D§1, **D§5a** | T7.2 (blocked), **T7.3 done** | Both directions of arrival; interviewer span proven still to match |
 | FR58 | Review A2 | **D§6** | T6.3 | SHA before/after |
-| FR59 | Review A2 | D§6 | T6.3 | Late-response test |
+| FR59 | Review A2 | D§6 | T6.3 | Late-response test, **on session end** (reassigned by D-U11) |
 | FR60 | New (DI-3) | D§4 | T3.7, T3.8 | Unit |
 | FR61 | Review RB-2 | D§9 | T6.6 | Kill worker × 2 |
 | FR62 | Review RB-2 | D§9 | T6.6 | Manual lock/unlock |
 | FR63 | Review A19 | D§4 | T9.1 | Unit |
-| FR64 | D-U5 | **D§6** | T6.3 | Resume-after-panic timing |
+| ~~FR64~~ | D-U5 | **D§6** | ~~T6.3~~ | *Superseded by FR64a (D-U11)* |
+| FR64a | D-U11 | **D§6** | T6.3a | Panic pauses; no purge hook fires |
 | NFR1 | PRD §7 | **D§9a** | **T2.4** | Per-stage latency harness |
 | NFR2 | PRD §7 | D§10 | T9.4 | CPU-only run, CUDA disabled |
 | NFR7 | D-U6 | D§10 | T2.4 | Recorded separately from the AS-1 gate |
