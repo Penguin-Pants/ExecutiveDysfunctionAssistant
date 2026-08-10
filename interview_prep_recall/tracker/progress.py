@@ -26,7 +26,7 @@ import numpy as np
 
 from interview_prep_recall.diagnostics.ring import DiagnosticRing
 from interview_prep_recall.notes.index import Embedder, EmbeddingIndex
-from interview_prep_recall.notes.model import NoteSet
+from interview_prep_recall.notes.model import ContextSet
 from interview_prep_recall.stt.assembler import Utterance
 
 TAU_TRACK = 0.60
@@ -115,7 +115,7 @@ class ProgressTracker:
     glanceable list is for.
     """
 
-    note_set: NoteSet
+    note_set: ContextSet
     index: EmbeddingIndex
     embedder: Embedder
     tau_track: float = TAU_TRACK

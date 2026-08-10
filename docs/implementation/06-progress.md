@@ -22,11 +22,11 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | **M7 — Progress tracker** | 🟢 T7.1 + T7.3 complete | Marking and text-domain echo suppression done. T7.2 needs paired audio fixtures; T7.4 is Qt |
 | **M8 — Cloud STT backends** | 🟢 T8.1–T8.5 complete | Deepgram, ElevenLabs, fallback, egress. Protocols unverified against a live endpoint (**AS-8**) |
 | **M9 — Packaging & first run** | ⛔ Blocked | T9.1–T9.3 are Qt; T9.4 is PyInstaller on Windows; T9.5 needs live vendor docs |
-| **M10 — Typed context sources** | 📋 Specified | Five kinds (company, role, interviewer, prep, resume). Additive. T10.1–T10.6 buildable now |
+| **M10 — Typed context sources** | 🟢 T10.1–T10.6 + migration complete | Five kinds, per-kind caps and thresholds, schema v1→v2 migration. T10.7 is Qt |
 | **M11 — Post-interview report** | 📋 Specified | Reverses a v1 non-goal and rewrites FR16. Depends on M10. Most tasks buildable now |
 
-**Next action: M10, tasks T10.1–T10.6.** The user requested two new features on 2026-08-10 and
-they are specified in `07-context-sources-and-report.md`. Most of both is platform-free.
+**Next action: M11, tasks T11.1 and T11.3–T11.9.** M10's platform-free work is done. M11 is the
+post-interview report; OQ-7 is closed (D-U11 made panic non-destructive), so nothing blocks it.
 
 The previous version of this line said nothing further was buildable on Linux. That was true of
 the *then-known* scope and is now moot — but note it had already been wrong twice on its own terms
@@ -83,6 +83,81 @@ conservative choice, just a broken one.
 ---
 
 ## Log
+
+### M10 — Typed context sources · T10.1–T10.6 + migration complete · 2026-08-10
+
+**Delivered** — 32 new tests, 325 total. `ruff`, `ruff format`, `mypy` clean.
+
+| Task | What exists |
+|---|---|
+| T10.1 | `SourceKind` on the chunk, immutable after creation, defaulting to `PREP` |
+| T10.2 | `NoteSet` → `ContextSet` with `by_kind` / `kinds_present` / `remove_kind` |
+| **T10.2a** | **Schema v1 → v2 migration**: every v1 note becomes `PREP`, ids preserved |
+| T10.3 | `add_source()` — per-kind import that replaces that kind and leaves the others alone |
+| T10.4 | Per-kind candidate cap (2) and per-kind τ offsets from the single control |
+| T10.5 | Kind labels in the stage-2 prompt, and the kinds explained in the system prompt |
+| T10.6 | `track_progress` refused on any kind but `PREP`/`RESUME` |
+
+**A flat chunk list, not five nested documents.** "The job description" is exactly "every chunk of
+kind `ROLE`", so a separate per-kind container would be a second source of truth about membership
+and the two would eventually disagree. `remove_kind` filters rather than rebuilding, so survivors
+keep their ids and their cached vectors.
+
+**The per-kind cap is on supply, not rank.** A long job description is the biggest document most
+users import, so on chunk count alone an unweighted top-5 fills with role requirements and crowds
+out the prep notes the product exists to surface. The best two of a kind still compete on score
+with everything else. `test_no_kind_supplies_more_than_the_cap` asserts **both** halves — that no
+kind exceeds the cap *and* that prep still appears — because the first alone would pass against an
+implementation that returned nothing.
+
+**τ offsets, never absolutes.** Prep and resume sit at the user's control exactly; the three
+reference kinds sit 0.05 below, because HR prose will not match a spoken question as tightly as a
+note written in the user's own voice. Absolutes would stop tracking the control and silently ignore
+the sensitivity slider — the mistake design §5 already had to correct once for `tau_degraded`.
+`test_reference_kinds_sit_below_the_users_own_words` pins the *direction*, since a sign flip would
+pass every other test here while quietly burying the user's prep under the job description.
+
+**Decisions made while implementing**
+
+> **D-37 — FR70 is enforced by rejection in code and by coercion on load.** Constructing a note
+> with `track_progress` on an untrackable kind raises; that is a bug at the call site. On the load
+> path the same rule would be a disaster: `ContextSet.from_dict` turns a `ValueError` into
+> `NoteSetCorruptError`, so **one stray flag on one chunk would make the user's entire note set
+> unloadable** and send them to backup recovery. FR70's purpose is that an untrackable kind never
+> reaches the checklist; dropping the flag achieves exactly that, refusing the file achieves it at
+> the cost of everything else in the file.
+>
+> This is silent-fixing, which this codebase usually distrusts. The difference is that the safe
+> interpretation is unambiguous and the alternative destroys access to data.
+
+> **D-38 — the prefilter walks the full ranked list, so it needs its own early exit.** Per-kind
+> thresholds killed the single `break` on "below τ_floor". Restored as a break below
+> `min(tau_for(k))`, which is sound because the list is sorted descending and no kind's floor is
+> lower. The note lookup also moved from `note_set.get` (a linear scan) to a dict — inside a loop
+> that can now walk the whole corpus, the scan made the prefilter O(n²) against NFR's 50 ms budget
+> for 200 notes.
+
+**Review round, before push.** Three findings, all mine, all fixed above: the FR70 load-path
+rejection (D-37), the O(n²) lookup and the missing early exit (D-38). The first is the one that
+mattered — it was a new way for a nearly-valid file to cost the user their notes, in a milestone
+whose headline feature is *not* doing that.
+
+**PR #12 review round — three findings, all valid, all fixed.**
+
+| Severity | Finding | Why it mattered |
+|---|---|---|
+| P1 | **`__setattr__` committed the value before validating it.** A caller setting `track_progress` on a role chunk and catching the `ValueError` kept a tracked role chunk: `tracked()` returned it and the checklist would tick off a job requirement never spoken — **FR70 violated by the code written to enforce it.** | Validate before assignment. My own test asserted the raise and never checked the state afterwards, so it passed against exactly this bug. Same defect class as always, in mutation form. |
+| P2 | **Migration status was invisible to callers.** `load()` returned a plain `ContextSet`, so nothing could distinguish an upgraded file from an ordinary one — making FR73c's notice *unimplementable* rather than merely unbuilt. | `ContextSet.migrated_from`, excluded from `to_dict` and from equality. Provenance of one load, not a property of the data; persisting it would make every later load claim to have been migrated. |
+| P2 | **`add_source` removed the old source before validating the new one.** One non-verbatim bullet destroyed the job description the caller was updating and left a partial replacement behind. | Build and verify first, then swap. |
+
+**Deferred, named at task level**
+
+| Item | Why |
+|---|---|
+| **T10.7** per-kind overlay marking | Qt. §9b tokens are specified |
+| FR73b's SIGKILL-mid-migration run | The migration reaches disk only through the existing atomic write path, which already has the ×10 SIGKILL test. A migration-specific run belongs with the Windows NTFS pass |
+
+---
 
 ### Panic clear put on hold — now pauses only · built · 2026-08-10
 

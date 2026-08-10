@@ -21,7 +21,7 @@ import re
 from dataclasses import dataclass
 from enum import StrEnum
 
-from interview_prep_recall.notes.model import Note, NoteSet
+from interview_prep_recall.notes.model import ContextSet, Note, SourceKind
 
 MAX_BULLETS = 3
 """FR11 renders at most three."""
@@ -165,11 +165,48 @@ def import_text(
     return ImportResult(strategy=chosen, proposals=_CHUNKERS[chosen](text))
 
 
-def build_note_set(name: str, proposals: list[ProposedNote]) -> NoteSet:
-    """Materialise reviewed proposals into a NoteSet (post-FR2 confirmation)."""
-    note_set = NoteSet(
+def build_context_set(
+    name: str, proposals: list[ProposedNote], kind: SourceKind = SourceKind.PREP
+) -> ContextSet:
+    """Materialise reviewed proposals into a ContextSet (post-FR2 confirmation)."""
+    context_set = ContextSet(
         name=name,
-        notes=[Note(headline=p.headline, body=p.body, bullets=list(p.bullets)) for p in proposals],
+        notes=[
+            Note(headline=p.headline, body=p.body, bullets=list(p.bullets), kind=kind)
+            for p in proposals
+        ],
     )
-    note_set.verify()
-    return note_set
+    context_set.verify()
+    return context_set
+
+
+def add_source(context_set: ContextSet, proposals: list[ProposedNote], kind: SourceKind) -> int:
+    """Import one source into an existing set, replacing whatever that kind held (FR66).
+
+    Replace rather than append: re-importing a job description means *this* is the job
+    description now, and appending would leave the superseded version competing for the
+    same enum slots as the new one, with no way for the user to tell which won.
+
+    The other four kinds are untouched — FR66's actual requirement, and the reason this
+    filters rather than rebuilding the set, so survivors keep their ids and vectors.
+    """
+    # Built and verified **before** anything is removed. Removing first and validating
+    # last means a single non-verbatim bullet destroys the existing source and leaves a
+    # partial replacement behind — the caller catches an exception and has already lost
+    # the job description it was trying to update.
+    replacements = [
+        Note(
+            headline=proposal.headline,
+            body=proposal.body,
+            bullets=list(proposal.bullets),
+            kind=kind,
+        )
+        for proposal in proposals
+    ]
+    for note in replacements:
+        note.verify_bullets_verbatim()
+
+    context_set.remove_kind(kind)
+    for note in replacements:
+        context_set.add(note)
+    return len(replacements)

@@ -35,11 +35,16 @@ purge reaches the screen" would rest solely on the gate, with an unbounded windo
 """
 
 SYSTEM_PROMPT = (
-    "You match a live interview question to the candidate's own prepared notes. "
-    "Select the single note that answers what was just asked. If none of them "
+    "You match a live interview question to the candidate's own prepared material. "
+    "Each option is labelled with its source: prep (a point they planned to make), "
+    "resume (their own experience), role (the job description), company (facts about "
+    "the employer), interviewer (about the person asking). "
+    "Select the single option that answers what was just asked. If none of them "
     'genuinely addresses the question, select "none". Prefer "none" over a weak '
     "match — a wrong note shown mid-interview is worse than no note."
 )
+"""FR71. The kinds are named here, not just stamped on each line, because a bare
+`kind=role` tells the model nothing about what role *means* in this product."""
 
 
 class SelectorProtocolError(Exception):
@@ -86,13 +91,16 @@ def build_user_message(utterance: Utterance, candidates: list[Candidate]) -> str
         "The interviewer just asked:",
         utterance.text,
         "",
-        "Candidate prepared notes:",
+        "Candidate material:",
     ]
     for candidate in candidates:
         tags = ", ".join(candidate.tags)
-        # headline and tags only — never body. Bodies are prepared *answers*; including
-        # them costs hundreds of tokens and biases selection toward long notes.
-        lines.append(f"- id={candidate.note_id} | {candidate.headline} | tags: {tags}")
+        # headline, kind and tags only — never body. Bodies are prepared *answers*;
+        # including them costs hundreds of tokens and biases selection toward long notes.
+        lines.append(
+            f"- id={candidate.note_id} | [{candidate.kind.value}] "
+            f"{candidate.headline} | tags: {tags}"
+        )
     return "\n".join(lines)
 
 

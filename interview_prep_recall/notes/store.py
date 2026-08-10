@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from interview_prep_recall.notes.model import SCHEMA_VERSION, NoteSet
+from interview_prep_recall.notes.model import SCHEMA_VERSION, ContextSet
 
 BACKUP_DEPTH = 5
 """FR29."""
@@ -61,11 +61,45 @@ class NoteSetCorruptError(NotesStoreError):
 
 Migration = Callable[[dict[str, Any]], dict[str, Any]]
 
-MIGRATIONS: dict[int, Migration] = {}
+
+def _migrate_v1_to_v2(data: dict[str, Any]) -> dict[str, Any]:
+    """v1 had no `SourceKind`. Every v1 note becomes `PREP` (FR73a, D-33).
+
+    `PREP` is the only mapping that preserves behaviour: v1 notes were trackable talking
+    points, and prep is one of the two kinds FR70 still permits tracking on. Any other
+    target would silently switch off the progress tracker for every existing user.
+
+    **IDs are carried through untouched**, which is the load-bearing part. The embedding
+    cache is keyed on note id (FR34), so minting new ones here would silently invalidate
+    every stored vector and force a full re-embed that looks like a performance bug
+    rather than a migration.
+
+    Notes that already carry a `kind` are left alone rather than overwritten — a v1 file
+    should not have one, but a hand-edited or partially-migrated file might, and
+    clobbering it would be a lossy read of exactly the sort `SchemaTooNewError` exists
+    to refuse.
+    """
+    notes = data.get("notes")
+    if not isinstance(notes, list):
+        # Not this function's job to diagnose. Leave it for `ContextSet.from_dict`,
+        # which raises the corruption that routes to backup recovery (FR44). Silently
+        # substituting [] here would make a damaged file migrate "successfully" into an
+        # empty note set — the failure FR44 exists to prevent, one layer earlier.
+        return data
+    migrated = dict(data)
+    migrated["notes"] = [
+        note if not isinstance(note, dict) or "kind" in note else {**note, "kind": "prep"}
+        for note in notes
+    ]
+    migrated["schema_version"] = 2
+    return migrated
+
+
+MIGRATIONS: dict[int, Migration] = {1: _migrate_v1_to_v2}
 """Forward-only `v{n} -> v{n+1}`, applied in sequence on load (design §4).
 
-Empty in v1. The hook exists from the first release because retrofitting a migration
-path onto a format already in users' hands is how data gets lost.
+The hook existed from the first release because retrofitting a migration path onto a
+format already in users' hands is how data gets lost. v1 -> v2 is the first user of it.
 """
 
 
@@ -114,7 +148,7 @@ class NotesStore:
 
     # ---------- write ----------
 
-    def save(self, note_set: NoteSet) -> Path:
+    def save(self, note_set: ContextSet) -> Path:
         note_set.verify()  # FR42: no non-verbatim bullet ever reaches disk
         target = self.path_for(note_set.id)
         payload = json.dumps(note_set.to_dict(), indent=2, ensure_ascii=False)
@@ -141,10 +175,10 @@ class NotesStore:
 
     # ---------- read ----------
 
-    def load(self, noteset_id: str) -> NoteSet:
+    def load(self, noteset_id: str) -> ContextSet:
         return self._load_path(self.path_for(noteset_id))
 
-    def _load_path(self, path: Path) -> NoteSet:
+    def _load_path(self, path: Path) -> ContextSet:
         if not path.exists():
             raise NoteSetCorruptError(f"{path.name} is missing")
         try:
@@ -156,7 +190,7 @@ class NotesStore:
         return self._from_versioned(data, path.name)
 
     @staticmethod
-    def _from_versioned(data: dict[str, Any], label: str) -> NoteSet:
+    def _from_versioned(data: dict[str, Any], label: str) -> ContextSet:
         version = data.get("schema_version")
         if not isinstance(version, int):
             raise NoteSetCorruptError(f"{label} has no usable schema_version")
@@ -166,6 +200,7 @@ class NotesStore:
                 f"{SCHEMA_VERSION}. Refusing to parse — upgrade the app rather than "
                 "risk a lossy read. The file has not been modified."
             )
+        loaded_as = version
         while version < SCHEMA_VERSION:
             migrate = MIGRATIONS.get(version)
             if migrate is None:
@@ -173,9 +208,15 @@ class NotesStore:
             data = migrate(data)
             version += 1
         try:
-            return NoteSet.from_dict(data)
+            context_set = ContextSet.from_dict(data)
         except (KeyError, TypeError, ValueError) as exc:
             raise NoteSetCorruptError(f"{label} is structurally invalid: {exc}") from exc
+        # FR73c: the migration is stated to the user, not silent. Without this the load
+        # returns a plain ContextSet and no caller can tell an upgraded file from an
+        # ordinary one, which makes the notice unimplementable rather than merely unbuilt.
+        if loaded_as < SCHEMA_VERSION:
+            context_set.migrated_from = loaded_as
+        return context_set
 
     # ---------- recovery (FR29, FR44) ----------
 
@@ -193,7 +234,7 @@ class NotesStore:
             infos.append(BackupInfo(path=path, generation=generation, readable=readable))
         return infos
 
-    def restore_latest_readable(self, noteset_id: str) -> NoteSet:
+    def restore_latest_readable(self, noteset_id: str) -> ContextSet:
         """Fall through generations until one parses (T3.9).
 
         A corrupt backup is not a dead end — that is the whole point of keeping five.
@@ -210,7 +251,7 @@ class NotesStore:
             f"no readable backup for {noteset_id} ({'; '.join(errors) or 'none exist'})"
         )
 
-    def load_or_recover(self, noteset_id: str) -> tuple[NoteSet, bool]:
+    def load_or_recover(self, noteset_id: str) -> tuple[ContextSet, bool]:
         """Returns (note_set, recovered). Never silently starts empty (FR44)."""
         try:
             return self.load(noteset_id), False
@@ -221,7 +262,7 @@ class NotesStore:
 
     # ---------- export / import (FR30) ----------
 
-    def export_bundle(self, note_set: NoteSet, dest_dir: Path) -> tuple[Path, Path]:
+    def export_bundle(self, note_set: ContextSet, dest_dir: Path) -> tuple[Path, Path]:
         """Write a `.json` + human-readable `.md` pair to a user-chosen directory.
 
         Deliberately outside the FR16 allowlist: this is the user exercising FR30, not
@@ -252,6 +293,6 @@ class NotesStore:
         md_path.write_text("\n".join(lines), encoding="utf-8")
         return json_path, md_path
 
-    def import_bundle(self, json_path: Path) -> NoteSet:
+    def import_bundle(self, json_path: Path) -> ContextSet:
         """Lossless inverse of `export_bundle`'s JSON half (FR30)."""
         return self._load_path(Path(json_path))

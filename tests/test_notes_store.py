@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from interview_prep_recall.notes.model import SCHEMA_VERSION, Note, NoteSet
+from interview_prep_recall.notes.model import SCHEMA_VERSION, ContextSet, Note
 from interview_prep_recall.notes.store import (
     BACKUP_DEPTH,
     NoteSetCorruptError,
@@ -20,8 +20,8 @@ from interview_prep_recall.notes.store import (
 )
 
 
-def make_set(name: str = "Acme — Senior PM", n: int = 3) -> NoteSet:
-    return NoteSet(
+def make_set(name: str = "Acme — Senior PM", n: int = 3) -> ContextSet:
+    return ContextSet(
         name=name,
         notes=[
             Note(
@@ -152,10 +152,10 @@ def test_survives_hard_kill_during_save(tmp_path: Path) -> None:
         sys.path.insert(0, {str(Path.cwd())!r})
         from pathlib import Path
         from interview_prep_recall.notes.store import NotesStore
-        from interview_prep_recall.notes.model import Note, NoteSet
+        from interview_prep_recall.notes.model import Note, ContextSet
 
         store = NotesStore(Path({str(root)!r}))
-        ns = NoteSet(name="kill-test", id="11111111-2222-3333-4444-555555555555",
+        ns = ContextSet(name="kill-test", id="11111111-2222-3333-4444-555555555555",
                      notes=[Note(headline="q %d?" % i, body="b") for i in range(50)])
         store.save(ns)
         threading.Timer(0.02, lambda: os.kill(os.getpid(), 9)).start()
@@ -313,7 +313,7 @@ def test_non_uuid_noteset_id_is_rejected() -> None:
     from interview_prep_recall.notes.model import InvalidIdError
 
     with pytest.raises(InvalidIdError):
-        NoteSet(name="evil", id="../../escaped")
+        ContextSet(name="evil", id="../../escaped")
 
 
 def test_traversal_id_in_an_imported_bundle_cannot_escape(app_data: Path, tmp_path: Path) -> None:
