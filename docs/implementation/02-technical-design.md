@@ -1033,5 +1033,9 @@ works.
 ## 11. Explicitly Out of Scope for v1
 
 Acoustic echo cancellation (D-8 warns instead) · true diarization (AS-5) · `.docx` import (FR1b) ·
-local LLM matching via Ollama (OQ-4) · multi-monitor-aware default placement beyond FR55 recovery ·
-any post-call artifact, per the PRD's non-goals.
+local LLM matching via Ollama (OQ-4) · multi-monitor-aware default placement beyond FR55 recovery.
+
+> ~~any post-call artifact, per the PRD's non-goals~~ — **reversed by D-U8/D-U9.** The
+> post-interview report is specified in `07-context-sources-and-report.md` as M11. It is a
+> deliberate reversal of a stated non-goal, not an oversight, and it carries the privacy
+> consequences recorded in that document's §0.
