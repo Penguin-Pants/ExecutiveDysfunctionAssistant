@@ -109,6 +109,13 @@ def test_untrackable_kinds_cannot_be_talking_points(kind) -> None:  # type: igno
     note = Note(headline="q", kind=kind)
     with pytest.raises(ValueError, match="FR70"):
         note.track_progress = True
+    # The state after the raise, not just the raise. Validating *after* assignment
+    # leaves the rejected value committed, so a caller that catches the error keeps a
+    # tracked role chunk and the checklist ticks off a requirement never spoken. The
+    # first version of this test asserted only the exception and passed against exactly
+    # that bug.
+    assert note.track_progress is False
+    assert ContextSet(name="s", notes=[note]).tracked() == []
 
 
 @pytest.mark.parametrize("kind", sorted(TRACKABLE_KINDS, key=lambda k: k.value))
@@ -431,3 +438,64 @@ def test_the_prefilter_stops_once_no_kind_can_clear(app_data) -> None:  # type: 
     began = time.perf_counter()
     assert pf.candidates("QUERY") == []
     assert (time.perf_counter() - began) < 0.05
+
+
+def test_a_failed_source_import_does_not_destroy_the_existing_one() -> None:
+    """`add_source` builds and verifies before it removes.
+
+    Removing first and validating last means one non-verbatim bullet destroys the job
+    description the caller was trying to update, and leaves a partial replacement behind.
+    """
+    from interview_prep_recall.notes.importer import ProposedNote
+
+    cs = ContextSet(name="Acme", notes=[Note(headline="my prep", kind=SourceKind.PREP)])
+    add_source(cs, import_text("Original role duties.").proposals, SourceKind.ROLE)
+    before = {n.id: n.headline for n in cs.notes}
+
+    bad = [
+        ProposedNote(
+            headline="New role",
+            body="Real body.",
+            bullets=["NOT IN THE TEXT"],
+            needs_headline_review=False,
+            source_line=1,
+        )
+    ]
+    with pytest.raises(ValueError):
+        add_source(cs, bad, SourceKind.ROLE)
+
+    assert {n.id: n.headline for n in cs.notes} == before, (
+        "the existing source was destroyed by an import that failed validation"
+    )
+
+
+def test_a_migrated_load_is_visible_to_callers(app_data) -> None:  # type: ignore[no-untyped-def]
+    """FR73c's notice half. Without published status a caller cannot tell an upgraded
+    file from an ordinary one, which makes the notice unimplementable rather than
+    merely unbuilt."""
+    store = NotesStore(app_data)
+    noteset_id = new_id()
+    store.path_for(noteset_id).write_text(json.dumps(_v1_payload(noteset_id, new_id())))
+
+    assert store.load(noteset_id).migrated_from == 1
+
+
+def test_an_ordinary_load_reports_no_migration(app_data) -> None:  # type: ignore[no-untyped-def]
+    """Positive control: the flag must not be set on every load."""
+    store = NotesStore(app_data)
+    cs = ContextSet(name="Acme", notes=[Note(headline="h")])
+    store.save(cs)
+    assert store.load(cs.id).migrated_from is None
+
+
+def test_migration_status_is_not_persisted(app_data) -> None:  # type: ignore[no-untyped-def]
+    """It is provenance of one load, not a property of the data. Saving it back would
+    make every later load claim to have been migrated."""
+    store = NotesStore(app_data)
+    noteset_id = new_id()
+    store.path_for(noteset_id).write_text(json.dumps(_v1_payload(noteset_id, new_id())))
+
+    store.save(store.load(noteset_id))
+
+    assert "migrated_from" not in store.path_for(noteset_id).read_text()
+    assert store.load(noteset_id).migrated_from is None

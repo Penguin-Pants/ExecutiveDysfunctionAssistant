@@ -86,7 +86,7 @@ conservative choice, just a broken one.
 
 ### M10 — Typed context sources · T10.1–T10.6 + migration complete · 2026-08-10
 
-**Delivered** — 28 new tests, 321 total. `ruff`, `ruff format`, `mypy` clean.
+**Delivered** — 32 new tests, 325 total. `ruff`, `ruff format`, `mypy` clean.
 
 | Task | What exists |
 |---|---|
@@ -141,6 +141,14 @@ pass every other test here while quietly burying the user's prep under the job d
 rejection (D-37), the O(n²) lookup and the missing early exit (D-38). The first is the one that
 mattered — it was a new way for a nearly-valid file to cost the user their notes, in a milestone
 whose headline feature is *not* doing that.
+
+**PR #12 review round — three findings, all valid, all fixed.**
+
+| Severity | Finding | Why it mattered |
+|---|---|---|
+| P1 | **`__setattr__` committed the value before validating it.** A caller setting `track_progress` on a role chunk and catching the `ValueError` kept a tracked role chunk: `tracked()` returned it and the checklist would tick off a job requirement never spoken — **FR70 violated by the code written to enforce it.** | Validate before assignment. My own test asserted the raise and never checked the state afterwards, so it passed against exactly this bug. Same defect class as always, in mutation form. |
+| P2 | **Migration status was invisible to callers.** `load()` returned a plain `ContextSet`, so nothing could distinguish an upgraded file from an ordinary one — making FR73c's notice *unimplementable* rather than merely unbuilt. | `ContextSet.migrated_from`, excluded from `to_dict` and from equality. Provenance of one load, not a property of the data; persisting it would make every later load claim to have been migrated. |
+| P2 | **`add_source` removed the old source before validating the new one.** One non-verbatim bullet destroyed the job description the caller was updating and left a partial replacement behind. | Build and verify first, then swap. |
 
 **Deferred, named at task level**
 

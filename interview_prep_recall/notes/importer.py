@@ -190,15 +190,23 @@ def add_source(context_set: ContextSet, proposals: list[ProposedNote], kind: Sou
     The other four kinds are untouched — FR66's actual requirement, and the reason this
     filters rather than rebuilding the set, so survivors keep their ids and vectors.
     """
-    context_set.remove_kind(kind)
-    for proposal in proposals:
-        context_set.add(
-            Note(
-                headline=proposal.headline,
-                body=proposal.body,
-                bullets=list(proposal.bullets),
-                kind=kind,
-            )
+    # Built and verified **before** anything is removed. Removing first and validating
+    # last means a single non-verbatim bullet destroys the existing source and leaves a
+    # partial replacement behind — the caller catches an exception and has already lost
+    # the job description it was trying to update.
+    replacements = [
+        Note(
+            headline=proposal.headline,
+            body=proposal.body,
+            bullets=list(proposal.bullets),
+            kind=kind,
         )
-    context_set.verify()
-    return len(proposals)
+        for proposal in proposals
+    ]
+    for note in replacements:
+        note.verify_bullets_verbatim()
+
+    context_set.remove_kind(kind)
+    for note in replacements:
+        context_set.add(note)
+    return len(replacements)

@@ -200,6 +200,7 @@ class NotesStore:
                 f"{SCHEMA_VERSION}. Refusing to parse — upgrade the app rather than "
                 "risk a lossy read. The file has not been modified."
             )
+        loaded_as = version
         while version < SCHEMA_VERSION:
             migrate = MIGRATIONS.get(version)
             if migrate is None:
@@ -207,9 +208,15 @@ class NotesStore:
             data = migrate(data)
             version += 1
         try:
-            return ContextSet.from_dict(data)
+            context_set = ContextSet.from_dict(data)
         except (KeyError, TypeError, ValueError) as exc:
             raise NoteSetCorruptError(f"{label} is structurally invalid: {exc}") from exc
+        # FR73c: the migration is stated to the user, not silent. Without this the load
+        # returns a plain ContextSet and no caller can tell an upgraded file from an
+        # ordinary one, which makes the notice unimplementable rather than merely unbuilt.
+        if loaded_as < SCHEMA_VERSION:
+            context_set.migrated_from = loaded_as
+        return context_set
 
     # ---------- recovery (FR29, FR44) ----------
 

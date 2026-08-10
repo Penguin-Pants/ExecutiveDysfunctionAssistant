@@ -138,14 +138,23 @@ class Note:
         would move the chunk between all three regimes while its embedding — keyed on
         the note id — stayed exactly where it was.
         """
-        if name == "kind" and getattr(self, "_kind_locked", False):
+        locked = getattr(self, "_kind_locked", False)
+        if name == "kind" and locked:
             raise ValueError(
                 f"kind is immutable (FR67); reclassifying note {self.id} means deleting "
                 "and re-importing it, so the index is rebuilt with it"
             )
+        # Validated **before** the assignment commits. Assigning first and checking
+        # after leaves the rejected value in place for any caller that catches the
+        # error: the note stays tracked, `tracked()` returns it, and the checklist ticks
+        # off a job-description requirement the user never spoke — FR70 violated by the
+        # code written to enforce it.
+        if name == "track_progress" and locked and value and self.kind not in TRACKABLE_KINDS:
+            raise ValueError(
+                f"track_progress is not permitted on a {self.kind.value} chunk (FR70) — "
+                "only prep notes and resume entries are talking points you cover by speaking"
+            )
         object.__setattr__(self, name, value)
-        if name in ("track_progress", "kind") and getattr(self, "_kind_locked", False):
-            self._assert_trackable()
 
     @property
     def embed_text(self) -> str:
@@ -224,6 +233,16 @@ class ContextSet:
     id: str = field(default_factory=new_id)
     created_at: str = field(default_factory=_now)
     updated_at: str = field(default_factory=_now)
+
+    migrated_from: int | None = field(default=None, compare=False)
+    """Schema version this set was upgraded from on load, or None (FR73c).
+
+    Provenance of *this load*, not of the set, so it is deliberately excluded from
+    `to_dict` and from equality — saving it back would make it look like a property of
+    the data. It rides on the object rather than being returned alongside it because a
+    caller that ignores an extra return value silently loses the notice, and FR73c's
+    requirement is precisely that the migration is not silent.
+    """
 
     def __post_init__(self) -> None:
         validate_id(self.id, label="note set id")
