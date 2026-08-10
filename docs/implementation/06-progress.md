@@ -142,6 +142,26 @@ tests, aimed at a person instead of a buffer.
 | 3 | **`delete_all()` was O(n²) decryptions.** Each `delete()` reindexed, and reindexing decrypts every remaining transcript. | On the one operation a user runs when they want their data gone quickly. Now deletes files first and reindexes once. |
 | 4 | **`started_at` was actually store time**, and it is the field the retention sweep deletes on. | Renamed `stored_at`. A field that decides deletion must not be named for something it is not measuring. |
 
+**CI went red on mypy again, and the cause is the mirror image of last time.** `ctypes.windll` does
+not exist off Windows, so `win_dpapi.py` needs `type: ignore[attr-defined]` for mypy in the Linux
+container — and CI runs mypy *on Windows*, where those same ignores are unused and
+`warn_unused_ignores` turns them into errors. **No single annotation satisfies both.** Fixed with a
+per-module override disabling unused-ignore warnings for the three `platform/win_*` modules only.
+
+M8's failure was "the container has a package CI does not". This one is "the container type-checks a
+different platform than CI does". Same root cause, opposite direction, and the second one was not
+prevented by learning the first.
+
+**The pre-push check is now two commands, not one:**
+
+```
+PYTHONSAFEPATH=1 python -m pytest -q -m "not device and not slow"   # CI's sys.path
+python -m mypy --platform win32 interview_prep_recall              # CI's platform
+```
+
+`--platform win32` reproduces the failure exactly — verified by re-enabling the warning and watching
+the same four errors appear, rather than assuming the flag was equivalent.
+
 **Deferred, named at task level**
 
 | Item | Why |
