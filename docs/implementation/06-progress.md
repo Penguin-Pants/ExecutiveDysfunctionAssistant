@@ -112,6 +112,16 @@ must generate, so anchoring is the equivalent protection. Without it, the report
 impression of an interview it did not attend, delivered to someone who will believe it about
 themselves.
 
+**PR #9 review round — five findings, all valid, all fixed. One was a live data-loss path.**
+
+| Severity | Finding | Why it mattered |
+|---|---|---|
+| P1 | **No migration for existing schema-v1 note files.** T10.1 made `kind` mandatory and T10.2 replaced `NoteSet`, with no migration mentioned anywhere. Existing files would load as corrupt, and FR44's recovery would find every backup equally unreadable. | A user upgrading opens the app to find their prep notes gone — the exact catastrophe M3 was built to prevent, reintroduced by a feature that never mentions the notes store. Now T10.2a/FR73a–c/D-33. |
+| P1 | **FR16's verification still said "no session content in any written file"** after its statement was rewritten for D-U8. | A conforming implementation fails its own test. Statement and test drifting apart is this project's recurring defect — notable here because for once it would have *failed correct code* rather than passing broken code. |
+| P1 | **No M11 task owned the FR20 egress indicator.** The whole transcript leaving the device is the largest egress event in the product. | The report path could ship with the privacy indicator dark during the biggest upload it will ever make. D-27 in M8 was this same failure in the other direction, one milestone earlier. Now FR81a, owned by T11.7. |
+| P2 | **Absence-based findings could not satisfy FR78.** | Two of four rubric dimensions produce their best findings by absence — the point you meant to make and never did. Demanding an utterance index forces the generator to drop the best findings or fabricate a citation. Now two evidence kinds, plus FR78a making the tracker the single adjudicator of coverage. |
+| P2 | D-U9 pointed at FR84 (retention) for consent re-acknowledgement instead of FR85. | Anyone implementing from the decision table builds the wrong gate. |
+
 **Open and flagged: OQ-7 / D-32.** Panic clear is scoped to the in-progress session only, sparing
 previously saved ones. Argued both ways in the spec. Wants confirmation before T11.9 is built.
 
