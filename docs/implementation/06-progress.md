@@ -97,7 +97,7 @@ conservative choice, just a broken one.
 task**, so nothing owned it and it read as unbuildable. Added as T9.0 in `03-tasks.md` before
 implementing, rather than quietly widening scope.
 
-**Delivered** — 17 new tests, 394 total. `ruff`, `ruff format` clean; `mypy` clean on both the
+**Delivered** — 24 new tests, 401 total. `ruff`, `ruff format` clean; `mypy` clean on both the
 local platform and `--platform win32`.
 
 `app.py` constructs and wires every component. No Qt: the UI will build *on* an `Application`
@@ -132,6 +132,20 @@ generation must not cost the user the interview.
 | 1 | **Three of five purge hooks are unwired**, and `PurgeHooks` defaults them to no-ops that report success — so a purge claims audio was cleared. Vacuously true with no capture; a **false statement** the moment M1 lands without revisiting the wiring. | `wired_purge_hooks()` names the current set and a test pins it, so M1 gets a failing test instead of relying on memory. |
 | 2 | **`Application.start_session` collided with `SessionManager.start_session`**, doing something entirely different and not transitioning the state machine. | Renamed `reset_for_new_session`. |
 | 3 | `CloudSwitchFanout.targets` was `list[object]` with a `type: ignore`. | `LocalOnlyTarget` Protocol; suppression gone. |
+
+**PR #14 review round — three findings, all valid, all fixed.**
+
+| Severity | Finding | Why it mattered |
+|---|---|---|
+| P1 | **Ending a session destroyed the transcript before anything could store it.** `drop_transcript` is wired to `record.clear`, and there was no application-level stop path — so `SessionManager.end_session()` purged the record, and the report call that followed saved an empty transcript and raised "Nothing was recorded". Ending an interview lost the report **and** the persisted record D-U8 traded the no-disk guarantee for. | `Application.end_session(role=...)` stores first, then purges. **My own test enshrined the bug**: it drove `SessionManager.end_session()` directly, asserted the record was cleared, and called that correct — which it is, in isolation. The missing thing was a caller, and a test of the callee cannot see that. |
+| P1 | **Stage 2 ran inline on the consuming thread.** No `runner` means `InlineRunner`, so the model request executes inside `consume()` — blocking span routing for the 5 s timeout plus a retry, during which later finalised spans are neither recorded nor queued. The one-in-flight/one-pending policy exists so calls can overlap arrivals; inline makes it unreachable. | `BackgroundCallRunner`, one worker (the pipeline already permits one call in flight, so more threads could only add concurrency the design forbids). |
+| P2 | **The `progress_tracker` switch changed a field and nothing else.** `consume()` kept feeding the tracker, so the checklist went on marking while the switch reported tracking as off. | Read live on every call. D-23's shape a third time, in the one place the user can watch it be wrong. |
+
+**Regeneration forced a real design correction.** D-U8's stated purpose is that reports can be
+regenerated later — but a week later there is no live record *and no live tracker*, and FR78a makes
+the tracker's verdict the only valid basis for an absence finding. So `missed_note_ids` is now
+stored **with** the transcript, and `generate_report(session_id=...)` rehydrates both. Deriving
+coverage from a reset tracker would have reported every point as uncovered, confidently.
 
 **Deferred:** `sweep_retention()` has no production caller and deliberately is not called from
 `__post_init__` — constructing an `Application` must not delete stored interviews as a side effect.

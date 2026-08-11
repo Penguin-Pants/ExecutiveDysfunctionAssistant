@@ -23,9 +23,10 @@ Each of those was recorded as a follow-up "needs the composition root". This is 
 from __future__ import annotations
 
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from interview_prep_recall.diagnostics.ring import DiagnosticRing
 from interview_prep_recall.matching.pipeline import MatchingPipeline, MatchResult
@@ -34,7 +35,12 @@ from interview_prep_recall.matching.selector import Stage2Selector
 from interview_prep_recall.notes.index import Embedder, EmbeddingIndex
 from interview_prep_recall.notes.model import ContextSet
 from interview_prep_recall.report.consent import ReportConsent
-from interview_prep_recall.report.generator import MessagesClient, Report, ReportGenerator
+from interview_prep_recall.report.generator import (
+    MessagesClient,
+    Report,
+    ReportGenerator,
+    ReportUnavailableError,
+)
 from interview_prep_recall.report.record import SessionRecord
 from interview_prep_recall.report.store import Cipher, SessionStore
 from interview_prep_recall.session.health import HealthMonitor
@@ -42,6 +48,43 @@ from interview_prep_recall.session.manager import PurgeHooks, SessionManager
 from interview_prep_recall.stt.assembler import StreamRouter, Utterance
 from interview_prep_recall.stt.fallback import EgressMonitor
 from interview_prep_recall.tracker.progress import ProgressTracker
+
+
+class BackgroundCallRunner:
+    """Runs stage-2 calls off the caller's thread (design D-1).
+
+    Without this, `MatchingPipeline` falls back to `InlineRunner` and the model request
+    executes inside `consume()` — on the thread delivering utterances. With the real
+    client that blocks span routing for the 5 s request timeout, plus a retry, so
+    subsequent finalised spans are neither recorded nor queued while it waits. The
+    one-in-flight/one-pending policy exists precisely so calls can overlap arrivals, and
+    an inline runner makes it unreachable.
+
+    **One worker**, not a pool: the pipeline already permits at most one call in flight,
+    so extra threads could only add concurrency the design forbids.
+    """
+
+    def __init__(self) -> None:
+        self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="stage2")
+
+    def submit(
+        self, fn: Callable[[], Any], on_done: Callable[[Any, BaseException | None], None]
+    ) -> None:
+        def run() -> None:
+            # The try wraps `fn()` alone. Wrapping `on_done` too means an exception
+            # raised *by the callback* re-enters it as a failure and emits twice for one
+            # request — the defect `InlineRunner` already documents.
+            try:
+                result = fn()
+            except BaseException as exc:  # noqa: BLE001 — reported, never swallowed
+                on_done(None, exc)
+                return
+            on_done(result, None)
+
+        self._pool.submit(run)
+
+    def shutdown(self) -> None:
+        self._pool.shutdown(wait=False, cancel_futures=True)
 
 
 class LocalOnlyTarget(Protocol):
@@ -131,6 +174,7 @@ class Application:
     reports: ReportGenerator = field(init=False)
     session: SessionManager = field(init=False)
     switches: CloudSwitchFanout = field(init=False)
+    runner: BackgroundCallRunner = field(init=False)
 
     def __post_init__(self) -> None:
         self.ring = DiagnosticRing()
@@ -140,11 +184,13 @@ class Application:
         self.index = EmbeddingIndex(self.root, self.embedder)
         self.index.build(self.context_set)
         self.prefilter = Prefilter(self.index, self.context_set, self.embedder)
+        self.runner = BackgroundCallRunner()
         self.pipeline = MatchingPipeline(
             prefilter=self.prefilter,
             selector=Stage2Selector(self.client),
             on_result=self.on_result,
             ring=self.ring,
+            runner=self.runner,
         )
 
         self.tracker = ProgressTracker(
@@ -198,16 +244,26 @@ class Application:
         whole meeting; the router splits by purpose (matching sees the interviewer only,
         the tracker the mic only), so feeding the record downstream of it would silently
         record half the conversation.
+
+        **The FR37 tracker switch is read every call**, not captured at construction.
+        `set_switch("progress_tracker", False)` only writes a field on `SessionManager`;
+        nothing downstream consults it, so without this the checklist keeps marking
+        points while the switch reports tracking as off — the D-23 shape again, in the
+        one place the user can watch it being wrong.
         """
         self.record.add(utterance)
         self.router.route(utterance)
 
+        tracking = self.session.switches.progress_tracker
         for question in self.router.drain_matching():
             self.pipeline.submit(question)
-            self.tracker.observe_interviewer(question)
+            if tracking:
+                self.tracker.observe_interviewer(question)
         for answer in self.router.drain_tracking():
-            self.tracker.submit_user(answer, now)
-        self.tracker.tick(now)
+            if tracking:
+                self.tracker.submit_user(answer, now)
+        if tracking:
+            self.tracker.tick(now)
 
     # ---------- the report path ----------
 
@@ -226,19 +282,57 @@ class Application:
         marked = self.tracker.marked_ids
         return frozenset(n.id for n in self.context_set.tracked() if n.id not in marked)
 
-    def generate_report(self, *, role: str, confirm: Callable[[int], bool]) -> tuple[str, Report]:
-        """Persist the transcript, generate the report, attach it. Returns (id, report).
+    def end_session(self, *, role: str) -> str | None:
+        """Stop the session. **Persists the record before the purge clears it.**
 
-        The transcript is stored **before** the call. If generation fails — declined,
-        offline, rate-limited — the interview is still on disk and the report can be
-        retried, rather than the session being lost because the model was unavailable.
+        Ordering is the entire content of this method. `SessionManager.end_session()`
+        runs the purge, and `drop_transcript` is wired to `record.clear` — so ending an
+        interview without storing first destroys the transcript, and with it both the
+        report and the persisted record D-U8 traded the no-disk guarantee for. There was
+        no application-level stop path at all before this, which meant the only way to
+        end a session was the one that lost it.
+
+        Returns the stored id, or `None` if nothing was recorded.
         """
-        session_id = self.sessions.save(self.record, role=role)
+        session_id: str | None = None
+        if len(self.record):
+            session_id = self.sessions.save(
+                self.record, role=role, missed_note_ids=self.missed_note_ids()
+            )
+        self.session.end_session()
+        return session_id
+
+    def generate_report(
+        self,
+        *,
+        confirm: Callable[[int], bool],
+        session_id: str | None = None,
+        role: str = "",
+    ) -> tuple[str, Report]:
+        """Generate a report and attach it to its stored session. Returns (id, report).
+
+        **Reads from the store, not from live memory**, whenever `session_id` is given.
+        Regenerating an old report is precisely what D-U8 bought, and a week later there
+        is no live record and no live tracker — so the transcript *and* the tracker's
+        coverage verdict both have to come off disk (FR78a).
+
+        With no `session_id` the live record is stored first, so the interview survives a
+        declined, offline or rate-limited generation instead of being lost exactly when
+        the model was unavailable.
+        """
+        if session_id is None:
+            if not len(self.record):
+                raise ReportUnavailableError("Nothing was recorded in this session.")
+            missed = self.missed_note_ids()
+            session_id = self.sessions.save(self.record, role=role, missed_note_ids=missed)
+            record = self.record
+        else:
+            stored = self.sessions.load(session_id)
+            record = SessionRecord.rehydrate(stored.utterances)
+            missed = stored.missed_note_ids
+
         report = self.reports.generate(
-            self.record,
-            self.context_set,
-            missed_note_ids=self.missed_note_ids(),
-            confirm=confirm,
+            record, self.context_set, missed_note_ids=missed, confirm=confirm
         )
         self.sessions.attach_report(session_id, report.to_dict())
         return session_id, report

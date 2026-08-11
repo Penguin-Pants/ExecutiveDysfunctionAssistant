@@ -257,9 +257,16 @@ def test_the_egress_indicator_is_shared_with_the_health_monitor(app_data) -> Non
 # ---------- purge wiring ----------
 
 
-def test_purging_the_session_drops_the_transcript(app_data) -> None:  # type: ignore[no-untyped-def]
-    """The record is session state, so it has to be on the purge path — a purge that
-    left the transcript in memory would contradict FR15 while reporting success."""
+def test_purging_the_session_drops_the_transcript_from_memory(app_data) -> None:  # type: ignore[no-untyped-def]
+    """The record is session state, so it is on the purge path — a purge that left the
+    transcript in memory would contradict FR15 while reporting success.
+
+    **This test used to be the whole story, and that was the bug.** Driving
+    `SessionManager.end_session()` directly clears the record, so it asserted correct
+    purge behaviour while the application had no stop path that stored anything first —
+    ending an interview destroyed the transcript *and* the report with it. The purge is
+    right; what was missing is `Application.end_session`, covered below.
+    """
     app = _app(app_data)
     app.consume(_utterance("something said", stream="user"), now=1.0)
     assert len(app.record) == 1
@@ -269,6 +276,135 @@ def test_purging_the_session_drops_the_transcript(app_data) -> None:  # type: ig
     app.session.end_session()
 
     assert len(app.record) == 0
+
+
+def test_ending_a_session_persists_before_purging(app_data) -> None:  # type: ignore[no-untyped-def]
+    """The ordering is the whole point. `drop_transcript` is wired to `record.clear`, so
+    storing after the purge stores nothing — and the interview, the report, and the
+    persisted transcript D-U8 traded the no-disk guarantee for all go together."""
+    app = _app(app_data)
+    app.session.request_start()
+    app.session.preflight_result(blocked=False)
+    app.consume(_utterance("a question", stream="interviewer"), now=1.0)
+
+    session_id = app.end_session(role="Staff Engineer")
+
+    assert session_id is not None
+    assert len(app.record) == 0, "the purge must still run"
+    stored = app.sessions.load(session_id)
+    assert [u.text for u in stored.utterances] == ["a question"]
+    assert stored.role == "Staff Engineer"
+
+
+def test_ending_an_empty_session_stores_nothing(app_data) -> None:  # type: ignore[no-untyped-def]
+    app = _app(app_data)
+    app.session.request_start()
+    app.session.preflight_result(blocked=False)
+
+    assert app.end_session(role="Role") is None
+    assert app.sessions.list_sessions() == []
+
+
+def test_a_report_can_be_generated_after_the_session_ended(app_data) -> None:  # type: ignore[no-untyped-def]
+    """The path a user actually takes: end the interview, then ask for the report.
+
+    Before `Application.end_session` existed there was no way to do this — the record was
+    already gone and generation raised "Nothing was recorded".
+    """
+    app = _app(app_data)
+    app.consent.acknowledge()
+    app.session.request_start()
+    app.session.preflight_result(blocked=False)
+    app.consume(_utterance("a question", stream="interviewer"), now=1.0)
+
+    session_id = app.end_session(role="Role")
+    assert session_id is not None
+
+    returned_id, report = app.generate_report(session_id=session_id, confirm=lambda _: True)
+
+    assert returned_id == session_id
+    assert app.sessions.load(session_id).report is not None
+    assert report.sections
+
+
+def test_regeneration_uses_the_stored_tracker_verdict(app_data) -> None:  # type: ignore[no-untyped-def]
+    """FR78a has to survive the session that produced it.
+
+    The tracker is session state and is gone by regeneration time, so the coverage
+    verdict travels with the transcript. Deriving it from a reset tracker would report
+    every point as uncovered — confidently, and wrongly.
+    """
+    client = ScriptedClient()
+    app = _app(app_data, client)
+    app.consent.acknowledge()
+    app.session.request_start()
+    app.session.preflight_result(blocked=False)
+    app.consume(_utterance("a question", stream="interviewer"), now=1.0)
+
+    expected = app.missed_note_ids()
+    assert expected, "fixture should have uncovered points"
+    session_id = app.end_session(role="Role")
+    assert session_id is not None
+    app.tracker.reset()
+
+    app.generate_report(session_id=session_id, confirm=lambda _: True)
+
+    prompt = _report_requests(client)[-1]["messages"][0]["content"]
+    for note_id in expected:
+        assert note_id in prompt
+
+
+def test_stage_two_runs_off_the_consuming_thread(app_data) -> None:  # type: ignore[no-untyped-def]
+    """D-1. An inline runner executes the model request inside `consume()`, blocking span
+    routing for the 5 s request timeout plus a retry — so later finalised spans are
+    neither recorded nor queued while it waits, and the one-in-flight policy that exists
+    to let calls overlap arrivals becomes unreachable."""
+    import threading
+
+    calling_threads: list[str] = []
+
+    class ThreadNamingClient(ScriptedClient):
+        def create(self, **kwargs):  # type: ignore[no-untyped-def]
+            calling_threads.append(threading.current_thread().name)
+            return super().create(**kwargs)
+
+    app = _app(app_data, ThreadNamingClient())
+    app.consume(_utterance("a question", stream="interviewer"), now=1.0)
+    app.runner.shutdown()
+    app.runner._pool.shutdown(wait=True)
+
+    assert calling_threads, "stage 2 never ran"
+    assert all(name != threading.current_thread().name for name in calling_threads), (
+        f"stage 2 ran on the consuming thread: {calling_threads}"
+    )
+
+
+def test_the_progress_tracker_switch_actually_stops_tracking(app_data) -> None:  # type: ignore[no-untyped-def]
+    """FR37. `set_switch("progress_tracker", False)` writes a field on `SessionManager`
+    and nothing downstream consulted it, so the checklist kept marking while the switch
+    reported tracking as off — D-23 again, in the one place the user can watch it be
+    wrong."""
+    app = _app(app_data)
+    app.session.request_start()
+    app.session.preflight_result(blocked=False)
+    app.session.set_switch("progress_tracker", False)
+
+    app.consume(_utterance("I led a migration", stream="user", start=0.0), now=0.1)
+    app.tracker.tick(now=99.0)
+
+    assert app.tracker.marked_ids == set(), "points were marked with tracking switched off"
+
+
+def test_tracking_still_works_with_the_switch_on(app_data) -> None:  # type: ignore[no-untyped-def]
+    """Positive control: the test above passes against a tracker that never marks."""
+    app = _app(app_data)
+    app.session.request_start()
+    app.session.preflight_result(blocked=False)
+
+    app.consume(_utterance("I led a migration", stream="user", start=0.0), now=0.1)
+    app.tracker.tick(now=99.0)
+
+    assert app.tracker.marked_ids, "tracking is on and nothing was marked"
 
 
 def test_the_wired_purge_hooks_are_pinned(app_data) -> None:  # type: ignore[no-untyped-def]
