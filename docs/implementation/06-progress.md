@@ -21,19 +21,19 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | **M6 — Session lifecycle** | 🟢 Logic complete · panic on hold (D-U11) | T6.1–T6.3, T6.5 classification, T6.6 backpressure, T6.7 done. T6.4 and the OS trigger paths need Windows |
 | **M7 — Progress tracker** | 🟢 T7.1 + T7.3 complete | Marking and text-domain echo suppression done. T7.2 needs paired audio fixtures; T7.4 is Qt |
 | **M8 — Cloud STT backends** | 🟢 T8.1–T8.5 complete | Deepgram, ElevenLabs, fallback, egress. Protocols unverified against a live endpoint (**AS-8**) |
-| **M9 — Packaging & first run** | ⛔ Blocked | T9.1–T9.3 are Qt; T9.4 is PyInstaller on Windows; T9.5 needs live vendor docs |
+| **M9 — Packaging & first run** | 🟡 T9.0 complete | Composition root wired, headless. T9.1–T9.3 are Qt; T9.4 is PyInstaller; T9.5 needs live vendor docs |
 | **M10 — Typed context sources** | 🟢 T10.1–T10.6 + migration complete | Five kinds, per-kind caps and thresholds, schema v1→v2 migration. T10.7 is Qt |
 | **M11 — Post-interview report** | 🟢 T11.1, T11.3–T11.9 complete | Record, evidence binding, encrypted store, retention, generation. T11.2's DPAPI binding and T11.10 need Windows |
 
-**Next action: nothing further is buildable on Linux.** Every task whose logic is platform-free
-across M0–M11 is now implemented. That claim has been wrong twice before, so re-test it rather
-than trusting it — but this time the remaining list is genuinely three categories of external
-dependency, not a mislabelled milestone.
+**Next action: nothing further is buildable on Linux** — and this is the *third* time that
+sentence has been written, the previous two both wrong. What made it wrong last time was written
+into the same paragraph: the composition root had no home, so two recorded follow-ups had nothing
+to close them. **T9.0 closed both.** The lesson generalises: when this file says work is blocked,
+check whether it also names an unowned prerequisite, because that prerequisite is the buildable
+work.
 
-The one piece of wiring that has no home yet is the **composition root**: `app.py` is still a stub,
-so `ReportGenerator.local_only` mirrors the FR37 switch without being driven by it, and the session
-record is not attached to the assembler. Both are M9/T11.10 work and are recorded as follow-ups
-below rather than invented here.
+Remaining now: Windows/Qt (M1, T2.2, T2.4, M5, T6.4, T7.4, T9.1–T9.4, T10.7, T11.2's DPAPI
+binding, T11.10), the user's fixtures (T4.7, T7.2), and a vendor key (AS-8, T9.5).
 
 The previous version of this line said nothing further was buildable on Linux. That was true of
 the *then-known* scope and is now moot — but note it had already been wrong twice on its own terms
@@ -90,6 +90,64 @@ conservative choice, just a broken one.
 ---
 
 ## Log
+
+### T9.0 — Headless composition root · complete · 2026-08-11
+
+**The plan named "the composition root" as the blocker for two follow-ups but never gave it a
+task**, so nothing owned it and it read as unbuildable. Added as T9.0 in `03-tasks.md` before
+implementing, rather than quietly widening scope.
+
+**Delivered** — 17 new tests, 394 total. `ruff`, `ruff format` clean; `mypy` clean on both the
+local platform and `--platform win32`.
+
+`app.py` constructs and wires every component. No Qt: the UI will build *on* an `Application`
+rather than contain one, which is what makes the wiring testable on a machine that cannot run the
+UI at all. Every test in `test_app.py` is about a **connection**, not a component — the three
+defects this closes were all cases where two correct pieces were not joined, which no
+component-level test could see.
+
+| Guarantee | Was |
+|---|---|
+| **One switch, every cloud consumer** (D-23) | `llm_matching` reached the pipeline only. M11 added report generation and nothing connected it — the indicator would read local-only while the whole transcript still went to the API |
+| **Finalised utterances reach the record** (FR74) | The record shipped with no producer |
+| **Coverage has one adjudicator** (FR78a) | The tracker's verdict had no route to report generation |
+
+**`CloudSwitchFanout` rather than a wider Protocol.** `attach_matching` takes one target because
+the pipeline was the only API consumer when the switch was written; the shape had no way to express
+a second. The fan-out refuses registration of anything without `set_local_only`, and refuses to
+flip with no consumers registered — because a switch that reports success having switched nothing
+is precisely D-23.
+
+**The record is fed before routing**, deliberately. The router splits by purpose (matching sees the
+interviewer, the tracker the mic), so recording downstream of it captures half the conversation
+while the report claims to cover the meeting.
+
+**The transcript is stored before generation is attempted.** A declined, offline or rate-limited
+generation must not cost the user the interview.
+
+**Review round — three confirmed issues, all fixed before push**
+
+| # | Issue | Fix |
+|---|---|---|
+| 1 | **Three of five purge hooks are unwired**, and `PurgeHooks` defaults them to no-ops that report success — so a purge claims audio was cleared. Vacuously true with no capture; a **false statement** the moment M1 lands without revisiting the wiring. | `wired_purge_hooks()` names the current set and a test pins it, so M1 gets a failing test instead of relying on memory. |
+| 2 | **`Application.start_session` collided with `SessionManager.start_session`**, doing something entirely different and not transitioning the state machine. | Renamed `reset_for_new_session`. |
+| 3 | `CloudSwitchFanout.targets` was `list[object]` with a `type: ignore`. | `LocalOnlyTarget` Protocol; suppression gone. |
+
+**Deferred:** `sweep_retention()` has no production caller and deliberately is not called from
+`__post_init__` — constructing an `Application` must not delete stored interviews as a side effect.
+The entry point owns it, and there is no entry point until the UI. Recorded rather than left to be
+noticed, since a documented-but-uncalled method is this codebase's most repeated defect (D-20).
+
+**A test-assertion trap worth recording.** Two D-23 tests originally asserted `client.requests == []`
+to prove nothing was sent. The composition root shares one model client between matching and report
+generation, and stage 2 fires during `consume()` — correctly. Both tests were passing on the raise
+while their central assertion was wrong for the wrong reason. They now filter on the report tool.
+
+**And the sys.path rule was broken in the milestone right after it was written.** `tests/helpers.py`
+was first imported as `tests.helpers`, which CI's `pytest` console script cannot resolve. The
+`PYTHONSAFEPATH=1` pre-push check caught it locally — which is the entire reason that check exists.
+
+---
 
 ### M11 — Post-interview report · T11.1, T11.3–T11.9 complete · 2026-08-10
 
