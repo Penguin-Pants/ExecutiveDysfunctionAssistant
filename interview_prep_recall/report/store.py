@@ -98,6 +98,7 @@ class StoredSession:
     role: str
     utterances: tuple[RecordedUtterance, ...]
     report: dict[str, Any] | None
+    missed_note_ids: frozenset[str] = frozenset()
 
 
 def _now() -> datetime:
@@ -133,14 +134,29 @@ class SessionStore:
 
     # ---------- write ----------
 
-    def save(self, record: SessionRecord, *, role: str, session_id: str | None = None) -> str:
-        """Persist a transcript. Returns the session id."""
+    def save(
+        self,
+        record: SessionRecord,
+        *,
+        role: str,
+        session_id: str | None = None,
+        missed_note_ids: frozenset[str] = frozenset(),
+    ) -> str:
+        """Persist a transcript. Returns the session id.
+
+        `missed_note_ids` is the **tracker's** coverage verdict, stored alongside the
+        spans. It is session state that dies with the session, and FR78a makes it the
+        only valid basis for an absence finding — so a report regenerated next week has
+        to read it from here or it cannot produce those findings at all, which is half of
+        what D-U8 bought.
+        """
         sid = session_id or new_id()
         validate_id(sid, label="session id")
         payload = {
             "id": sid,
             "stored_at": _now().isoformat(timespec="seconds").replace("+00:00", "Z"),
             "role": role,
+            "missed_note_ids": sorted(missed_note_ids),
             "utterances": [
                 {
                     "index": u.index,
@@ -197,6 +213,7 @@ class SessionStore:
                 for u in data.get("utterances", [])
             ),
             report=report,
+            missed_note_ids=frozenset(data.get("missed_note_ids", [])),
         )
 
     def list_sessions(self) -> list[SessionSummary]:

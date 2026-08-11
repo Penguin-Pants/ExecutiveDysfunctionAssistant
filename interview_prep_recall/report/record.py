@@ -12,6 +12,7 @@ so interim text cannot reach here by construction rather than by filtering (FR74
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from interview_prep_recall.diagnostics.ring import DiagnosticRing
@@ -114,6 +115,18 @@ class SessionRecord:
         self._utterances.clear()
         self._truncated = False
         self._first_start = None
+
+    @classmethod
+    def rehydrate(cls, utterances: Sequence[RecordedUtterance]) -> SessionRecord:
+        """Rebuild a record from stored spans, for regenerating an old report.
+
+        Regeneration is the reason D-U8 traded away "nothing reaches the disk", so it has
+        to work from the store rather than from live memory — the live record is purged
+        at session end, and an interview reviewed a week later has no live anything.
+        """
+        record = cls()
+        record._utterances = list(utterances)
+        return record
 
     def transcript_lines(self) -> list[str]:
         """Numbered, speaker-labelled, for the generation prompt.

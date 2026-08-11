@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from helpers import ReversingCipher, ScriptedClient
 
 from interview_prep_recall.notes.model import ContextSet, Note, SourceKind, new_id
 from interview_prep_recall.report.consent import (
@@ -53,50 +54,6 @@ from interview_prep_recall.stt.fallback import EgressMonitor
 
 def utterance(text: str, *, stream: str = "interviewer", start: float = 0.0) -> Utterance:
     return Utterance(stream_id=stream, text=text, t_start=start, t_end=start + 1.0, context="")
-
-
-class ReversingCipher:
-    """A stand-in for DPAPI that is obviously not encryption, so no test can accidentally
-    depend on it being one. Satisfies the same Protocol the real cipher does."""
-
-    def encrypt(self, plaintext: bytes) -> bytes:
-        return plaintext[::-1]
-
-    def decrypt(self, ciphertext: bytes) -> bytes:
-        return ciphertext[::-1]
-
-
-def _tool_response(payload: dict):  # type: ignore[no-untyped-def]
-    """Shaped like a real forced-tool reply: a `tool_use` block carrying parsed input.
-
-    The generator forces `tool_choice`, so this is the only response shape it can
-    legitimately receive. A double that returned a text block would test a path the API
-    is configured never to take.
-    """
-
-    class _Block:
-        type = "tool_use"
-        input = payload
-
-    class _Response:
-        content = [_Block()]
-
-    return _Response()
-
-
-class ScriptedClient:
-    """Returns a canned response and records what it was sent."""
-
-    def __init__(self, payload: dict | None = None, boom: Exception | None = None) -> None:
-        self.payload = payload if payload is not None else {"findings": []}
-        self.boom = boom
-        self.requests: list[dict] = []
-
-    def create(self, **kwargs):  # type: ignore[no-untyped-def]
-        self.requests.append(kwargs)
-        if self.boom is not None:
-            raise self.boom
-        return _tool_response(self.payload)
 
 
 # ---------- T11.1: the record (FR74, FR75, FR76) ----------

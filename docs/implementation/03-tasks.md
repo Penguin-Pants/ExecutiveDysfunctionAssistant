@@ -165,6 +165,7 @@ own §12 open risk and it gets answered here, not assumed.
 
 | Task | Requirements | Acceptance criteria |
 |---|---|---|
+| **T9.0** **Headless composition root** — construct and wire every component; no Qt | FR37, FR85, D-23 | One switch flip reaches **every** cloud consumer, asserted per consumer; finalised utterances reach the record; the tracker's uncovered set reaches report generation. *(Added 2026-08-11: the plan named "the composition root" as the blocker for two recorded follow-ups but never gave it a task, so nothing owned it.)* |
 | **T9.1** First-run consent disclosure | FR63 | Unavoidable on first run, blocks until acknowledged, persists. |
 | **T9.2** Settings surface | FR52, FR37, D-9 | Sensitivity, thresholds, model ID, backend choice all editable and persisted. |
 | **T9.3** Setup wizard | US-B3, FR38 | Walks device selection, audio test, echo check, notes import. |
