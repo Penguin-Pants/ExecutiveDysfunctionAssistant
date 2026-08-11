@@ -75,6 +75,21 @@ warn_redundant_casts = true
 module = "interview_prep_recall.stt.interface"
 strict = true
 
+# Windows-only modules whose type-checking result differs *by platform*.
+# `ctypes.windll` does not exist off Windows, so these need `type: ignore[attr-defined]`
+# for mypy in the Linux dev container — and CI runs mypy on Windows, where the same
+# ignores are unused and `warn_unused_ignores` turns them into errors. There is no single
+# annotation that satisfies both, so unused-ignore warnings are disabled here and only
+# here. Same class of divergence as the `websockets` extra: the dev container is not the
+# CI environment, in the opposite direction this time.
+[[tool.mypy.overrides]]
+module = [
+    "interview_prep_recall.platform.win_dpapi",
+    "interview_prep_recall.platform.win_wer",
+    "interview_prep_recall.platform.win_capture_exclusion",
+]
+warn_unused_ignores = false
+
 # Optional third-party packages CI does not install, or that ship no stubs.
 # `websockets` lives in the [cloud] extra and is imported lazily inside the connector
 # factories, so the backends type-check and run without it — but mypy still resolves the
