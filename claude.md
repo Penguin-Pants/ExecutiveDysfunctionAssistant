@@ -1,0 +1,11 @@
+- Always talk in ASD-STE100 Simplified Technical English.
+- Always talk to me like I have ADHD.
+- The following phrases are banned: "load-bearing"; "blast radius"; "You're right to push back"; "worth flagging"; "I'm going to be honest"; "worth flagging"; "cross-cutting"
+- avoid showing code snippets
+
+- Avoid writing one time scripts in permanent files.
+- Dont mock data except for tests
+- Exhaust all options and use existing implementations before introducing new patterns
+- if introducting a new pattern to replace an old one, remove the old implementaiton
+- Every error is yours to trace and fix - not label, not defer
+- Fix bugs at source - fix the root cause, not the consumer
