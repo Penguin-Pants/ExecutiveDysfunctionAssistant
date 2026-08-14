@@ -64,7 +64,7 @@ capture library decision reopens **before** anything is built on top. Stop and e
 | Task | Requirements | Acceptance criteria |
 |---|---|---|
 | **T2.1** Write `stt/interface.py` — Protocol, event types, and the §2 semantic contract as docstrings | FR17, D-2 | Passes `mypy --strict`. A conformance test suite exists that any backend can be run against, written before any backend. |
-| **T2.2** `local_whisper.py` with VAD-based synthesized finalization | FR18, FR47 | Passes the T2.1 conformance suite. Every acknowledged span yields exactly one final event. |
+| **T2.2** `local_whisper.py` with VAD-based synthesized finalization | FR18, FR47 | Passes the T2.1 conformance suite. Every acknowledged span yields exactly one final event. | ✅ **Done** (AS-9: the model adapter itself is unverified — `huggingface.co` is blocked here).
 | **T2.3** Utterance assembler | FR46 | Scripted fixture produces exactly the expected utterance boundaries; sub-threshold fragments merge forward; no match fires on interim events. |
 | **T2.4** Latency harness | NFR1, AS-1, NFR7 | Timestamped scripted audio → transcript; reports p50/p95 **per stage** against design §9a's budget. Run **CPU-only on the D-U6 laptop** for the gate; the D-U6 desktop's CUDA figure is recorded separately (NFR7) and never substituted. Covers the STT slice only — end-to-end NFR1 is T5.9, after the overlay exists. |
 

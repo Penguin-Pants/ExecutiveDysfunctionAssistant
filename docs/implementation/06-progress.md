@@ -14,7 +14,7 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 |---|---|---|
 | **M0 — Scaffold** | ✅ Complete | 20 tests passing, lint + format + mypy clean |
 | **M1 — Audio capture spike** | ⛔ Blocked | Needs the Windows machine. **AS-2 gate.** |
-| **M2 — STT interface & local backend** | 🟡 Started | **T2.1 interface + T2.3 assembler done.** T2.2 (`faster-whisper`) and T2.4 (AS-1 gate) need Windows |
+| **M2 — STT interface & local backend** | 🟢 T2.1–T2.3 complete | Interface, local backend, assembler. T2.4 is the **AS-1 latency gate** and genuinely needs the target laptop. T2.2's model adapter is unverified (**AS-9**) |
 | **M3 — Notes store & indexing** | 🟢 Logic complete | T3.1–T3.6 done. T3.7–T3.9 are Qt UI, deferred to Windows |
 | **M4 — Matching pipeline** | 🟢 T4.1–T4.6 complete | T4.7 **blocked**: needs the user's labelled fixtures |
 | **M5 — Overlay UI** | ⛔ Blocked | Qt + `SetWindowDisplayAffinity`; needs Windows. Fully specified (design §9b) |
@@ -25,14 +25,18 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | **M10 — Typed context sources** | 🟢 T10.1–T10.6 + migration complete | Five kinds, per-kind caps and thresholds, schema v1→v2 migration. T10.7 is Qt |
 | **M11 — Post-interview report** | 🟢 T11.1, T11.3–T11.9 complete | Record, evidence binding, encrypted store, retention, generation. T11.2's DPAPI binding and T11.10 need Windows |
 
-**Next action: nothing further is buildable on Linux** — and this is the *third* time that
-sentence has been written, the previous two both wrong. What made it wrong last time was written
-into the same paragraph: the composition root had no home, so two recorded follow-ups had nothing
-to close them. **T9.0 closed both.** The lesson generalises: when this file says work is blocked,
-check whether it also names an unowned prerequisite, because that prerequisite is the buildable
-work.
+**Next action: T9.4 (PyInstaller spec) is the only remaining task with no hardware
+dependency**, and it cannot be *verified* here — PyInstaller does not cross-compile. Everything
+else needs the Windows machine, the user's fixtures, or a vendor key.
 
-Remaining now: Windows/Qt (M1, T2.2, T2.4, M5, T6.4, T7.4, T9.1–T9.4, T10.7, T11.2's DPAPI
+Treat that claim with suspicion. The equivalent sentence has now been wrong **four** times, and
+T2.2 was the fourth: this table said it "needs Windows" from M0 until 2026-08-14, on no stated
+reason. `faster-whisper` installs and imports on Linux, and every part of the backend that is
+actually ours — the VAD, FR47 finalisation, capture-clock timestamps, backpressure, threading —
+was testable here all along behind a `Transcriber` Protocol. Roughly 700 lines of buildable work
+sat behind one unexamined word for five milestones.
+
+Remaining now: Windows/Qt (M1, T2.4, M5, T6.4, T7.4, T9.1–T9.4, T10.7, T11.2's DPAPI
 binding, T11.10), the user's fixtures (T4.7, T7.2), and a vendor key (AS-8, T9.5).
 
 The previous version of this line said nothing further was buildable on Linux. That was true of
@@ -40,7 +44,8 @@ the *then-known* scope and is now moot — but note it had already been wrong tw
 before new scope arrived. Treat any such claim here as one to re-test.
 The remaining work splits cleanly:
 
-- **Needs the Windows machine:** M1 (AS-2 gate), T2.2 + T2.4 (AS-1 gate), M5 overlay, T6.4's
+- **Needs the Windows machine:** M1 (AS-2 gate), T2.4 (AS-1 gate — needs the D-U6 laptop's CPU,
+  not merely Windows), M5 overlay, T6.4's
   ProcMon trace and M6's OS trigger paths, T7.4's checklist rendering, T9.1–T9.4, T10.7's per-kind
   overlay marking, T11.10's report view, and T11.2's DPAPI binding (its envelope and listing
   logic are testable here behind a Protocol).
@@ -48,10 +53,15 @@ The remaining work splits cleanly:
 - **Needs a vendor key:** AS-8 — the two cloud protocols are implemented from documentation and
   have never met a live endpoint. Everything *around* them is tested; the wire format is not.
 
-**A caution about this list, now with two instances.** An earlier version said "M7 tracker device
+**A caution about this list, now with three instances.** An earlier version said "M7 tracker device
 tests", and that blanket phrase hid two buildable tasks for a whole milestone. The very next
 version said "M8–M9 — cloud backends, packaging, **both Windows**", which hid an entire milestone:
-cloud STT is websockets and asyncio and has no Windows dependency whatsoever.
+cloud STT is websockets and asyncio and has no Windows dependency whatsoever. The third was T2.2,
+labelled "needs Windows" for five milestones because Whisper is *deployed* on Windows — a
+statement about the product that says nothing about where the code can be written or tested.
+
+The pattern in all three: a true fact about the milestone's *hardware* was allowed to stand in for
+a claim about its *code*. The two are unrelated, and only the second one blocks work.
 
 Both errors were mine, both were written *into this file as a summary*, and both were then trusted
 on the next read. When a milestone is marked blocked here, name the *task* and the *reason*, and
@@ -68,10 +78,12 @@ permanent for this project.
 
 **Buildable and verifiable on Linux:** notes model and store, atomic write and rotation, schema
 guard, importer and chunking, embedding index (against a fake embedder), the STT interface and its
-conformance suite, the utterance assembler (fed by WAV fixtures), matching prefilter, sequence
-gate, dispatch policy, diagnostics, credentials logic.
+conformance suite, **the local Whisper backend's VAD, finalisation, timestamps and threading**
+(behind a `Transcriber` Protocol), the utterance assembler (fed by WAV fixtures), matching
+prefilter, sequence gate, dispatch policy, diagnostics, credentials logic.
 
-**Requires the Windows machine:** WASAPI capture (M1), `faster-whisper` timing (T2.4/AS-1),
+**Requires the Windows machine:** WASAPI capture (M1), `faster-whisper` timing *and the model
+adapter itself* (T2.4/AS-1, AS-9),
 `SetWindowDisplayAffinity` (T5.2), Credential Manager binding (the OS half of T0.5), the Process
 Monitor privacy trace (T6.4), PyInstaller packaging (T9.4), and every `@pytest.mark.device` test.
 
@@ -82,6 +94,13 @@ settings look similar and mean different things — do not "align" them:
   container, so nothing here silently adopts 3.12-only syntax.
 - **`mypy python_version = "3.12"`** — the *target*. Type-checks against the version that ships.
 
+**Blocked network egress.** The container's proxy denies `huggingface.co` (403 to CONNECT;
+`curl -sS "$HTTPS_PROXY/__agentproxy/status"` lists the rejections). PyPI, npm and crates are
+allowlisted; model hubs are not. So any component that needs a *downloaded model* — Whisper
+weights, and `all-MiniLM-L6-v2` for real embedding runs — is verifiable only on the Windows
+machine, regardless of whether its library installs here. This is why both have Protocol seams
+with fake implementations, and it is the reason for AS-9.
+
 An earlier version pinned mypy to 3.11 to match the container, which broke CI: numpy 2.5's own
 stubs use `type` statements that a 3.11 parser cannot read, so mypy failed before checking any
 project code. Analysing for an older version than your dependencies are written for is not a
@@ -90,6 +109,75 @@ conservative choice, just a broken one.
 ---
 
 ## Log
+
+### T2.2 — Local Whisper backend · complete · 2026-08-14
+
+`interview_prep_recall/stt/local_whisper.py` (+ `tests/test_local_whisper.py`, 21 tests). M2 is
+now green except T2.4, which is a latency measurement on specific hardware rather than code.
+
+**This task was labelled "needs Windows" from M0 and that was wrong.** No reason was ever
+recorded for it; `faster-whisper` installs and imports on Linux. See the caution at the top of
+this file — third instance, same shape each time.
+
+**The blocking issue, documented rather than worked around (AS-9).** The container's network
+policy denies `huggingface.co` — the agent proxy answers 403 to CONNECT, confirmed via
+`$HTTPS_PROXY/__agentproxy/status`, which lists the rejection explicitly. No model file can be
+downloaded here, so `FasterWhisperTranscriber` has never run. Per the standing instruction, that
+is recorded as an assumption and not invented around: **AS-9**, alongside AS-8's unverified cloud
+wire protocols. It is verified on the Windows machine during T2.4, which loads a real model anyway.
+
+**What that forced, and why it was an improvement.** Inference sits behind a `Transcriber`
+Protocol — the same shape as `Cipher`, `Embedder`, `Connector` and `MessagesClient`. The real
+adapter is ~20 unverified lines; everything the backend is genuinely responsible for is on the
+tested side of the boundary. AS-9's blast radius is that 20 lines, not the milestone.
+
+**How FR47 is synthesised.** Whisper has no final marker, so an energy VAD watches the frame
+stream and a span closes at ≥700 ms silence or 10 s max span (design §2). Three decisions in that
+mechanism are load-bearing:
+
+- **"Acknowledged" means the VAD opened a span.** Silence that never opens one owes no event —
+  otherwise every quiet second of an interview would carry a finalisation obligation.
+- **An empty transcription still emits its final.** The VAD opens on coughs; Whisper returns "".
+  Dropping that event leaves rule 2's tests green (every *other* span finalises) while a span the
+  backend acknowledged vanishes. `UtteranceAssembler` discards it downstream, where dropping text
+  is a declared job rather than a silent one.
+- **`t_end` excludes the trailing silence.** The 700 ms hang is fed to the model (clipping a
+  word's decay hurts accuracy) but must not reach the event, because the assembler measures
+  inter-utterance gaps from `t_end` and padding every span by the full budget would consume the
+  gap that closes utterances.
+
+**Two defects found in the local two-pass review, both with negative controls:**
+
+1. **`start()` did not reset `_last_emitted_start`.** `FallbackSttBackend` restarts a backend
+   mid-interview, and the new session's capture clock need not resume above the old one's last
+   timestamp — so the rule-4 ordering guard would reject every event of the second session. READY,
+   no errors, permanently silent. This is `CaptureClock.reset`'s bug (D-25) in the other backend,
+   which is why it was worth looking for. All per-session state now resets in `start()`.
+2. **Span duration was measured from `len(audio)`, which `MAX_SPAN_BYTES` caps.** A `max_span_s`
+   above the byte ceiling freezes the measured duration below its own threshold and the forced cut
+   never fires again — a memory-safety cap silently switching off FR47's monologue guarantee.
+   Duration is now counted in frames, which the cap cannot touch.
+
+Both were reverted and the new tests re-run to confirm they fail against the pre-fix code. Given
+this project's history, a regression test that has never been seen to fail is not evidence.
+
+**Deliberate non-reuse.** `CloudSttBackend` was not factored into a shared base. The overlap is
+"bounded deque plus a worker thread"; the differences are a socket, reconnection and an asyncio
+loop. Lifting a base out of that would couple the default path to the opt-in one for no gain.
+
+**`audioop` was the obvious tool for RMS and is the wrong one** — deprecated in 3.12 (and
+`filterwarnings = ["error::DeprecationWarning"]` turns that into a test failure) and removed in
+3.13. numpy is already a core dependency, and the RMS accumulates in float64 because squaring
+int16 in its own dtype wraps to a small wrong number — which reads as silence during the loudest
+speech.
+
+**Known weakness, recorded not hidden.** `EnergyVad` is energy-only: it cannot distinguish speech
+from a fan, a keyboard, or notification chimes on the loopback stream. It is here because it needs
+no download and is deterministic under test, which is what lets FR47 be *verified*. The upgrade
+path is `silero-vad`, already listed in design §10 and bundled with `faster-whisper`; it is a
+change to one class, since the backend asks a detector only for `is_speech(frame)`.
+
+---
 
 ### T9.0 — Headless composition root · complete · 2026-08-11
 
