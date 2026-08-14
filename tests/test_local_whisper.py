@@ -445,3 +445,136 @@ def test_span_buffer_cap_cannot_disable_the_forced_cut() -> None:
         assert len(recorder.finals) >= 1
     finally:
         backend.close()
+
+
+# ---------- PR #15 review findings ----------
+
+
+def test_default_model_is_the_one_AS1_is_measured_against() -> None:
+    """Design's "Pinned versions" makes `base.en` the default and `small.en` an upgrade
+    *conditional on T2.4 showing headroom*.
+
+    Shipping a larger model as the default would mean the recorded AS-1 latency result
+    described a model no user actually runs — and this is the no-key default path, so it
+    is what almost everyone runs.
+    """
+    from interview_prep_recall.stt.local_whisper import (
+        MODEL_SIZE_DEFAULT,
+        FasterWhisperTranscriber,
+    )
+
+    assert MODEL_SIZE_DEFAULT == "base.en"
+    assert FasterWhisperTranscriber().model_size == "base.en"
+
+
+def test_injected_detector_is_actually_used() -> None:
+    """The `vad_factory` seam has to be real.
+
+    Building the detector per session is right — it carries a noise floor tuned to one
+    room — but doing it by constructing `EnergyVad()` inside `start()` discarded whatever
+    the caller injected, so a tuned detector or the documented Silero replacement would
+    never have `is_speech` called. D-26's defect in a new place.
+    """
+    built: list[object] = []
+
+    class RecordingVad:
+        def __init__(self) -> None:
+            self.calls = 0
+            built.append(self)
+
+        def is_speech(self, pcm: bytes) -> bool:
+            self.calls += 1
+            return pcm != SILENCE
+
+    backend = LocalWhisperBackend(transcriber=FakeTranscriber(), vad_factory=RecordingVad)
+    recorder = start(backend)
+    t = feed_frames(backend, [SPEECH] * 10)
+    feed_frames(backend, silence_run(0.8), t0=t)
+    drain(backend, recorder, expected=1)
+    backend.stop(flush_timeout_s=1.0)
+
+    assert len(built) == 1
+    assert built[0].calls > 0  # type: ignore[attr-defined]
+    assert len(recorder.finals) == 1
+
+
+def test_each_session_gets_a_fresh_detector() -> None:
+    """A noise floor adapted to one interview's room must not carry into the next."""
+    built: list[object] = []
+
+    class CountingVad:
+        def __init__(self) -> None:
+            built.append(self)
+
+        def is_speech(self, pcm: bytes) -> bool:
+            return pcm != SILENCE
+
+    backend = LocalWhisperBackend(transcriber=FakeTranscriber(), vad_factory=CountingVad)
+    start(backend)
+    backend.stop(flush_timeout_s=0.5)
+    start(backend)
+    backend.stop(flush_timeout_s=0.5)
+
+    assert len(built) == 2
+    assert built[0] is not built[1]
+
+
+def test_onset_frames_are_kept_not_discarded() -> None:
+    """ONSET_FRAMES held speech back to confirm it; those frames belong to the span.
+
+    Dropping them clips the first 20 ms of every utterance — the leading phoneme, where
+    Whisper has least context to guess from — and reports a `t_start` late by the same
+    amount, which then propagates into the assembler's gap arithmetic.
+    """
+    transcriber = FakeTranscriber(["kept"])
+    backend = LocalWhisperBackend(transcriber=transcriber)
+    recorder = start(backend)
+
+    t = feed_frames(backend, [SPEECH] * 10, t0=5.0)
+    feed_frames(backend, silence_run(0.8), t0=t)
+    drain(backend, recorder, expected=1)
+    backend.stop(flush_timeout_s=1.0)
+
+    assert recorder.finals[0].t_start == pytest.approx(5.0, abs=1e-9)
+    # The buffer handed to inference opens with both onset frames, not just the second.
+    assert transcriber.calls[0][: FRAME_BYTES * ONSET_FRAMES] == SPEECH * ONSET_FRAMES
+
+
+def test_a_timed_out_worker_cannot_reach_the_next_session() -> None:
+    """`stop()` may return while a worker is still inside an inference pass — the timeout
+    branch says so. That worker must not then be handed the *next* interview.
+
+    Sharing the stop flag, queue, callbacks and ordering high-water mark meant a restart
+    gave the stalled worker the new session: it would emit the previous interview's
+    transcript under the new `stream_id`, push the ordering mark past every real event,
+    and race the new worker for its queue. Per-session state makes it impossible.
+    """
+    release = threading.Event()
+    entered = threading.Event()
+
+    class StalledTranscriber:
+        def transcribe(self, pcm: bytes, sample_rate: int) -> TranscriptionResult:
+            entered.set()
+            release.wait(timeout=5.0)
+            return TranscriptionResult(text="leaked from the previous interview")
+
+    backend = LocalWhisperBackend(transcriber=StalledTranscriber())
+    try:
+        first = start(backend, "interviewer")
+        t = feed_frames(backend, [SPEECH] * 10, t0=100.0)
+        feed_frames(backend, silence_run(0.8), t0=t)
+        # Deterministic: wait until the worker is provably inside inference, then time
+        # out on it, rather than guessing at a sleep.
+        assert entered.wait(timeout=3.0)
+        backend.stop(flush_timeout_s=0.1)
+        assert SttStreamState.FAILED in first.state_names
+
+        second = start(backend, "user")
+        release.set()
+        time.sleep(0.3)
+
+        assert second.finals == [], "the stalled worker leaked into the next session"
+        assert all(e.stream_id != "user" for e in first.transcripts)
+    finally:
+        release.set()
+        backend.close()

@@ -161,6 +161,34 @@ mechanism are load-bearing:
 Both were reverted and the new tests re-run to confirm they fail against the pre-fix code. Given
 this project's history, a regression test that has never been seen to fail is not evidence.
 
+**PR #15 review round (Codex) — four findings, all real, all fixed with negative controls:**
+
+1. **P1 — default model was `small.en`, spec says `base.en`.** Design's "Pinned versions" makes
+   `base.en` the default and `small.en` an upgrade *conditional on T2.4 showing headroom*.
+   Shipping the larger model would have meant AS-1's recorded latency described a model nobody
+   runs — on the no-key default path, which is what almost everyone runs. Now `MODEL_SIZE_DEFAULT`,
+   with the conditionality written next to it.
+2. **P1 — a timed-out worker could be handed the next session.** `stop()` can return while a
+   worker is inside an inference pass; it shared the stop flag, queue, callbacks and ordering
+   high-water mark with the backend, so restarting gave the stalled worker the new interview: the
+   previous session's transcript emitted under the new `stream_id`, the ordering mark pushed past
+   every real event, two workers racing one queue. **Fixed structurally**: all per-interview state
+   moved into a `_Session` object that `start()` replaces wholesale. This also subsumes the
+   `_last_emitted_start` bug found in the local review — a fresh object cannot forget a field.
+3. **P2 — `start()` discarded the injected VAD.** My own local-review fix introduced this:
+   rebuilding the detector per session is right (its noise floor is tuned to one room), but doing
+   it by constructing `EnergyVad()` inside `start()` meant a caller's tuned detector — or the
+   documented Silero replacement — never had `is_speech` called. **D-26's defect, reintroduced by
+   the fix for a different bug.** Now a `vad_factory` with a `SpeechDetector` Protocol.
+4. **P2 — onset frames were discarded.** With `ONSET_FRAMES = 2`, the first speech frame only
+   incremented a counter and the span opened from the second, so every utterance lost its leading
+   20 ms — the initial phoneme, where Whisper has least context — and reported `t_start` late by
+   the same amount, which then propagated into the assembler's gap arithmetic. The provisional
+   frames are now held and prepended.
+
+Finding 3 is worth dwelling on: it was created by a fix, in the same session, for a bug of the
+same family. A review pass over one's own changes is not a substitute for a second reader.
+
 **Deliberate non-reuse.** `CloudSttBackend` was not factored into a shared base. The overlap is
 "bounded deque plus a worker thread"; the differences are a socket, reconnection and an asyncio
 loop. Lifting a base out of that would couple the default path to the opt-in one for no gain.

@@ -48,7 +48,8 @@ from __future__ import annotations
 import math
 import threading
 from collections import deque
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import numpy as np
@@ -106,6 +107,12 @@ a perfectly silent digital stream — a muted mic, a loopback device with no aud
 having its noise floor collapse toward zero until dither registers as talking.
 """
 
+MODEL_SIZE_DEFAULT = "base.en"
+"""Design §"Pinned versions". **This is the model AS-1 is measured against**, which is why
+it is not a free choice: `small.en` is the configured upgrade *if T2.4 shows headroom* and
+`tiny.en` the fallback if it does not, so shipping anything else as the default would mean
+the recorded latency result described a model no user actually runs."""
+
 MIN_NOISE_RMS = 30.0
 NOISE_MARGIN = 3.0
 NOISE_ALPHA = 0.05
@@ -143,7 +150,7 @@ class FasterWhisperTranscriber:
 
     def __init__(
         self,
-        model_size: str = "small.en",
+        model_size: str = MODEL_SIZE_DEFAULT,
         *,
         device: str = "cpu",
         compute_type: str = "int8",
@@ -241,6 +248,17 @@ class EnergyVad:
         return False
 
 
+class SpeechDetector(Protocol):
+    """All the backend asks of a voice-activity detector.
+
+    One method, so swapping `EnergyVad` for `silero-vad` touches nothing else. Detectors
+    are stateful (an adaptive noise floor), so the backend takes a **factory** and builds
+    a fresh one per session rather than reusing one instance across interviews.
+    """
+
+    def is_speech(self, pcm: bytes) -> bool: ...
+
+
 @dataclass
 class _Span:
     """One acknowledged region of speech, accumulating until finalisation."""
@@ -272,9 +290,51 @@ class _Span:
         return self.frames * FRAME_S
 
 
+@dataclass
+class _Session:
+    """Everything one interview owns. See `LocalWhisperBackend`'s docstring for why this
+    is a separate object rather than a set of attributes on the backend."""
+
+    stream_id: str
+    on_transcript: OnTranscript | None
+    on_state: OnState | None
+    vad: SpeechDetector
+    pending: deque[tuple[bytes, float]]
+    wake: threading.Event = field(default_factory=threading.Event)
+    stopping: threading.Event = field(default_factory=threading.Event)
+    thread: threading.Thread | None = None
+    span: _Span | None = None
+    onset: list[tuple[bytes, float]] = field(default_factory=list)
+    """Frames held while the VAD confirms speech onset, so they can be prepended to the
+    span rather than thrown away."""
+
+    last_emitted_start: float = float("-inf")
+    dropped: int = 0
+    degraded: bool = False
+
+
+def _label(session: _Session | None) -> str:
+    """Stream id for diagnostics. Never empty: the ring rejects empty strings, and
+    `stop()` before `start()` is legal (rule 6), so the guard would turn a legal call
+    into a crash."""
+    if session is None:
+        return "unstarted"
+    return session.stream_id[:64] or "unstarted"
+
+
 class LocalWhisperBackend:
     """`SttBackend` over a blocking `Transcriber`. Satisfies the contract structurally;
-    `tests/conformance.py` is what proves it."""
+    `tests/conformance.py` is what proves it.
+
+    **All mutable per-interview state lives in `_Session`, not on the backend.** That is
+    not tidiness. `stop()` can return while a worker is still inside an inference pass —
+    the timeout branch says so explicitly — and if that worker shared its stop flag,
+    queue, callbacks and ordering high-water mark with the backend, then restarting would
+    hand the *old* worker the *new* session: it would emit the previous interview's
+    transcript under the new `stream_id`, raise the new ordering mark past every real
+    event, and race the new worker for its queue. Giving each session its own object
+    makes that structurally impossible instead of relying on a flag nobody re-checks.
+    """
 
     name = "local-whisper"
     supports_interim = False
@@ -285,34 +345,25 @@ class LocalWhisperBackend:
         self,
         transcriber: Transcriber | None = None,
         *,
-        vad: EnergyVad | None = None,
+        vad_factory: Callable[[], SpeechDetector] = EnergyVad,
         ring: DiagnosticRing | None = None,
         max_queued_frames: int = MAX_QUEUED_FRAMES,
         silence_hang_s: float = SILENCE_HANG_S,
         max_span_s: float = MAX_SPAN_S,
     ) -> None:
         self._transcriber = FasterWhisperTranscriber() if transcriber is None else transcriber
-        self._vad = EnergyVad() if vad is None else vad
+        # A factory, not an instance. A detector carries an adaptive noise floor tuned to
+        # one room on one stream, so it must be rebuilt per session — but rebuilding a
+        # *caller's* object means constructing `EnergyVad()` and silently discarding
+        # whatever they injected, which is D-26's defect wearing different clothes.
+        self._vad_factory = vad_factory
         # `is None`, never `or`: `DiagnosticRing` defines `__len__`, so an empty injected
         # ring is falsy and `or` would silently discard it (D-26).
         self.ring = DiagnosticRing() if ring is None else ring
+        self._max_queued_frames = max_queued_frames
         self._silence_hang_s = silence_hang_s
         self._max_span_s = max_span_s
-
-        self._pending: deque[tuple[bytes, float]] = deque(maxlen=max_queued_frames)
-        self._wake = threading.Event()
-        self._stopping = threading.Event()
-
-        self._stream_id = ""
-        self._thread: threading.Thread | None = None
-        self._on_transcript: OnTranscript | None = None
-        self._on_state: OnState | None = None
-        self._closed = False
-        self._dropped = 0
-        self._onset = 0
-        self._span: _Span | None = None
-        self._last_emitted_start = float("-inf")
-        self._degraded = False
+        self._session: _Session | None = None
 
     # ---------- SttBackend ----------
 
@@ -332,33 +383,23 @@ class LocalWhisperBackend:
                 f"{self.name} requires {SAMPLE_RATE} Hz mono; got {sample_rate} Hz, "
                 f"{channels} channel(s)"
             )
-        self._stream_id = stream_id
-        self._on_transcript = on_transcript
-        self._on_state = on_state
-        self._closed = False
-        self._stopping.clear()
-        self._wake.clear()
-        self._dropped = 0
-        self._degraded = False
-        # Every per-session variable is reset here, and `_last_emitted_start` is the one
-        # that matters. `FallbackSttBackend` restarts a backend mid-interview; the new
-        # session's capture clock is not guaranteed to resume above the old one's last
-        # timestamp, and a stale high-water mark would make the rule-4 ordering guard
-        # discard every event of the new session. The stream would report READY and stay
-        # permanently silent — the same failure `CaptureClock.reset` exists to prevent,
-        # in the other backend.
-        self._last_emitted_start = float("-inf")
-        self._pending.clear()
-        self._span = None
-        self._onset = 0
-        self._vad = EnergyVad()
-        self._emit_state(SttStreamState.STARTING)
-
-        self._thread = threading.Thread(
-            target=self._worker, name=f"local-stt-{stream_id}", daemon=True
+        # A fresh session object *is* the reset. There is no list of fields to remember to
+        # clear, so none can be forgotten — which is how `_last_emitted_start` survived a
+        # restart in the first version of this file.
+        session = _Session(
+            stream_id=stream_id,
+            on_transcript=on_transcript,
+            on_state=on_state,
+            vad=self._vad_factory(),
+            pending=deque(maxlen=self._max_queued_frames),
         )
-        self._thread.start()
-        self._emit_state(SttStreamState.READY)
+        self._session = session
+        self._emit_state(session, SttStreamState.STARTING)
+        session.thread = threading.Thread(
+            target=self._worker, args=(session,), name=f"local-stt-{stream_id}", daemon=True
+        )
+        session.thread.start()
+        self._emit_state(session, SttStreamState.READY)
 
     def feed(self, pcm: bytes, t_capture: float) -> None:
         """Enqueue one frame. Never blocks, never raises (contract rule 1).
@@ -367,15 +408,18 @@ class LocalWhisperBackend:
         here — cheap as it is, inference happens on the same worker and keeping one
         thread responsible for the span state machine is what makes it lock-free.
         """
-        if self._closed or self._stopping.is_set():
+        session = self._session
+        if session is None or session.stopping.is_set():
             return
-        if len(self._pending) == self._pending.maxlen:
-            self._dropped += 1
-            if self._dropped == 1 or self._dropped % DROP_REPORT_EVERY == 0:
-                self._degraded = True
-                self._emit_state(SttStreamState.DEGRADED, f"dropped {self._dropped} frames")
-        self._pending.append((pcm, t_capture))
-        self._wake.set()
+        if len(session.pending) == session.pending.maxlen:
+            session.dropped += 1
+            if session.dropped == 1 or session.dropped % DROP_REPORT_EVERY == 0:
+                session.degraded = True
+                self._emit_state(
+                    session, SttStreamState.DEGRADED, f"dropped {session.dropped} frames"
+                )
+        session.pending.append((pcm, t_capture))
+        session.wake.set()
 
     def stop(self, flush_timeout_s: float = 2.0) -> None:
         """Drain, finalise any open span, then STOPPED (contract rule 6).
@@ -385,83 +429,96 @@ class LocalWhisperBackend:
         in the report — and abandoning it would drop a span the backend acknowledged,
         which rule 2 forbids in the one place nobody would notice.
         """
-        if self._thread is None:
-            self._emit_state(SttStreamState.STOPPED)
+        session = self._session
+        if session is None or session.thread is None:
+            self._emit_state(session, SttStreamState.STOPPED)
             return
-        self._stopping.set()
-        self._wake.set()
-        self._thread.join(timeout=flush_timeout_s + JOIN_GRACE_S)
-        alive = self._thread.is_alive()
+        session.stopping.set()
+        session.wake.set()
+        session.thread.join(timeout=flush_timeout_s + JOIN_GRACE_S)
 
-        if alive:
-            # The worker is stuck inside an inference pass. Its span will never finalise,
-            # so rule 2's alternative applies and is stated plainly.
+        if session.thread.is_alive():
+            # Stuck inside an inference pass. Its span will never finalise, so rule 2's
+            # alternative applies and is stated plainly. The worker keeps running against
+            # *this* session object, which the next `start()` will not share.
             self._emit_state(
+                session,
                 SttStreamState.FAILED,
                 "worker did not stop within the timeout; callbacks detached",
             )
-        self._emit_state(SttStreamState.STOPPED)
+        self._emit_state(session, SttStreamState.STOPPED)
 
         # Detached after every state above is delivered, and unconditionally. A worker
         # that outlived its timeout must not be able to reach a consumer that has been
         # told the stream is over.
-        self._on_transcript = None
-        self._on_state = None
-        self._thread = None
+        session.on_transcript = None
+        session.on_state = None
+        self._session = None
 
     def close(self) -> None:
         """Idempotent (contract rule 6)."""
-        if self._closed:
+        session = self._session
+        if session is None:
             return
-        self._closed = True
-        if self._thread is not None:
-            self.stop(flush_timeout_s=0.5)
-        self._pending.clear()
-        self._span = None
+        self.stop(flush_timeout_s=0.5)
+        session.pending.clear()
+        session.span = None
 
     # ---------- worker ----------
 
-    def _worker(self) -> None:
+    def _worker(self, session: _Session) -> None:
         try:
             while True:
-                self._wake.wait(timeout=0.05)
-                self._wake.clear()
-                self._drain()
-                if self._stopping.is_set() and not self._pending:
+                session.wake.wait(timeout=0.05)
+                session.wake.clear()
+                self._drain(session)
+                if session.stopping.is_set() and not session.pending:
                     break
             # Flush whatever the last frames left open. Rule 2's guarantee for the final
             # span of the session lives on this one line.
-            self._finalise("stop")
+            self._finalise(session, "stop")
         except Exception as exc:  # noqa: BLE001 — the thread must not die silently
-            self._emit_state(SttStreamState.FAILED, type(exc).__name__)
+            self._emit_state(session, SttStreamState.FAILED, type(exc).__name__)
 
-    def _drain(self) -> None:
-        while self._pending:
+    def _drain(self, session: _Session) -> None:
+        while session.pending:
             try:
-                pcm, t_capture = self._pending.popleft()
+                pcm, t_capture = session.pending.popleft()
             except IndexError:  # pragma: no cover — only `feed` appends; defensive
                 return
-            self._consume(pcm, t_capture)
+            self._consume(session, pcm, t_capture)
 
-    def _consume(self, pcm: bytes, t_capture: float) -> None:
-        speech = self._vad.is_speech(pcm)
+    def _consume(self, session: _Session, pcm: bytes, t_capture: float) -> None:
+        speech = session.vad.is_speech(pcm)
         frame_end = t_capture + FRAME_S
 
-        if self._span is None:
+        if session.span is None:
             if not speech:
                 # Silence outside a span is not an acknowledged span (see module docs)
-                # and carries no finalisation obligation. Onset counting resets so that
-                # two speech frames must be *consecutive*.
-                self._onset = 0
+                # and carries no finalisation obligation. The provisional buffer clears
+                # so that the onset frames must be *consecutive*.
+                session.onset.clear()
                 return
-            self._onset += 1
-            if self._onset < ONSET_FRAMES:
+            # Held, not counted. Discarding the frames that proved speech was starting
+            # would clip the first 20 ms of every utterance — the leading phoneme, which
+            # is where Whisper is least able to guess — and report a `t_start` late by
+            # the same amount.
+            session.onset.append((pcm, t_capture))
+            if len(session.onset) < ONSET_FRAMES:
                 return
-            self._onset = 0
-            self._span = _Span(audio=bytearray(pcm), t_start=t_capture, t_speech_end=frame_end)
+            audio = bytearray()
+            for frame, _ in session.onset:
+                audio.extend(frame)
+            session.span = _Span(
+                audio=audio,
+                t_start=session.onset[0][1],
+                t_speech_end=frame_end,
+                frames=len(session.onset),
+            )
+            session.onset.clear()
             return
 
-        span = self._span
+        span = session.span
         span.frames += 1
         if len(span.audio) < MAX_SPAN_BYTES:
             span.audio.extend(pcm)
@@ -472,16 +529,16 @@ class LocalWhisperBackend:
             span.silence_s += FRAME_S
 
         if span.silence_s >= self._silence_hang_s:
-            self._finalise("silence")
+            self._finalise(session, "silence")
         elif span.duration >= self._max_span_s:
-            # Forced cut mid-speech. The next span opens on the following speech frame
+            # Forced cut mid-speech. The next span opens on the following speech frames
             # with a sub-700 ms gap, so `UtteranceAssembler` rejoins the two halves into
             # one utterance — which only works because `t_speech_end` is exact.
-            self._finalise("max_span")
+            self._finalise(session, "max_span")
 
-    def _finalise(self, reason: str) -> None:
+    def _finalise(self, session: _Session, reason: str) -> None:
         """Run inference on the open span and emit exactly one final event."""
-        span, self._span = self._span, None
+        span, session.span = session.span, None
         if span is None:
             return
         try:
@@ -491,53 +548,53 @@ class LocalWhisperBackend:
             # is accounted for, loudly. The stream keeps accepting audio, because a
             # single failed inference pass is not a reason to go deaf for the rest of an
             # interview; a subsequent successful span re-reports READY.
-            self.ring.record("stt_inference_failed", stream=self._label, cause=type(exc).__name__)
-            self._emit_state(SttStreamState.FAILED, f"inference failed: {type(exc).__name__}")
-            self._degraded = True
+            self.ring.record(
+                "stt_inference_failed", stream=_label(session), cause=type(exc).__name__
+            )
+            self._emit_state(
+                session, SttStreamState.FAILED, f"inference failed: {type(exc).__name__}"
+            )
+            session.degraded = True
             return
 
         text = result.text.strip()
         if not text:
             # Emitted anyway. See the module docstring: swallowing this is how rule 2
             # becomes false while its tests stay green.
-            self.ring.record("stt_empty_span", stream=self._label, reason=reason)
+            self.ring.record("stt_empty_span", stream=_label(session), reason=reason)
 
         self._emit_transcript(
+            session,
             TranscriptEvent(
-                stream_id=self._stream_id,
+                stream_id=session.stream_id,
                 text=text,
                 is_final=True,
                 t_start=span.t_start,
                 t_end=span.t_speech_end,
                 confidence=result.confidence,
                 backend=self.name,
-            )
+            ),
         )
-        if self._degraded:
-            self._degraded = False
-            self._emit_state(SttStreamState.READY, f"recovered after {reason}")
+        if session.degraded:
+            session.degraded = False
+            self._emit_state(session, SttStreamState.READY, f"recovered after {reason}")
 
     # ---------- emission ----------
 
-    @property
-    def _label(self) -> str:
-        """Never empty: the ring rejects empty strings, and `stop()` before `start()` is
-        legal (rule 6), so the guard would turn a legal call into a crash."""
-        return self._stream_id[:64] or "unstarted"
+    def _emit_state(
+        self, session: _Session | None, state: SttStreamState, detail: str | None = None
+    ) -> None:
+        self.ring.record("stt_state", state=state.name, stream=_label(session))
+        if session is not None and session.on_state is not None:
+            session.on_state(StateEvent(stream_id=session.stream_id, state=state, detail=detail))
 
-    def _emit_state(self, state: SttStreamState, detail: str | None = None) -> None:
-        self.ring.record("stt_state", state=state.name, stream=self._label)
-        if self._on_state is not None:
-            self._on_state(StateEvent(stream_id=self._stream_id, state=state, detail=detail))
-
-    def _emit_transcript(self, event: TranscriptEvent) -> None:
-        # Rule 4: non-decreasing `t_start` per stream. Spans are sequential by
-        # construction here, so this should never fire — which is the reason to keep it
-        # and record it rather than assume it: if the construction ever stops holding,
-        # the alternative is silently corrupted utterance boundaries.
-        if event.t_start < self._last_emitted_start:
-            self.ring.record("stt_out_of_order", stream=self._label)
+    def _emit_transcript(self, session: _Session, event: TranscriptEvent) -> None:
+        # Rule 4: non-decreasing `t_start` per stream. The high-water mark is per session,
+        # so a new interview starting at a lower capture time is not measured against the
+        # last one's — which would silently discard every event of the new session.
+        if event.t_start < session.last_emitted_start:
+            self.ring.record("stt_out_of_order", stream=_label(session))
             return
-        self._last_emitted_start = event.t_start
-        if self._on_transcript is not None:
-            self._on_transcript(event)
+        session.last_emitted_start = event.t_start
+        if session.on_transcript is not None:
+            session.on_transcript(event)
