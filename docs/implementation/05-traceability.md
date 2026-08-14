@@ -41,7 +41,7 @@ TS§ = [test strategy](./04-test-strategy.md) section
 | FR34 | Review A10 | D§4 | T3.6 | Unit |
 | FR35 | Review A11 | **D§7** | T5.7 | Unit per state |
 | FR36 | Review A12 | D§1 | T0.3, **T5.8** | Content-leak grep, TS§3 |
-| FR37 | Review A13 | D§9 | T6.7 | Integration |
+| FR37 | Review A13 | D§9 | T6.7, T9.2, T9.2b | Integration |
 | FR38 | Review A14 | **D§6 (classification table)** | T6.5 | Unit per precondition |
 | FR39a | Review A16 | D§9 | T1.4 | Manual device switch |
 | FR39b | Review-B C6 | D§9 | T1.4, T6.6 | Device-loss pause + auto-resume |
@@ -57,7 +57,7 @@ TS§ = [test strategy](./04-test-strategy.md) section
 | FR49 | D-U3 | D§5 | T4.4 ✅ | Both branches |
 | FR50 | US-D2 | D§5, D§7 | T4.1 ✅, T5.7 | Unrelated-speech test |
 | FR51 | D-U3 | **D§9b** | T5.3 | Manual glance + non-colour channel |
-| FR52 | US-D3 | D§5 | T9.2 | Unit |
+| FR52 | US-D3 | D§5 | T9.2, T9.2a | Unit + Qt (offscreen) |
 | FR53 | D-10 | D§1 | T4.6 ✅ | Unit |
 | FR54 | New (FR13 gap) | D§5 | T5.5 | Unit |
 | FR55 | Review A22 | D§1 | T5.4 | Off-screen recovery |

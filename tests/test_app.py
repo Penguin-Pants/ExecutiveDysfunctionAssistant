@@ -458,3 +458,99 @@ def test_declining_the_first_run_disclosure_reports_declined(tmp_path: Path) -> 
     assert outcome is ConsentOutcome.DECLINED
     assert outcome.may_proceed is False
     assert not app.first_run.path.exists()
+
+
+# ---------- T9.2: settings ----------
+
+
+def test_config_is_loaded_and_drives_the_components(tmp_path: Path) -> None:
+    """The settings the composition root reads are the ones the components run on.
+
+    Constructing from a config and then asserting on the components is the only version
+    of this that means anything — a test that read `app.config` back would pass whether
+    or not the values ever reached the prefilter, tracker or selector.
+    """
+    from interview_prep_recall.config import AppConfig, ConfigStore
+
+    store = ConfigStore(tmp_path)
+    store.save(AppConfig(tau_floor=0.50, tau_track=0.75, llm_model_id="configured-model"))
+
+    app = _app(tmp_path)
+
+    assert app.prefilter.tau_floor == pytest.approx(0.50)
+    assert app.tracker.tau_track == pytest.approx(0.75)
+    assert app.pipeline.selector.model_id == "configured-model"
+
+
+def test_apply_settings_persists_and_applies(tmp_path: Path) -> None:
+    """FR52: "move the control; assert τ_floor changes **and persists**"."""
+    from interview_prep_recall.config import AppConfig, ConfigStore
+
+    app = _app(tmp_path)
+    result = app.apply_settings(AppConfig(tau_floor=0.55, llm_model_id="next-model"))
+
+    assert app.prefilter.tau_floor == pytest.approx(0.55)
+    assert app.pipeline.selector.model_id == "next-model"
+    assert "tau_floor" in result.applied
+
+    reloaded, _status = ConfigStore(tmp_path).load()
+    assert reloaded.tau_floor == pytest.approx(0.55)
+
+
+def test_apply_settings_reports_what_needs_a_restart(tmp_path: Path) -> None:
+    from interview_prep_recall.config import AppConfig
+
+    app = _app(tmp_path)
+    result = app.apply_settings(AppConfig(embed_model_id="different/embedder"))
+
+    assert result.restart_required is True
+    assert result.needs_restart == {"embed_model_id"}
+
+
+def test_a_corrupt_config_is_reported_not_swallowed(tmp_path: Path) -> None:
+    """Design §4 requires the user be notified when settings are replaced. A silent
+    reset is the real failure: sensitivity reverts and the user concludes matching is
+    broken."""
+    from interview_prep_recall.config import CONFIG_FILENAME, ConfigLoadStatus
+
+    (tmp_path / CONFIG_FILENAME).write_text("{not json", encoding="utf-8")
+
+    app = _app(tmp_path)
+
+    assert app.config_status is ConfigLoadStatus.DEFAULTS_UNREADABLE
+    assert app.config_status.settings_were_lost is True
+
+
+def test_retention_override_still_wins_for_existing_callers(tmp_path: Path) -> None:
+    """The deprecated `retention_days` argument keeps working while callers move to
+    config.json."""
+    app = Application(
+        root=tmp_path,
+        embedder=FlatEmbedder(),
+        client=ScriptedClient(),
+        cipher=ReversingCipher(),
+        context_set=_context(),
+        retention_days=99,
+    )
+    assert app.sessions.retention_days == 99
+
+
+def test_a_failed_save_leaves_settings_untouched_everywhere(tmp_path: Path) -> None:
+    """Found in local review: `self.config` was assigned before the save.
+
+    A failed write then left three different answers to "what are the current settings" —
+    the new value in memory, the old one on disk, the old one in the components — and the
+    next call would diff against a `previous` that had never been real anywhere.
+    """
+    from interview_prep_recall.config import AppConfig, ConfigError
+
+    app = _app(tmp_path)
+    before = app.config
+    doomed = AppConfig()
+    doomed.tau_floor = 0.99  # mutation bypasses __post_init__; save() catches it
+
+    with pytest.raises(ConfigError):
+        app.apply_settings(doomed)
+
+    assert app.config is before
+    assert app.prefilter.tau_floor == pytest.approx(before.tau_floor)
