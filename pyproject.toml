@@ -15,9 +15,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Windows-only runtime. Cannot be installed or exercised on the Linux dev box.
-windows = [
+# Qt. **Not** Windows-only — this was listed under `windows` with the note that it
+# "cannot be installed or exercised on the Linux dev box", and both halves were false:
+# PySide6 has Linux wheels and runs under QT_QPA_PLATFORM=offscreen, which is how the
+# T9.1 dialog tests run in CI and in the dev container. What genuinely needs Windows is
+# SetWindowDisplayAffinity (T5.2) — an API call, not a toolkit.
+ui = [
     "PySide6>=6.6",
+]
+# Genuinely Windows-only runtime: WASAPI loopback, DPAPI-backed credential storage.
+windows = [
     "pyaudiowpatch>=0.2.12",
     "faster-whisper>=1.0",
     "soxr>=0.3.7",
@@ -103,5 +110,10 @@ module = [
     "faster_whisper",
     "sentence_transformers",
     "websockets",
+    # Resolved and type-checked when the [ui] extra is installed (CI installs it). Listed
+    # so a contributor who installed only [dev] gets a mypy run that fails on real
+    # problems rather than on a missing optional dependency.
+    "PySide6",
+    "PySide6.*",
 ]
 ignore_missing_imports = true

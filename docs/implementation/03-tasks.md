@@ -166,9 +166,10 @@ own §12 open risk and it gets answered here, not assumed.
 | Task | Requirements | Acceptance criteria |
 |---|---|---|
 | **T9.0** **Headless composition root** — construct and wire every component; no Qt | FR37, FR85, D-23 | One switch flip reaches **every** cloud consumer, asserted per consumer; finalised utterances reach the record; the tracker's uncovered set reaches report generation. *(Added 2026-08-11: the plan named "the composition root" as the blocker for two recorded follow-ups but never gave it a task, so nothing owned it.)* |
-| **T9.1** First-run consent disclosure | FR63 | Unavoidable on first run, blocks until acknowledged, persists. |
+| **T9.1** First-run consent disclosure | FR63 | Unavoidable on first run, blocks until acknowledged, persists. ✅ **Done** — policy + Qt dialog, tested headless. **Follow-up T9.1a**: call the gate before device open (needs M1's capture path). |
 | **T9.2** Settings surface | FR52, FR37, D-9 | Sensitivity, thresholds, model ID, backend choice all editable and persisted. |
 | **T9.3** Setup wizard | US-B3, FR38 | Walks device selection, audio test, echo check, notes import. |
+| **T9.1a** Enforce FR63 at capture start | FR63 | Opening an audio device is refused when `require_first_run_consent` returns DECLINED. *(Split out 2026-08-14: T9.1's gate has no enforcement point until M1 exists — recorded rather than faked at the wrong layer.)* Also: decide whether `closeEvent` should honour `WM_QUERYENDSESSION` so an OS shutdown is not blocked by the disclosure. |
 | **T9.4** PyInstaller build | — | Single exe launches on a clean Windows 11 machine with no Python installed; FR16 allowlist re-verified against the packaged build, not just the dev build. |
 | **T9.5** Confirm live Haiku pricing and model availability | NFR6, D-9, BC-5 | Rates confirmed against current docs before ship; §7's cost estimate updated if stale. |
 

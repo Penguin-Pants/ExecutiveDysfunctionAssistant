@@ -29,6 +29,13 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from interview_prep_recall.diagnostics.ring import DiagnosticRing
+from interview_prep_recall.first_run import (
+    CONSENT_FILENAME,
+    ConsentOutcome,
+    DisclosurePresenter,
+    FirstRunConsent,
+    require_consent,
+)
 from interview_prep_recall.matching.pipeline import MatchingPipeline, MatchResult
 from interview_prep_recall.matching.prefilter import Prefilter
 from interview_prep_recall.matching.selector import Stage2Selector
@@ -171,6 +178,7 @@ class Application:
     record: SessionRecord = field(init=False)
     sessions: SessionStore = field(init=False)
     consent: ReportConsent = field(init=False)
+    first_run: FirstRunConsent = field(init=False)
     reports: ReportGenerator = field(init=False)
     session: SessionManager = field(init=False)
     switches: CloudSwitchFanout = field(init=False)
@@ -206,6 +214,9 @@ class Application:
             self.root, cipher=self.cipher, ring=self.ring, retention_days=self.retention_days
         )
         self.consent = ReportConsent(self.root / "report_consent.json")
+        # Separate records for separate statements (FR63 vs FR85). `consent.json` is
+        # FR63's filename in design §4.
+        self.first_run = FirstRunConsent(self.root / CONSENT_FILENAME)
         self.reports = ReportGenerator(
             client=self.client,
             consent=self.consent,
@@ -236,6 +247,23 @@ class Application:
         self.session.attach_matching(self.switches)
 
     # ---------- the utterance path ----------
+
+    def require_first_run_consent(self, present: DisclosurePresenter) -> ConsentOutcome:
+        """FR63's gate (T9.1). Must pass before audio capture is opened.
+
+        **The enforcement point is not here yet, and that is recorded rather than
+        papered over.** FR63 gates *capture*, and capture is M1, which is blocked on the
+        Windows machine — so the call that must refuse to open a device when this returns
+        DECLINED cannot be written against anything real. Guarding `consume()` instead
+        would look like enforcement while being the wrong layer: by the time an utterance
+        exists the audio has already been captured, which is the thing the user has not
+        agreed to.
+
+        What this does give the gate is a home in the composition root, so it is not a
+        component with no production call site — the defect D-20 records five times.
+        **Follow-up: call this before device open in M1.**
+        """
+        return require_consent(self.first_run, present)
 
     def consume(self, utterance: Utterance, now: float) -> None:
         """One finalised span, routed to everything that needs it.

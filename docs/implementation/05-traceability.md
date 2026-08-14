@@ -68,7 +68,7 @@ TS§ = [test strategy](./04-test-strategy.md) section
 | FR60 | New (DI-3) | D§4 | T3.7, T3.8 | Unit |
 | FR61 | Review RB-2 | D§9 | T6.6 | Kill worker × 2 |
 | FR62 | Review RB-2 | D§9 | T6.6 | Manual lock/unlock |
-| FR63 | Review A19 | D§4 | T9.1 | Unit |
+| FR63 | Review A19 | D§4 | T9.1, T9.1a | Unit + Qt (offscreen) |
 | ~~FR64~~ | D-U5 | **D§6** | ~~T6.3~~ | *Superseded by FR64a (D-U11)* |
 | FR64a | D-U11 | **D§6** | T6.3a | Panic pauses; no purge hook fires |
 | NFR1 | PRD §7 | **D§9a** | **T2.4** | Per-stage latency harness |
