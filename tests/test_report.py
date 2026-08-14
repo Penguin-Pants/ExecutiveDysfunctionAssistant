@@ -856,3 +856,29 @@ def test_a_clean_response_discards_nothing(app_data) -> None:  # type: ignore[no
         confirm=lambda _: True,
     )
     assert report.discarded == 0
+
+
+def test_report_consent_rejects_boolean_and_malformed_versions(tmp_path: Path) -> None:
+    """`bool` subclasses `int`, so `true` passes an int check and equals version 1.
+
+    Same defect as FR63's record, found by review on PR #16 and fixed in both — a
+    malformed consent file must never satisfy the gate. `[]` is here too: `.get` on a
+    list raises `AttributeError`, which the JSON except clause does not catch, so it
+    crashed rather than failing closed.
+    """
+    from interview_prep_recall.report.consent import ReportConsent
+
+    path = tmp_path / "report_consent.json"
+    for payload in (
+        "true",
+        "false",
+        "[]",
+        "null",
+        '{"report_disclosure_version": true}',
+        '{"report_disclosure_version": "1"}',
+        '{"report_disclosure_version": 1.0}',
+    ):
+        path.write_text(payload, encoding="utf-8")
+        consent = ReportConsent(path)
+        assert consent.acknowledged_version() is None, payload
+        assert consent.required is True, payload

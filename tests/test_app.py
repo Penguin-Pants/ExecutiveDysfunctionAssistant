@@ -421,3 +421,40 @@ def test_the_wired_purge_hooks_are_pinned(app_data) -> None:  # type: ignore[no-
         "the wired hook set changed — if a component was added, wire its hook; if one "
         "was removed, say why here"
     )
+
+
+# ---------- T9.1: FR63 first-run consent is wired ----------
+
+
+def test_first_run_consent_is_constructed_by_the_composition_root(tmp_path: Path) -> None:
+    """D-20, five recorded instances: a component with no production call site.
+
+    The gate has a home here rather than existing only in its own tests.
+    """
+    from interview_prep_recall.first_run import CONSENT_FILENAME
+
+    app = _app(tmp_path)
+    assert app.first_run.path == app.root / CONSENT_FILENAME
+    assert app.first_run.required is True
+
+
+def test_first_run_consent_is_a_separate_record_from_the_report_consent(
+    tmp_path: Path,
+) -> None:
+    """FR63 and FR85 are different statements. Satisfying one must not satisfy the other."""
+    app = _app(tmp_path)
+    app.require_first_run_consent(lambda _text: True)
+
+    assert app.first_run.required is False
+    assert app.consent.required is True
+
+
+def test_declining_the_first_run_disclosure_reports_declined(tmp_path: Path) -> None:
+    from interview_prep_recall.first_run import ConsentOutcome
+
+    app = _app(tmp_path)
+    outcome = app.require_first_run_consent(lambda _text: False)
+
+    assert outcome is ConsentOutcome.DECLINED
+    assert outcome.may_proceed is False
+    assert not app.first_run.path.exists()

@@ -21,23 +21,39 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | **M6 — Session lifecycle** | 🟢 Logic complete · panic on hold (D-U11) | T6.1–T6.3, T6.5 classification, T6.6 backpressure, T6.7 done. T6.4 and the OS trigger paths need Windows |
 | **M7 — Progress tracker** | 🟢 T7.1 + T7.3 complete | Marking and text-domain echo suppression done. T7.2 needs paired audio fixtures; T7.4 is Qt |
 | **M8 — Cloud STT backends** | 🟢 T8.1–T8.5 complete | Deepgram, ElevenLabs, fallback, egress. Protocols unverified against a live endpoint (**AS-8**) |
-| **M9 — Packaging & first run** | 🟡 T9.0 complete | Composition root wired, headless. T9.1–T9.3 are Qt; T9.4 is PyInstaller; T9.5 needs live vendor docs |
+| **M9 — Packaging & first run** | 🟡 T9.0 + T9.1 complete | Composition root and FR63 first-run disclosure. **Qt is buildable and testable here** (offscreen) — T9.2/T9.3 are next. T9.4 is PyInstaller; T9.5 needs live vendor docs |
 | **M10 — Typed context sources** | 🟢 T10.1–T10.6 + migration complete | Five kinds, per-kind caps and thresholds, schema v1→v2 migration. T10.7 is Qt |
 | **M11 — Post-interview report** | 🟢 T11.1, T11.3–T11.9 complete | Record, evidence binding, encrypted store, retention, generation. T11.2's DPAPI binding and T11.10 need Windows |
 
-**Next action: T9.4 (PyInstaller spec) is the only remaining task with no hardware
-dependency**, and it cannot be *verified* here — PyInstaller does not cross-compile. Everything
-else needs the Windows machine, the user's fixtures, or a vendor key.
+**Next action: T9.2 (settings surface), then T9.3 (setup wizard).** Both are Qt, and **Qt runs
+here** — see below.
 
-Treat that claim with suspicion. The equivalent sentence has now been wrong **four** times, and
-T2.2 was the fourth: this table said it "needs Windows" from M0 until 2026-08-14, on no stated
-reason. `faster-whisper` installs and imports on Linux, and every part of the backend that is
-actually ours — the VAD, FR47 finalisation, capture-clock timestamps, backpressure, threading —
-was testable here all along behind a `Transcriber` Protocol. Roughly 700 lines of buildable work
-sat behind one unexamined word for five milestones.
+That last sentence was written three hours after the previous version of this paragraph said
+T9.4 was "the only remaining task with no hardware dependency". It was wrong, for the **fifth**
+time, and this instance was the most expensive: `pyproject.toml` listed PySide6 under a
+`windows` extra with the comment *"Windows-only runtime. Cannot be installed or exercised on the
+Linux dev box."* Both halves are false. PySide6 ships Linux wheels, and it runs under
+`QT_QPA_PLATFORM=offscreen` — widgets, signals and slots, modal dialogs, event loops. The Qt
+tests for T9.1 run headless in this container and on CI's Windows runner from the same command.
 
-Remaining now: Windows/Qt (M1, T2.4, M5, T6.4, T7.4, T9.1–T9.4, T10.7, T11.2's DPAPI
-binding, T11.10), the user's fixtures (T4.7, T7.2), and a vendor key (AS-8, T9.5).
+What that comment hid: **M5's overlay, T9.2, T9.3, T7.4 and T10.7 — five tasks across four
+milestones**, every one of them previously filed under "needs the Windows machine". The genuinely
+Windows-bound piece is `SetWindowDisplayAffinity` (T5.2), a single API call, plus the actual
+device I/O. Not the toolkit.
+
+The fourth instance, for the record, was T2.2, labelled "needs Windows" from M0 with no stated
+reason; `faster-whisper` installs and imports on Linux, and ~700 lines of buildable work sat
+behind that one word for five milestones.
+
+Remaining, re-sorted after the Qt discovery:
+
+- **Buildable and testable here (Qt, offscreen):** T9.2, T9.3, T7.4's checklist rendering,
+  T10.7's per-kind marking, and the *widget* half of M5's overlay.
+- **Genuinely needs Windows:** M1 (WASAPI, AS-2 gate), T2.4 (AS-1, needs the D-U6 laptop's CPU),
+  T5.2's `SetWindowDisplayAffinity`, T6.4's ProcMon trace, T9.1a's device-open enforcement,
+  T9.4's PyInstaller build, T11.2's DPAPI binding, T11.10.
+- **Needs the user's fixtures:** T4.7 (the OQ-1 gate), T7.2 (paired audio).
+- **Needs a vendor key:** AS-8, T9.5.
 
 The previous version of this line said nothing further was buildable on Linux. That was true of
 the *then-known* scope and is now moot — but note it had already been wrong twice on its own terms
@@ -45,23 +61,29 @@ before new scope arrived. Treat any such claim here as one to re-test.
 The remaining work splits cleanly:
 
 - **Needs the Windows machine:** M1 (AS-2 gate), T2.4 (AS-1 gate — needs the D-U6 laptop's CPU,
-  not merely Windows), M5 overlay, T6.4's
-  ProcMon trace and M6's OS trigger paths, T7.4's checklist rendering, T9.1–T9.4, T10.7's per-kind
-  overlay marking, T11.10's report view, and T11.2's DPAPI binding (its envelope and listing
-  logic are testable here behind a Protocol).
+  not merely Windows), T5.2's `SetWindowDisplayAffinity`, T6.4's ProcMon trace and M6's OS trigger
+  paths, T9.1a, T9.4's PyInstaller build, T11.10's report view, and T11.2's DPAPI binding (its
+  envelope and listing logic are testable here behind a Protocol). **Qt widgets are not on this
+  list any more** — see the note above.
 - **Needs the user's fixtures:** T4.7 (the OQ-1 gate) and T7.2 (paired headphone/speaker audio).
 - **Needs a vendor key:** AS-8 — the two cloud protocols are implemented from documentation and
   have never met a live endpoint. Everything *around* them is tested; the wire format is not.
 
-**A caution about this list, now with three instances.** An earlier version said "M7 tracker device
+**A caution about this list, now with five instances.** An earlier version said "M7 tracker device
 tests", and that blanket phrase hid two buildable tasks for a whole milestone. The very next
 version said "M8–M9 — cloud backends, packaging, **both Windows**", which hid an entire milestone:
 cloud STT is websockets and asyncio and has no Windows dependency whatsoever. The third was T2.2,
 labelled "needs Windows" for five milestones because Whisper is *deployed* on Windows — a
 statement about the product that says nothing about where the code can be written or tested.
 
-The pattern in all three: a true fact about the milestone's *hardware* was allowed to stand in for
-a claim about its *code*. The two are unrelated, and only the second one blocks work.
+The fourth was T2.2. The fifth was **Qt itself**, and it was the worst because it was written into
+`pyproject.toml` as a dependency comment rather than into this file — so it was load-bearing for
+five tasks across four milestones and was never re-read as a claim.
+
+The pattern in all five: a true fact about the milestone's *hardware* was allowed to stand in for
+a claim about its *code*. The two are unrelated, and only the second one blocks work. **The
+check that would have caught every one of them is the same: try it.** Installing PySide6 and
+running one dialog headless took four minutes.
 
 Both errors were mine, both were written *into this file as a summary*, and both were then trusted
 on the next read. When a milestone is marked blocked here, name the *task* and the *reason*, and
@@ -76,11 +98,18 @@ Development happens in a **Linux container**; the product targets **Windows 11**
 That split decides what can be verified where, and it is not a temporary inconvenience — it is
 permanent for this project.
 
+**Qt runs here.** `QT_QPA_PLATFORM=offscreen` gives PySide6 a platform plugin with no display
+server; widgets, signals/slots, modal dialogs and event loops all work, and the same tests run
+unchanged on CI's Windows runner. Install with `pip install -e ".[dev,ui]"`. The container needed
+`libegl1 libgl1 libxkbcommon0 libdbus-1-3 libfontconfig1` from apt — that, not the wheel, was the
+only real obstacle. `pyproject.toml` previously asserted the opposite; see the caution above.
+
 **Buildable and verifiable on Linux:** notes model and store, atomic write and rotation, schema
 guard, importer and chunking, embedding index (against a fake embedder), the STT interface and its
 conformance suite, **the local Whisper backend's VAD, finalisation, timestamps and threading**
 (behind a `Transcriber` Protocol), the utterance assembler (fed by WAV fixtures), matching
-prefilter, sequence gate, dispatch policy, diagnostics, credentials logic.
+prefilter, sequence gate, dispatch policy, diagnostics, credentials logic, **and Qt widgets and
+dialogs under `QT_QPA_PLATFORM=offscreen`**.
 
 **Requires the Windows machine:** WASAPI capture (M1), `faster-whisper` timing *and the model
 adapter itself* (T2.4/AS-1, AS-9),
@@ -109,6 +138,80 @@ conservative choice, just a broken one.
 ---
 
 ## Log
+
+### T9.1 — First-run consent disclosure (FR63) · complete · 2026-08-14
+
+`interview_prep_recall/first_run.py`, `interview_prep_recall/ui/consent_dialog.py`,
+`tests/test_first_run.py` (15), `tests/test_consent_dialog.py` (16), plus composition-root wiring
+and three tests in `test_app.py`. 461 passing.
+
+**The headline is not the dialog — it is that Qt was never blocked.** `pyproject.toml` listed
+PySide6 under a `windows` extra with the comment *"Windows-only runtime. Cannot be installed or
+exercised on the Linux dev box."* Both halves are false, and the claim had gone unexamined since
+M0 while five tasks across four milestones (M5's overlay, T9.2, T9.3, T7.4, T10.7) were filed as
+Windows-blocked on the strength of it. Verifying it took four minutes: `pip install PySide6`,
+five apt packages for EGL/xkb, and one dialog under `QT_QPA_PLATFORM=offscreen`. **Fifth instance
+of the blanket-label error**, and the first one recorded in a dependency comment rather than in
+this file, which is why nobody re-read it as a claim.
+
+**Policy and widget are separate modules, and the split is the design.** "Unavoidable" is a
+property of a policy, not of a widget: a dialog can be modal, frameless and un-closable and still
+fail FR63 if the caller treats a dismissal as agreement. So `require_consent(consent, present)`
+has no Qt import and takes an injected presenter, and the dialog is tested independently for the
+one thing only it can guarantee — that nothing except tick-then-press produces an
+acknowledgement.
+
+**What Qt gives you for free, and why all of it is closed off.** `QDialog` routes Esc, the
+title-bar X, `close()` and a programmatic `reject()` to the same `Rejected` code, and `Rejected`
+is falsy in a way that reads as "the user declined" only if someone checked. Every implicit route
+is neutralised rather than mapped to decline: a legal notice dismissed by a reflexive Esc should
+still be on screen when the user looks back, because the alternative is an app that quits without
+explanation minutes before an interview. `accept()` is guarded too, since it is public on
+`QDialog` and reachable from any future signal wiring. All four guards have negative controls.
+
+**Versioned, like `ReportConsent`.** A bare boolean is what made FR85 impossible to express, and
+legal text does get edited. `required` compares with `!=`, not `<`: a record from a *newer*
+version — a downgraded install, a copied profile — was given against text this build cannot
+display.
+
+**Found in the local review and fixed:** two tests named `test_present_disclosure_*` never called
+`present_disclosure`. They built their own presenters and merely imported the real one, with an
+`__all__` line in the test module laundering the unused import. The production seam — the
+function the app actually wires — had zero coverage while two tests asserted its contract by
+name. Now driven for real through `QTimer.singleShot` into the modal event loop, with a negative
+control confirming the decline path fails when the return value is forced to True.
+
+**PR #16 review round (Codex) — one finding, real, and it was also live in merged code:**
+
+`{"first_run_disclosure_version": true}` satisfied the gate. `bool` subclasses `int`, so `True`
+passes `isinstance(version, int)` **and** compares equal to version 1 — a malformed consent file
+failing **open**, skipping the legal disclosure entirely, in the module whose entire purpose is
+to fail closed. Fixed with an explicit bool rejection.
+
+The same line existed in `report/consent.py`, merged since M11, with the same bypass against
+FR85's re-acknowledgement — so the fix went to both. That module also lacked a non-dict guard:
+`json.loads("[]")` returns a list and `.get` on it raises `AttributeError`, which its `except`
+clause does not catch, so a malformed file crashed instead of failing closed. Both now covered by
+parametrised tests, with a negative control confirming the boolean case fails without the fix.
+
+Worth noting how it got in: the guard was copied from `ReportConsent` on the reasoning that the
+pattern was already reviewed and merged. It was — and it was already wrong. Copying a defect
+across modules is how one bug becomes two, and reviewing the copy on its own terms is what would
+have caught it.
+
+**Deferred, deliberately, and split out as T9.1a:** the gate has no *enforcement* point. FR63
+gates capture, and capture is M1 (blocked on the Windows machine), so the call that refuses to
+open a device on DECLINED cannot be written against anything real. Guarding `Application.consume`
+instead was considered and rejected: by the time an utterance exists, the audio has already been
+captured — it would look like enforcement at the wrong layer, which is this project's defect
+class exactly. The gate is constructed and exercised in the composition root so it is not
+unwired glue (D-20, five instances), and the missing half is a task rather than a silence.
+
+**Also deferred:** `closeEvent` refuses unconditionally, which may block an OS-initiated session
+end (`WM_QUERYENDSESSION`). Evaluating that needs real Windows shutdown behaviour. Recorded as a
+follow-up on T9.1a rather than guessed at.
+
+---
 
 ### T2.2 — Local Whisper backend · complete · 2026-08-14
 
