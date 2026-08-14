@@ -24,10 +24,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol
 
+from interview_prep_recall.config import AppConfig, ConfigLoadStatus, ConfigStore
 from interview_prep_recall.diagnostics.ring import DiagnosticRing
 from interview_prep_recall.first_run import (
     CONSENT_FILENAME,
@@ -52,6 +53,7 @@ from interview_prep_recall.report.record import SessionRecord
 from interview_prep_recall.report.store import Cipher, SessionStore
 from interview_prep_recall.session.health import HealthMonitor
 from interview_prep_recall.session.manager import PurgeHooks, SessionManager
+from interview_prep_recall.settings import AppliedSettings, SettingsApplier
 from interview_prep_recall.stt.assembler import StreamRouter, Utterance
 from interview_prep_recall.stt.fallback import EgressMonitor
 from interview_prep_recall.tracker.progress import ProgressTracker
@@ -165,7 +167,22 @@ class Application:
     cipher: Cipher
     context_set: ContextSet
     on_result: Callable[[MatchResult], None] = lambda _result: None
-    retention_days: int | None = 30
+    config_override: AppConfig | None = None
+    """Injected for tests; `config.json` is loaded when omitted (T9.2a).
+
+    A separate init field from `config` so the resolved value can be non-optional. A
+    single `AppConfig | None` field stays optional to the type checker forever, and every
+    reader then needs a `None` branch that `__post_init__` has already made unreachable.
+    """
+
+    retention_days: int | None = None
+    """Deprecated override, kept so existing callers keep working.
+
+    When given it wins over `config.retention_days`. Retention belongs in `config.json`
+    (design §4) and a second source of truth for the same setting is how the two drift —
+    so this exists only until the callers move, and `Application.config` is the one that
+    is persisted.
+    """
 
     ring: DiagnosticRing = field(init=False)
     monitor: HealthMonitor = field(init=False)
@@ -179,6 +196,10 @@ class Application:
     sessions: SessionStore = field(init=False)
     consent: ReportConsent = field(init=False)
     first_run: FirstRunConsent = field(init=False)
+    config: AppConfig = field(init=False)
+    config_store: ConfigStore = field(init=False)
+    config_status: ConfigLoadStatus = field(init=False)
+    settings: SettingsApplier = field(init=False)
     reports: ReportGenerator = field(init=False)
     session: SessionManager = field(init=False)
     switches: CloudSwitchFanout = field(init=False)
@@ -186,16 +207,27 @@ class Application:
 
     def __post_init__(self) -> None:
         self.ring = DiagnosticRing()
+
+        # Settings first: everything below is constructed from them.
+        self.config_store = ConfigStore(self.root)
+        if self.config_override is None:
+            self.config, self.config_status = self.config_store.load()
+        else:
+            self.config, self.config_status = self.config_override, ConfigLoadStatus.LOADED
+        if self.retention_days is not None:
+            self.config.retention_days = self.retention_days
         self.monitor = HealthMonitor()
         self.egress = EgressMonitor(self.monitor)
 
         self.index = EmbeddingIndex(self.root, self.embedder)
         self.index.build(self.context_set)
-        self.prefilter = Prefilter(self.index, self.context_set, self.embedder)
+        self.prefilter = Prefilter(
+            self.index, self.context_set, self.embedder, tau_floor=self.config.tau_floor
+        )
         self.runner = BackgroundCallRunner()
         self.pipeline = MatchingPipeline(
             prefilter=self.prefilter,
-            selector=Stage2Selector(self.client),
+            selector=Stage2Selector(self.client, model_id=self.config.llm_model_id),
             on_result=self.on_result,
             ring=self.ring,
             runner=self.runner,
@@ -205,18 +237,31 @@ class Application:
             note_set=self.context_set,
             index=self.index,
             embedder=self.embedder,
+            tau_track=self.config.tau_track,
             ring=self.ring,
         )
         self.router = StreamRouter()
         self.record = SessionRecord(ring=self.ring)
 
         self.sessions = SessionStore(
-            self.root, cipher=self.cipher, ring=self.ring, retention_days=self.retention_days
+            self.root,
+            cipher=self.cipher,
+            ring=self.ring,
+            retention_days=self.config.retention_days,
         )
         self.consent = ReportConsent(self.root / "report_consent.json")
         # Separate records for separate statements (FR63 vs FR85). `consent.json` is
         # FR63's filename in design §4.
         self.first_run = FirstRunConsent(self.root / CONSENT_FILENAME)
+        self.settings = SettingsApplier(
+            # The components were just built from `self.config`, so that is what they
+            # hold — the baseline every later `apply` diffs against.
+            running=replace(self.config),
+            prefilter=self.prefilter,
+            tracker=self.tracker,
+            selector=self.pipeline.selector,
+            sessions=self.sessions,
+        )
         self.reports = ReportGenerator(
             client=self.client,
             consent=self.consent,
@@ -247,6 +292,26 @@ class Application:
         self.session.attach_matching(self.switches)
 
     # ---------- the utterance path ----------
+
+    def apply_settings(self, config: AppConfig) -> AppliedSettings:
+        """Persist edited settings and push them into the running graph (T9.2).
+
+        Saves **before** anything else changes. If the write fails, nothing has moved:
+        `self.config`, the components and the file all still hold the previous settings,
+        and the caller sees the exception.
+
+        An earlier version assigned `self.config` first and *then* saved. A failed write
+        left three different answers to "what are the current settings" — the new value
+        in memory, the old one on disk, the old one in the components — and the next call
+        would diff against a `previous` that had never been real anywhere.
+
+        The applier keeps its own record of what the components hold, so a change needing
+        a restart keeps being reported until the process actually restarts rather than
+        being forgotten by the next unrelated save.
+        """
+        self.config_store.save(config)
+        self.config = config
+        return self.settings.apply(config)
 
     def require_first_run_consent(self, present: DisclosurePresenter) -> ConsentOutcome:
         """FR63's gate (T9.1). Must pass before audio capture is opened.

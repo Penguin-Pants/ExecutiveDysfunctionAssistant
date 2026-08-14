@@ -21,12 +21,12 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | **M6 — Session lifecycle** | 🟢 Logic complete · panic on hold (D-U11) | T6.1–T6.3, T6.5 classification, T6.6 backpressure, T6.7 done. T6.4 and the OS trigger paths need Windows |
 | **M7 — Progress tracker** | 🟢 T7.1 + T7.3 complete | Marking and text-domain echo suppression done. T7.2 needs paired audio fixtures; T7.4 is Qt |
 | **M8 — Cloud STT backends** | 🟢 T8.1–T8.5 complete | Deepgram, ElevenLabs, fallback, egress. Protocols unverified against a live endpoint (**AS-8**) |
-| **M9 — Packaging & first run** | 🟡 T9.0 + T9.1 complete | Composition root and FR63 first-run disclosure. **Qt is buildable and testable here** (offscreen) — T9.2/T9.3 are next. T9.4 is PyInstaller; T9.5 needs live vendor docs |
+| **M9 — Packaging & first run** | 🟡 T9.0–T9.2 complete | Composition root, FR63 disclosure, `config.json` store + settings surface. T9.3 (wizard) is next and is buildable here. T9.4 is PyInstaller; T9.5 needs live vendor docs |
 | **M10 — Typed context sources** | 🟢 T10.1–T10.6 + migration complete | Five kinds, per-kind caps and thresholds, schema v1→v2 migration. T10.7 is Qt |
 | **M11 — Post-interview report** | 🟢 T11.1, T11.3–T11.9 complete | Record, evidence binding, encrypted store, retention, generation. T11.2's DPAPI binding and T11.10 need Windows |
 
-**Next action: T9.2 (settings surface), then T9.3 (setup wizard).** Both are Qt, and **Qt runs
-here** — see below.
+**Next action: T9.3 (setup wizard), then T9.2b** — wire a main window that actually opens the
+settings dialog. Both are Qt, and **Qt runs here** — see below.
 
 That last sentence was written three hours after the previous version of this paragraph said
 T9.4 was "the only remaining task with no hardware dependency". It was wrong, for the **fifth**
@@ -47,7 +47,7 @@ behind that one word for five milestones.
 
 Remaining, re-sorted after the Qt discovery:
 
-- **Buildable and testable here (Qt, offscreen):** T9.2, T9.3, T7.4's checklist rendering,
+- **Buildable and testable here (Qt, offscreen):** T9.3, T9.2b, T7.4's checklist rendering,
   T10.7's per-kind marking, and the *widget* half of M5's overlay.
 - **Genuinely needs Windows:** M1 (WASAPI, AS-2 gate), T2.4 (AS-1, needs the D-U6 laptop's CPU),
   T5.2's `SetWindowDisplayAffinity`, T6.4's ProcMon trace, T9.1a's device-open enforcement,
@@ -138,6 +138,110 @@ conservative choice, just a broken one.
 ---
 
 ## Log
+
+### T9.2 + T9.2a — Settings surface and the `config.json` store · complete · 2026-08-14
+
+`interview_prep_recall/config.py`, `interview_prep_recall/settings.py`,
+`interview_prep_recall/ui/settings.py`, plus `tests/test_config.py` (40),
+`tests/test_settings.py` (20) and composition-root tests in `test_app.py`. 530 passing.
+
+**A missing prerequisite, and it was the T9.0 shape again.** T9.2's acceptance criterion is
+"sensitivity, thresholds, model ID, backend choice all editable **and persisted**", and design §4
+specifies `config.json` down to its migration semantics — but **no task owned building it**. The
+plan named a dependency and never gave it an ID, so nothing owned it and the work was invisible
+in the task list. Recorded as **T9.2a** rather than folded silently into T9.2. This is now the
+second time this exact gap has appeared (T9.0 was the first), which suggests reading acceptance
+criteria for *nouns that must already exist* is worth doing as a habit.
+
+**Config recovers where notes refuse, and the difference is deliberate.** `NotesStore` refuses to
+parse a newer schema because notes are irreplaceable. Design §4 says the opposite for config: a
+missing, unparseable or newer-versioned file is replaced with defaults, because a slider position
+can be re-set and refusing to launch cannot be undone by the user. The two stores now sit side by
+side doing opposite things, and both docstrings say why.
+
+**"And the user is notified" is in the API, not in a log line.** `load()` returns
+`(AppConfig, ConfigLoadStatus)` and the caller cannot get one without the other, with
+`settings_were_lost` distinguishing a first run from an actual loss. A silent reset is the failure
+that really happens: sensitivity reverts, the user does not notice, and they conclude the matching
+is broken.
+
+**τ_degraded is deliberately absent from the schema.** Design §7 makes it `max(0.55, τ_floor +
+0.10)` and explains at length why it must be derived — a fixed 0.55 falls below τ_floor once the
+user raises sensitivity past it, making the degraded gate unconditional and silently restoring the
+behaviour D-U3 exists to overturn. Persisting it as a field would hand that bug straight back, so
+a test asserts it is *not* a config field.
+
+**Persisted settings and FR37 switches are kept apart on purpose.** τ_floor, τ_track, model ids,
+backend and retention go to `config.json`. The three degradation switches are mid-session controls
+that fire on toggle and persist nowhere — a user who killed cloud STT during one bad network
+moment must not find it still off next week having forgotten. The dialog has two output channels
+for that reason.
+
+**What applies live is stated, not discovered.** `SettingsApplier.apply` returns both what took
+effect and what needs a restart. `embed_model_id` cannot apply live (every cached vector came from
+the old model) and neither can `stt_backend` (the streams are already open). Reporting those as
+applied would be the recurring defect here — a guarantee whose test passes while the property is
+false.
+
+**Four defects found in the local two-pass review, all with negative controls:**
+
+1. **`apply_settings` assigned `self.config` before saving.** A failed write left three different
+   answers to "what are the current settings" — new value in memory, old value on disk, old value
+   in the components — and the next call would diff against a `previous` that had never been real.
+   Worse, the docstring already claimed it saved first. Save now happens before anything moves.
+2. **`load()` promised never to raise but only caught `ConfigError` around migrations.** A
+   migration failing on a `KeyError` — ordinary code failing in an ordinary way — meant refusing
+   to launch over a settings file, exactly the trade design §4 rejects.
+3. **`stt_backend` was the one field with no validation.** `SettingsDialog.config()` reads
+   `QComboBox.currentData()`, which is `None` at index -1, producing an `AppConfig` that validated
+   cleanly and then crashed in `to_dict()` on `.value`.
+4. **The dialog was written as `ui/settings_dialog.py` beside the `ui/settings.py` stub.** Design
+   §1 names `ui/settings.py` and T0.1 requires the tree to match it. Moved; the stub is gone.
+
+**A caution about negative controls, since this file relies on them heavily.** Reverting fix 1 for
+its negative control swapped two lines of *identical total length* within the same second, which
+left a stale `.pyc` that Python happily reused — the restored fix appeared to still be broken for
+several minutes. `find . -name __pycache__ -exec rm -rf {} +` before re-running is now part of the
+technique. A negative control that lies is worse than none.
+
+**PR #17 review round (Codex) — three findings, all real:**
+
+1. **A pending restart was reported once and then forgotten.** `apply` diffed against the last
+   *persisted* config, so changing `embed_model_id` reported a restart — and then any unrelated
+   save compared the field to its new persisted value, found them equal, and reported
+   `restart_required` false while the running index still held the old model. Reverting the field
+   before restarting had the mirror-image bug, demanding a restart that was not needed. Fixed by
+   giving `SettingsApplier` a `running` config — what the components actually hold — and writing
+   back to it *only* for fields that genuinely reached a component.
+2. **`applied` was reported for a change whose target was absent.** The module docstring said
+   "without pretending it applied anything it could not reach"; the code did exactly that, and a
+   test named `test_applier_tolerates_absent_targets` asserted the buggy behaviour. Test and
+   docstring disagreed and the test won, which made `applied` mean "changed" and useless to a
+   caller deciding whether to tell the user the change took effect. `AppliedSettings` now has a
+   third outcome, `persisted_only`.
+3. **`float()` overflowed on a large JSON integer.** JSON has no integer bound, so a hand-edited
+   `999…9` parses to a Python int that `float()` cannot represent — and `from_dict` runs *outside*
+   `load`'s recovery block, so this raised out of `Application.__post_init__`. The app refused to
+   start over a config value, which is the exact promise this module makes and breaks. Fixed with
+   NaN and infinity handled at the same time, NaN being the dangerous one: it fails every
+   comparison, so a clamp returns it unchanged and it then passes the range check by failing both
+   halves of it.
+
+Finding 2 deserves the same note T9.1's finding 3 got. My local two-pass review had already run
+over this file and passed it, because the docstring asserted the correct behaviour and I read the
+docstring. The test that would have caught it was the one asserting the bug, written by me in the
+same sitting. **A test and a docstring that disagree are a defect regardless of which is right,
+and neither reviews the other.**
+
+**Deferred as T9.2b:** nothing in production constructs `SettingsDialog`. The pieces exist and are
+tested, but there is no main window to open them from — the same gap as T9.1a, and the same one
+that will close when T9.3 lands an entry point. Recorded as a task rather than as silence.
+
+**Also noted:** `Application.retention_days` is now a deprecated override of
+`config.retention_days`, kept so existing callers keep working. Two sources of truth for one
+setting is how they drift; it should go once callers move.
+
+---
 
 ### T9.1 — First-run consent disclosure (FR63) · complete · 2026-08-14
 
