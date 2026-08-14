@@ -25,7 +25,7 @@ so `apply()` reports which changes need a restart rather than pretending.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from interview_prep_recall.config import AppConfig
@@ -51,10 +51,25 @@ class RetentionTarget(Protocol):
 
 @dataclass(frozen=True)
 class AppliedSettings:
-    """What actually changed, and what the user still has to restart for."""
+    """What reached the running components, and what did not.
+
+    Three outcomes, not two. An earlier version had only `applied` and `needs_restart`,
+    and put a field in `applied` whenever it changed — including when the target it was
+    meant to reach was absent. The docstring claimed the opposite ("without pretending it
+    applied anything it could not reach") and a test asserted the buggy behaviour by
+    name, which is this codebase's recurring defect reproduced in the module written to
+    describe it honestly.
+    """
 
     applied: frozenset[str]
+    """Reached a live component. The component now holds this value."""
+
     needs_restart: frozenset[str]
+    """Cannot take effect until the process restarts. **Reported on every save until it
+    actually does** — see `SettingsApplier.running`."""
+
+    persisted_only: frozenset[str]
+    """Changed and saved, but the component it drives was not present to receive it."""
 
     @property
     def restart_required(self) -> bool:
@@ -83,49 +98,69 @@ class SettingsApplier:
     Protocols so the tests drive it without building a real pipeline.
     """
 
+    running: AppConfig = field(default_factory=AppConfig)
+    """**What the live components actually hold**, which is not the same as what is saved.
+
+    This is the baseline every `apply()` diffs against, and it is the fix for a real bug:
+    diffing against the last *persisted* config meant a restart-only change was reported
+    once and then forgotten. Change `embed_model_id`, save — restart required. Save any
+    unrelated setting before restarting and the field now compares equal to the persisted
+    value, so `restart_required` goes false while the running index is still the old
+    model. Reverting the field before restarting had the mirror-image bug, demanding a
+    restart that was not needed.
+
+    Only fields that genuinely reached a component are written back here, so a pending
+    restart stays pending until the process actually restarts and rebuilds from the saved
+    config.
+    """
+
     prefilter: PrefilterTarget | None = None
     tracker: TrackerTarget | None = None
     selector: SelectorTarget | None = None
     sessions: RetentionTarget | None = None
 
-    def apply(self, previous: AppConfig, current: AppConfig) -> AppliedSettings:
+    def apply(self, current: AppConfig) -> AppliedSettings:
         """Push `current` into the running components. Returns what happened.
 
-        Takes the previous config rather than diffing against the live objects: the
-        objects are the *destination*, and reading them back to decide what changed
-        would report success for a write that never landed.
+        Diffs against `self.running` — the components' own state — rather than against a
+        caller-supplied "previous". The components are the destination, and the whole
+        question this answers is whether they match the config yet.
         """
         applied: set[str] = set()
         needs_restart: set[str] = set()
+        persisted_only: set[str] = set()
 
-        if current.tau_floor != previous.tau_floor:
-            # FR52's verification is literally "move the control; assert τ_floor changes
-            # and persists". The setter validates the range and `tau_degraded` follows
-            # from it automatically, which is why that one is not a field.
-            if self.prefilter is not None:
-                self.prefilter.tau_floor = current.tau_floor
-            applied.add("tau_floor")
+        def push(name: str, target: object | None, attribute: str) -> None:
+            if getattr(current, name) == getattr(self.running, name):
+                return
+            if target is None:
+                # No component to receive it. Recording this as applied is what the
+                # previous version did, and it made "applied" mean "changed", which is
+                # the one thing the caller cannot use it for.
+                persisted_only.add(name)
+                return
+            setattr(target, attribute, getattr(current, name))
+            setattr(self.running, name, getattr(current, name))
+            applied.add(name)
 
-        if current.tau_track != previous.tau_track:
-            if self.tracker is not None:
-                self.tracker.tau_track = current.tau_track
-            applied.add("tau_track")
-
-        if current.llm_model_id != previous.llm_model_id:
-            # D-9: the model id is read per request, so a change is live.
-            if self.selector is not None:
-                self.selector.model_id = current.llm_model_id
-            applied.add("llm_model_id")
+        # FR52's verification is literally "move the control; assert τ_floor changes and
+        # persists". The setter validates the range, and `tau_degraded` follows from it
+        # automatically — which is why that one is not a field.
+        push("tau_floor", self.prefilter, "tau_floor")
+        push("tau_track", self.tracker, "tau_track")
+        # D-9: the model id is read per request, so a change is live.
+        push("llm_model_id", self.selector, "model_id")
+        # FR84: `SessionStore` reads this on each sweep.
+        push("retention_days", self.sessions, "retention_days")
 
         for name in RESTART_ONLY_FIELDS:
-            if getattr(current, name) != getattr(previous, name):
+            if getattr(current, name) != getattr(self.running, name):
+                # `self.running` is deliberately **not** updated: the restart is still
+                # outstanding, so the next save must report it again.
                 needs_restart.add(name)
 
-        if current.retention_days != previous.retention_days:
-            # FR84. `SessionStore` reads this on each sweep, so pushing it is enough —
-            # no restart, and no rescheduling of anything.
-            if self.sessions is not None:
-                self.sessions.retention_days = current.retention_days
-            applied.add("retention_days")
-
-        return AppliedSettings(applied=frozenset(applied), needs_restart=frozenset(needs_restart))
+        return AppliedSettings(
+            applied=frozenset(applied),
+            needs_restart=frozenset(needs_restart),
+            persisted_only=frozenset(persisted_only),
+        )

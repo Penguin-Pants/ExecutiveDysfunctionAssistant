@@ -348,3 +348,41 @@ def test_a_migration_returning_a_non_dict_resets(app_data: Path) -> None:
 
     _config, status = store.load()
     assert status is ConfigLoadStatus.DEFAULTS_UNREADABLE
+
+
+def test_an_unrepresentable_number_falls_back_rather_than_raising(store: ConfigStore) -> None:
+    """JSON has no integer bound, so `999...9` parses to a Python int that `float()`
+    cannot represent.
+
+    `from_dict` runs outside `load`'s recovery block, so this raised `OverflowError` out
+    of `Application.__post_init__` — the app refusing to start over a hand-edited config
+    value, which is exactly what this module promises not to do.
+    """
+    store.root.mkdir(parents=True, exist_ok=True)
+    store.path.write_text(
+        f'{{"schema_version": {CONFIG_SCHEMA_VERSION}, "tau_floor": {"9" * 400}}}',
+        encoding="utf-8",
+    )
+
+    config, status = store.load()
+
+    assert config.tau_floor == AppConfig().tau_floor
+    assert status is ConfigLoadStatus.LOADED
+
+
+@pytest.mark.parametrize("literal", ["1e999", "-1e999", "NaN", "Infinity", "-Infinity"])
+def test_nan_and_infinity_fall_back(store: ConfigStore, literal: str) -> None:
+    """`json.loads` accepts these and `float()` keeps them.
+
+    NaN is the dangerous one: it fails every comparison, so a clamp returns it unchanged
+    and it then passes `validate`'s range check by failing both halves of it.
+    """
+    store.root.mkdir(parents=True, exist_ok=True)
+    store.path.write_text(
+        f'{{"schema_version": {CONFIG_SCHEMA_VERSION}, "tau_floor": {literal}}}',
+        encoding="utf-8",
+    )
+
+    config, _status = store.load()
+
+    assert config.tau_floor == AppConfig().tau_floor

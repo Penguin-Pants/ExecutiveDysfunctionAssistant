@@ -215,7 +215,21 @@ class AppConfig:
 def _number(value: Any, default: float, low: float, high: float) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return default
-    return _clamp(float(value), low, high)
+    try:
+        number = float(value)
+    except (OverflowError, ValueError):
+        # JSON has no integer bound, so a hand-edited `999...9` parses to a Python int
+        # that `float()` cannot represent. `from_dict` runs outside `load`'s recovery
+        # block, so this raised out of `Application.__post_init__` — the app refusing to
+        # start over a config value, which is precisely what this module promises not to
+        # do.
+        return default
+    if number != number or number in (float("inf"), float("-inf")):
+        # NaN and infinity survive `float()` (JSON's `1e999` parses to `inf`). NaN fails
+        # every comparison, so a clamp would return it unchanged and it would then pass
+        # `validate`'s range check by failing both halves of it.
+        return default
+    return _clamp(number, low, high)
 
 
 def _text(value: Any, default: str) -> str:

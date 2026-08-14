@@ -204,6 +204,35 @@ left a stale `.pyc` that Python happily reused — the restored fix appeared to 
 several minutes. `find . -name __pycache__ -exec rm -rf {} +` before re-running is now part of the
 technique. A negative control that lies is worse than none.
 
+**PR #17 review round (Codex) — three findings, all real:**
+
+1. **A pending restart was reported once and then forgotten.** `apply` diffed against the last
+   *persisted* config, so changing `embed_model_id` reported a restart — and then any unrelated
+   save compared the field to its new persisted value, found them equal, and reported
+   `restart_required` false while the running index still held the old model. Reverting the field
+   before restarting had the mirror-image bug, demanding a restart that was not needed. Fixed by
+   giving `SettingsApplier` a `running` config — what the components actually hold — and writing
+   back to it *only* for fields that genuinely reached a component.
+2. **`applied` was reported for a change whose target was absent.** The module docstring said
+   "without pretending it applied anything it could not reach"; the code did exactly that, and a
+   test named `test_applier_tolerates_absent_targets` asserted the buggy behaviour. Test and
+   docstring disagreed and the test won, which made `applied` mean "changed" and useless to a
+   caller deciding whether to tell the user the change took effect. `AppliedSettings` now has a
+   third outcome, `persisted_only`.
+3. **`float()` overflowed on a large JSON integer.** JSON has no integer bound, so a hand-edited
+   `999…9` parses to a Python int that `float()` cannot represent — and `from_dict` runs *outside*
+   `load`'s recovery block, so this raised out of `Application.__post_init__`. The app refused to
+   start over a config value, which is the exact promise this module makes and breaks. Fixed with
+   NaN and infinity handled at the same time, NaN being the dangerous one: it fails every
+   comparison, so a clamp returns it unchanged and it then passes the range check by failing both
+   halves of it.
+
+Finding 2 deserves the same note T9.1's finding 3 got. My local two-pass review had already run
+over this file and passed it, because the docstring asserted the correct behaviour and I read the
+docstring. The test that would have caught it was the one asserting the bug, written by me in the
+same sitting. **A test and a docstring that disagree are a defect regardless of which is right,
+and neither reviews the other.**
+
 **Deferred as T9.2b:** nothing in production constructs `SettingsDialog`. The pieces exist and are
 tested, but there is no main window to open them from — the same gap as T9.1a, and the same one
 that will close when T9.3 lands an entry point. Recorded as a task rather than as silence.

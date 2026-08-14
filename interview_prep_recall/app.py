@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -254,6 +254,9 @@ class Application:
         # FR63's filename in design §4.
         self.first_run = FirstRunConsent(self.root / CONSENT_FILENAME)
         self.settings = SettingsApplier(
+            # The components were just built from `self.config`, so that is what they
+            # hold — the baseline every later `apply` diffs against.
+            running=replace(self.config),
             prefilter=self.prefilter,
             tracker=self.tracker,
             selector=self.pipeline.selector,
@@ -301,10 +304,14 @@ class Application:
         left three different answers to "what are the current settings" — the new value
         in memory, the old one on disk, the old one in the components — and the next call
         would diff against a `previous` that had never been real anywhere.
+
+        The applier keeps its own record of what the components hold, so a change needing
+        a restart keeps being reported until the process actually restarts rather than
+        being forgotten by the next unrelated save.
         """
         self.config_store.save(config)
-        previous, self.config = self.config, config
-        return self.settings.apply(previous, config)
+        self.config = config
+        return self.settings.apply(config)
 
     def require_first_run_consent(self, present: DisclosurePresenter) -> ConsentOutcome:
         """FR63's gate (T9.1). Must pass before audio capture is opened.

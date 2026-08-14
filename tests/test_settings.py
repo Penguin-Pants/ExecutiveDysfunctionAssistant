@@ -53,7 +53,7 @@ def applier() -> SettingsApplier:
 
 
 def test_sensitivity_reaches_the_running_prefilter(applier: SettingsApplier) -> None:
-    result = applier.apply(AppConfig(), AppConfig(tau_floor=0.50))
+    result = applier.apply(AppConfig(tau_floor=0.50))
 
     assert applier.prefilter.tau_floor == 0.50  # type: ignore[union-attr]
     assert "tau_floor" in result.applied
@@ -77,15 +77,17 @@ def test_tau_degraded_follows_tau_floor_without_being_a_setting() -> None:
 def test_unchanged_settings_are_not_reported_as_applied(applier: SettingsApplier) -> None:
     """Applying nothing must say nothing changed. A surface that reports every field as
     applied on every save makes "needs restart" meaningless."""
-    result = applier.apply(AppConfig(), AppConfig())
-    assert result == AppliedSettings(applied=frozenset(), needs_restart=frozenset())
+    result = applier.apply(AppConfig())
+    assert result == AppliedSettings(
+        applied=frozenset(), needs_restart=frozenset(), persisted_only=frozenset()
+    )
 
 
 # ---------- the rest of the live path ----------
 
 
 def test_tracker_threshold_and_model_id_apply_live(applier: SettingsApplier) -> None:
-    result = applier.apply(AppConfig(), AppConfig(tau_track=0.75, llm_model_id="claude-new-model"))
+    result = applier.apply(AppConfig(tau_track=0.75, llm_model_id="claude-new-model"))
 
     assert applier.tracker.tau_track == 0.75  # type: ignore[union-attr]
     assert applier.selector.model_id == "claude-new-model"  # type: ignore[union-attr]
@@ -93,7 +95,7 @@ def test_tracker_threshold_and_model_id_apply_live(applier: SettingsApplier) -> 
 
 
 def test_retention_reaches_the_session_store(applier: SettingsApplier) -> None:
-    applier.apply(AppConfig(), AppConfig(retention_days=None))
+    applier.apply(AppConfig(retention_days=None))
     assert applier.sessions.retention_days is None  # type: ignore[union-attr]
 
 
@@ -104,7 +106,7 @@ def test_embedding_model_change_requires_a_restart(applier: SettingsApplier) -> 
     """Every cached vector came from the old model. Reporting this as applied while the
     running index still uses the previous one is the recurring defect in this codebase —
     a guarantee whose test passes while the property is false."""
-    result = applier.apply(AppConfig(), AppConfig(embed_model_id="different/model"))
+    result = applier.apply(AppConfig(embed_model_id="different/model"))
 
     assert result.needs_restart == {"embed_model_id"}
     assert "embed_model_id" not in result.applied
@@ -112,7 +114,7 @@ def test_embedding_model_change_requires_a_restart(applier: SettingsApplier) -> 
 
 
 def test_backend_change_requires_a_restart(applier: SettingsApplier) -> None:
-    result = applier.apply(AppConfig(), AppConfig(stt_backend=SttBackendChoice.DEEPGRAM))
+    result = applier.apply(AppConfig(stt_backend=SttBackendChoice.DEEPGRAM))
     assert result.needs_restart == {"stt_backend"}
 
 
@@ -124,11 +126,19 @@ def test_restart_only_fields_are_all_real_config_fields() -> None:
     assert set(config_fields()) >= RESTART_ONLY_FIELDS
 
 
-def test_applier_tolerates_absent_targets() -> None:
-    """Usable before every component exists, without pretending it applied anything it
-    could not reach."""
-    result = SettingsApplier().apply(AppConfig(), AppConfig(tau_floor=0.5))
-    assert "tau_floor" in result.applied
+def test_absent_targets_are_not_reported_as_applied() -> None:
+    """Found by review on PR #17 — and the test this replaced asserted the bug.
+
+    It was named `test_applier_tolerates_absent_targets` and asserted
+    `"tau_floor" in result.applied` with no target present, while the module docstring
+    claimed the opposite. Test and docstring disagreed and the test won, which made
+    `applied` mean "changed" and useless to a caller deciding whether to tell the user
+    the change took effect.
+    """
+    result = SettingsApplier().apply(AppConfig(tau_floor=0.5))
+
+    assert result.applied == frozenset()
+    assert result.persisted_only == {"tau_floor"}
 
 
 # ---------- Qt surface ----------
@@ -273,3 +283,53 @@ def test_switches_are_not_part_of_the_persisted_config(qapp: QApplication) -> No
 
     assert dialog.config() == AppConfig()
     assert not set(SWITCH_LABELS) & set(config_fields())
+
+
+# ---------- PR #17 review findings ----------
+
+
+def test_a_pending_restart_survives_later_unrelated_saves() -> None:
+    """The bug: restart-required was reported once and then forgotten.
+
+    Change `embed_model_id` and save — restart required. Save any unrelated setting
+    before restarting and the field compares equal to the *persisted* value, so
+    `restart_required` goes false while the running index is still the old model. The
+    user is told everything is applied and it is not.
+    """
+    applier = SettingsApplier(
+        prefilter=FakePrefilter(), tracker=FakeTracker(), selector=FakeSelector()
+    )
+
+    first = applier.apply(AppConfig(embed_model_id="new/embedder"))
+    assert first.needs_restart == {"embed_model_id"}
+
+    # An unrelated save, with the embedding model still at its new value.
+    second = applier.apply(AppConfig(embed_model_id="new/embedder", tau_floor=0.50))
+
+    assert second.needs_restart == {"embed_model_id"}, "the restart is still outstanding"
+    assert second.applied == {"tau_floor"}
+
+
+def test_reverting_a_restart_field_before_restarting_needs_no_restart() -> None:
+    """The mirror-image bug: demanding a restart that is not needed.
+
+    The running component never changed, so putting the value back means there is
+    nothing left to do.
+    """
+    applier = SettingsApplier(prefilter=FakePrefilter())
+
+    applier.apply(AppConfig(embed_model_id="new/embedder"))
+    back = applier.apply(AppConfig())
+
+    assert back.needs_restart == frozenset()
+
+
+def test_live_changes_do_not_replay_on_the_next_save() -> None:
+    """The counterpart: something that *did* reach a component must not keep being
+    reported, or `applied` becomes as useless as `needs_restart` was."""
+    applier = SettingsApplier(prefilter=FakePrefilter())
+
+    applier.apply(AppConfig(tau_floor=0.50))
+    again = applier.apply(AppConfig(tau_floor=0.50))
+
+    assert again.applied == frozenset()
