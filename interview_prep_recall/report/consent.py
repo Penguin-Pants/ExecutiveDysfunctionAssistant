@@ -48,8 +48,20 @@ class ReportConsent:
             # Unreadable consent is absent consent. Failing open here would mean
             # inferring agreement from a corrupt file.
             return None
+        if not isinstance(data, dict):
+            # `json.loads("[]")` is a list, and `.get` on it raises `AttributeError` —
+            # which the clause above does not catch, so a malformed file crashed rather
+            # than failing closed.
+            return None
         version = data.get("report_disclosure_version")
-        return version if isinstance(version, int) else None
+        # `not isinstance(version, bool)` is not pedantry: `bool` subclasses `int`, so
+        # `True` passes an `isinstance(..., int)` check *and* compares equal to version 1.
+        # A record of `{"..._version": true}` would satisfy the gate and skip the
+        # disclosure entirely — a malformed file failing **open**, in the one place this
+        # module exists to fail closed.
+        if isinstance(version, bool) or not isinstance(version, int):
+            return None
+        return version
 
     @property
     def required(self) -> bool:

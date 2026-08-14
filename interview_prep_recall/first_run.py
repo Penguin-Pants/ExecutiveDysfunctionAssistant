@@ -99,7 +99,14 @@ class FirstRunConsent:
         if not isinstance(data, dict):
             return None
         version = data.get("first_run_disclosure_version")
-        return version if isinstance(version, int) else None
+        # `not isinstance(version, bool)` is not pedantry: `bool` subclasses `int`, so
+        # `True` passes an `isinstance(..., int)` check *and* compares equal to version 1.
+        # A record of `{"..._version": true}` would satisfy the gate and skip the
+        # disclosure entirely — a malformed file failing **open**, in the one place this
+        # module exists to fail closed.
+        if isinstance(version, bool) or not isinstance(version, int):
+            return None
+        return version
 
     @property
     def required(self) -> bool:

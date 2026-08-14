@@ -181,6 +181,24 @@ function the app actually wires — had zero coverage while two tests asserted i
 name. Now driven for real through `QTimer.singleShot` into the modal event loop, with a negative
 control confirming the decline path fails when the return value is forced to True.
 
+**PR #16 review round (Codex) — one finding, real, and it was also live in merged code:**
+
+`{"first_run_disclosure_version": true}` satisfied the gate. `bool` subclasses `int`, so `True`
+passes `isinstance(version, int)` **and** compares equal to version 1 — a malformed consent file
+failing **open**, skipping the legal disclosure entirely, in the module whose entire purpose is
+to fail closed. Fixed with an explicit bool rejection.
+
+The same line existed in `report/consent.py`, merged since M11, with the same bypass against
+FR85's re-acknowledgement — so the fix went to both. That module also lacked a non-dict guard:
+`json.loads("[]")` returns a list and `.get` on it raises `AttributeError`, which its `except`
+clause does not catch, so a malformed file crashed instead of failing closed. Both now covered by
+parametrised tests, with a negative control confirming the boolean case fails without the fix.
+
+Worth noting how it got in: the guard was copied from `ReportConsent` on the reasoning that the
+pattern was already reviewed and merged. It was — and it was already wrong. Copying a defect
+across modules is how one bug becomes two, and reviewing the copy on its own terms is what would
+have caught it.
+
 **Deferred, deliberately, and split out as T9.1a:** the gate has no *enforcement* point. FR63
 gates capture, and capture is M1 (blocked on the Windows machine), so the call that refuses to
 open a device on DECLINED cannot be written against anything real. Guarding `Application.consume`

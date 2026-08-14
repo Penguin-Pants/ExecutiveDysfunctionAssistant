@@ -121,7 +121,23 @@ def test_corrupt_record_is_absent_consent(consent: FirstRunConsent) -> None:
     assert consent.required is True
 
 
-@pytest.mark.parametrize("payload", ['{"first_run_disclosure_version": "1"}', "[]", "null", "{}"])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        '{"first_run_disclosure_version": "1"}',
+        "[]",
+        "null",
+        "{}",
+        # `bool` subclasses `int`, so `True` satisfies `isinstance(..., int)` *and*
+        # equals version 1. Without an explicit bool rejection this record skips the
+        # disclosure — a malformed file failing open, in the module whose entire job is
+        # to fail closed.
+        '{"first_run_disclosure_version": true}',
+        '{"first_run_disclosure_version": false}',
+        '{"first_run_disclosure_version": 1.0}',
+        '{"first_run_disclosure_version": null}',
+    ],
+)
 def test_malformed_payloads_are_absent_consent(consent: FirstRunConsent, payload: str) -> None:
     consent.path.parent.mkdir(parents=True, exist_ok=True)
     consent.path.write_text(payload, encoding="utf-8")
