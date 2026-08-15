@@ -221,6 +221,21 @@ wall is checked against the report package, and this new module renders generate
 Passing a file to the directory-only version globbed nothing and asserted nothing: a check that
 could not fail. It now checks `ui/report_view.py` directly.
 
+**PR #24 review — five findings, all valid. Three fixed, two raised as decisions.**
+
+| Severity | Finding | Outcome |
+|---|---|---|
+| P1 | **FR84's sweep had no production caller** while the new session list told the user sessions are deleted automatically. `Application.sweep_retention` carried "no production caller yet — the entry point owns this, and there is no entry point until the UI lands"; the entry point landed in T9.6 and nobody went back. | Fixed. Called from `startup.start` after the config load and before preflight, and the deletion is **stated** — silent automatic deletion of a transcript the user was about to read is indistinguishable from data loss. |
+| P2 | **Every finding rendered twice.** `_sections` builds a section body by joining its accepted findings, so the body *and* the findings printed each conclusion once bare and once above its evidence. | Fixed. Findings render once with citations; the body's remainder is kept, because FR75's truncation notice lives there and a de-duplication that swallowed it would lose a requirement. |
+| P2 | **Any client exception escaped the Qt slot** — offline, rate-limited, bad key — leaving a button that did nothing. | Fixed. Caught at the UI boundary, type and message shown, recorded structurally, controls restored. |
+| P1 | **Generation blocks the GUI thread** (T11.10b). | Raised, not fixed. Changes `ReportGenerator`'s contract — see 07's follow-up table. |
+| P1 | **A historical session is analysed against the current context set** (T11.10c). | Raised, not fixed. A decision about stored data, not a cleanup. |
+
+The first one is the instructive one: **my own label created the false promise.** The requirement
+had no surface, I gave it one, and giving a requirement a surface is also how you find out nothing
+implements it. The docstring naming the gap had been sitting there since T9.0 and was not enough —
+which is the whole D-20 pattern, in the file that documents D-20.
+
 **Follow-up T11.10a:** FR87 asks for delete-all to be signposted **at the panic surface**. The
 control exists here and is named plainly, but the panic surface itself has no UI yet, so the
 signpost has nowhere to live. That is a gap in FR87's coverage, not a gap in this task.
