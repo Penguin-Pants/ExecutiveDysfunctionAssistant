@@ -396,6 +396,45 @@ def test_the_viewer_reads_the_applications_ring(
     assert window.open_diagnostics().ring is application.ring
 
 
+# ---------- T11.10: the route into the report surface ----------
+
+
+def test_the_window_opens_the_report_view(
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
+) -> None:
+    """M11 stored, generated and verified reports for a whole milestone with nothing
+    that could open one. Same gap T5.8 closed for the diagnostics ring."""
+    window = window_with(application, overlay_settings)
+
+    view = window.open_reports()
+
+    assert view.isVisible()
+    assert view.rows == (), "no sessions stored in this fixture"
+
+
+def test_the_report_view_is_held_and_parented(
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
+) -> None:
+    """The ownership rule this window already follows twice: held so a modeless dialog is
+    not collected on return, parented so Qt decides the teardown order."""
+    window = window_with(application, overlay_settings)
+
+    view = window.open_reports()
+
+    assert window._reports is view  # noqa: SLF001
+    assert view.parent() is window
+
+
+def test_the_report_view_reads_the_applications_store(
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
+) -> None:
+    """Not a fresh store: a view wired to its own would show an empty list forever and
+    look like a working feature."""
+    window = window_with(application, overlay_settings)
+
+    assert window.open_reports().sessions is application.sessions
+
+
 def window_with(application: Application, settings: FakeSettings) -> MainWindow:
     return MainWindow(application, _report(blocked=False), overlay_settings=settings)
 

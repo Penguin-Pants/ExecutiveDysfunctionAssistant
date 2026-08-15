@@ -476,12 +476,12 @@ class Application:
         return frozenset({"cancel_network", "drop_transcript"})
 
     def sweep_retention(self) -> list[str]:
-        """FR84's launch-time sweep.
+        """FR84's launch-time sweep. Called by `startup.start`.
 
-        **No production caller yet**, and deliberately not called from `__post_init__`:
-        constructing an `Application` must not delete the user's stored interviews as a
-        side effect. The entry point owns this, and there is no entry point until the UI
-        lands — recorded rather than left to be noticed, because a documented-but-uncalled
-        method is this codebase's most repeated defect (D-20).
+        Deliberately not called from `__post_init__`: constructing an `Application` must
+        not delete the user's stored interviews as a side effect. The entry point owns
+        it, and until T11.10 there was no surface that told the user deletion happens —
+        so this sat here uncalled, which is this codebase's most repeated defect (D-20)
+        and was found by review on PR #24 rather than by the note above.
         """
         return self.sessions.sweep_expired()

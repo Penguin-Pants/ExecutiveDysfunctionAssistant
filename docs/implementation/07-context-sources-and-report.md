@@ -205,7 +205,15 @@ anything, and it is what a user reaching for panic actually wants.
 | **T11.7** Pre-send confirmation with size, every run, **and ownership of the FR20 egress indicator across the upload** | FR81, FR81a | Decline sends nothing; preference is not remembered; indicator lit for the whole call and dark after, including on failure |
 | **T11.8** Consent re-acknowledgement on first enable | FR85 | Fresh disclosure blocks despite prior FR63 ack |
 | **T11.9** Signposted delete-all at the panic surface | FR87 | Affordance present. *(Scoping half dropped — D-U11 leaves panic with nothing to scope.)* |
-| **T11.10** Report view and export | — | **(Windows / Qt)** |
+| **T11.10** Report view and export | FR77–FR85, FR87 (surfaces) | ✅ **Built and tested headless.** `ui/report_view.py`: FR83's session list, the report reader with **FR78's evidence resolved and shown**, FR81's per-run confirmation, FR80's disabled-with-a-reason, FR85's disclosure gate, FR84's retention notice, FR83/FR87 deletion, and a Markdown export (**D-56**). Not Windows — the acceptance row was blank and is now filled from the requirements it surfaces |
+
+### Follow-ups raised by the PR #24 review — decisions, not cleanups
+
+| Task | Problem | Options |
+|---|---|---|
+| **T11.10b** Generation blocks the GUI thread | `Application.generate_report` runs the model call synchronously from a Qt slot. Seconds of frozen UI on a real key, and **FR81a's egress indicator cannot repaint** — lit in memory, dark on screen, which is the opposite of the privacy signal FR20 exists to give. | Not a call-site fix: FR81's `confirm(size)` runs *inside* the generator, after the prompt is built. Either marshal the confirmation back to the GUI thread with a blocking queued connection, or **split prompt-building from sending** so the size is known — and confirmed — before dispatch. The second changes `ReportGenerator`'s contract (T11.4's). |
+| **T11.10c** A historical session is analysed against the **current** context set | `generate_report` rehydrates the stored transcript and the stored tracker verdict, then uses `self.context_set`. FR78a's coverage survives because `missed_note_ids` travels with the transcript; **JD fit and resume utilisation do not**, and are judged against whatever notes are loaded today. Silently wrong, confidently, in a document about the user. | (a) Store the context-set **id** — cheap, nearly useless, since the set is mutable. (b) Store a **snapshot** — correct, and a session-store schema change with a size question against FR82/FR84. (c) A **product answer**: refuse to regenerate against a different set, or state which set was used. Cheapest, and may be right for v1. |
+| **T11.10a** FR87's signpost | The delete-all control exists in the report view and is named plainly, but FR87 asks for it to be signposted **at the panic surface** — which has no UI yet. | Build with the panic surface. |
 
 ### Buildable on Linux now
 

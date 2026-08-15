@@ -51,6 +51,15 @@ CONFIG_RESET_NOTICE = (
 )
 """Design §4's "and the user is notified", in words a user can act on."""
 
+RETENTION_SWEEP_NOTICE = (
+    "{count} stored interview(s) passed the retention window and were deleted. "
+    "Change how long sessions are kept in Settings."
+)
+"""FR84 deletes on a timer the user did not press, so the deletion is **stated**.
+
+Silent automatic deletion of a transcript the user might have been about to read is the
+kind of thing that reads as data loss, and they have no way to tell the difference."""
+
 
 class StartupOutcome(Enum):
     READY = "ready"
@@ -111,6 +120,20 @@ def start(
     notices: list[str] = []
     if application.config_status.settings_were_lost:
         notices.append(CONFIG_RESET_NOTICE)
+
+    # FR84's launch-time sweep. `Application.sweep_retention` carried "no production
+    # caller yet — the entry point owns this, and there is no entry point until the UI
+    # lands" in its docstring; the UI has landed, and T11.10's session list now *states*
+    # the 30-day default to the user. A promise of automatic deletion with nothing
+    # deleting is worse than no promise, and it is the promise this codebase keeps
+    # making by hand (D-20). Found by review on PR #24.
+    #
+    # After the config load, so a user whose retention setting was reset is swept on
+    # their **restored default** rather than on a value that failed to parse; before
+    # preflight, so the list a user opens has already had expired sessions removed.
+    swept = application.sweep_retention()
+    if swept:
+        notices.append(RETENTION_SWEEP_NOTICE.format(count=len(swept)))
 
     report = run_preflight(application, probes)
     outcome = StartupOutcome.NOT_READY if report.blocked else StartupOutcome.READY

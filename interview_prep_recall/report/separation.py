@@ -23,15 +23,22 @@ class OverlayLeakError(AssertionError):
     """A report module imported the overlay, or overlay-bound content came from a report."""
 
 
-def imported_modules(package_dir: Path) -> set[str]:
-    """Every module imported anywhere under `package_dir`, by static analysis.
+def imported_modules(target: Path) -> set[str]:
+    """Every module imported anywhere under `target`, by static analysis.
 
     Static rather than runtime: an import that only happens on the error path would
     never show up in a runtime check, and that is exactly where a desperate "just render
     the summary" would be added.
+
+    **Takes a single file as well as a directory** (T11.10). The wall matters wherever
+    report content and overlay content could meet, and that is no longer only the report
+    package: `ui/report_view.py` renders generated prose in the same package as the
+    overlay. Passing a file to the directory-only version silently found nothing and
+    asserted nothing — a check that cannot fail.
     """
     found: set[str] = set()
-    for path in sorted(package_dir.rglob("*.py")):
+    paths = [target] if target.is_file() else sorted(target.rglob("*.py"))
+    for path in paths:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
