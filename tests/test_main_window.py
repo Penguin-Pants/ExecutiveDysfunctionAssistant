@@ -30,6 +30,7 @@ from interview_prep_recall.session.preflight import (  # noqa: E402
     CheckResult,
     PreflightReport,
 )
+from interview_prep_recall.tracker.progress import TrackedPoint  # noqa: E402
 from interview_prep_recall.ui.main_window import (  # noqa: E402
     BLOCKED_HEADING,
     READY_TEXT,
@@ -509,3 +510,89 @@ def test_the_overlay_starts_hidden(
     window = MainWindow(application, _report(blocked=False), overlay_settings=overlay_settings)
 
     assert window.overlay.isVisible() is False
+
+
+# ---------- T7.4: the checklist's production feed ----------
+
+
+@pytest.fixture
+def tracking_application(tmp_path: Path) -> Application:
+    """An application whose note set actually has tracked points.
+
+    The default fixture's note is untracked, so a checklist test against it would pass
+    with the wiring removed — the widget would be empty either way.
+    """
+    return Application(
+        root=tmp_path,
+        embedder=FlatEmbedder(),
+        client=ScriptedClient(),
+        cipher=ReversingCipher(),
+        context_set=ContextSet(
+            name="prep",
+            notes=[
+                Note(headline="Tell me about scaling", kind=SourceKind.PREP, track_progress=True),
+                Note(headline="Tell me about conflict", kind=SourceKind.PREP, track_progress=True),
+            ],
+        ),
+    )
+
+
+def test_the_checklist_is_populated_at_construction(
+    qapp: QApplication, tracking_application: Application, overlay_settings: FakeSettings
+) -> None:
+    """The checklist is what the user reads *before* they have said anything, so waiting
+    for the first utterance would leave it blank for the part that matters most."""
+    window = MainWindow(tracking_application, overlay_settings=overlay_settings)
+
+    assert len(window.overlay.checklist.rows) == 2
+
+
+def test_the_application_pushes_the_checklist_at_the_panel(
+    qapp: QApplication, tracking_application: Application, overlay_settings: FakeSettings
+) -> None:
+    """The connection, not the pieces: both ends were already tested and neither was
+    reachable from the other."""
+    window = MainWindow(tracking_application, overlay_settings=overlay_settings)
+    tracked = tracking_application.context_set.tracked()
+
+    tracking_application.on_tracker_update(
+        [TrackedPoint(tracked[0].id, tracked[0].headline, True)], True
+    )
+
+    assert window.overlay.checklist.marked_count == 1
+
+
+def test_turning_the_tracker_off_in_settings_clears_the_checklist(
+    qapp: QApplication, tracking_application: Application, overlay_settings: FakeSettings
+) -> None:
+    """FR37 applies the moment the switch is toggled. Between sessions there is no next
+    utterance to redraw on, so the rows would otherwise stay up indefinitely."""
+    window = MainWindow(tracking_application, overlay_settings=overlay_settings)
+    assert window.overlay.checklist.showing is True
+
+    tracking_application.session.set_switch("progress_tracker", False)
+    window.refresh_checklist()
+
+    assert window.overlay.checklist.showing is False
+
+
+def test_a_cancelled_settings_dialog_still_redraws_the_checklist(
+    qapp: QApplication, tracking_application: Application, overlay_settings: FakeSettings
+) -> None:
+    """Cancelling does not undo an FR37 switch — it applies on toggle — so the redraw
+    cannot hang off the accepted path."""
+
+    def factory(app: Application) -> SettingsDialog:
+        # The switch applies on toggle, which is what the real dialog does through its
+        # `on_switch` callback — see `_default_dialog`.
+        app.session.set_switch("progress_tracker", False)
+        dialog = SettingsDialog(app.config)
+        dialog.exec = lambda: QDialog.DialogCode.Rejected  # type: ignore[method-assign]
+        return dialog
+
+    window = MainWindow(
+        tracking_application, dialog_factory=factory, overlay_settings=overlay_settings
+    )
+
+    assert window.open_settings() is None
+    assert window.overlay.checklist.showing is False

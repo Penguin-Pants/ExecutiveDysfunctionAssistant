@@ -56,7 +56,7 @@ from interview_prep_recall.session.manager import PurgeHooks, SessionManager
 from interview_prep_recall.settings import AppliedSettings, SettingsApplier
 from interview_prep_recall.stt.assembler import StreamRouter, Utterance
 from interview_prep_recall.stt.fallback import EgressMonitor
-from interview_prep_recall.tracker.progress import ProgressTracker
+from interview_prep_recall.tracker.progress import ProgressTracker, TrackedPoint
 
 
 class BackgroundCallRunner:
@@ -167,6 +167,19 @@ class Application:
     cipher: Cipher
     context_set: ContextSet
     on_result: Callable[[MatchResult], None] = lambda _result: None
+    on_tracker_update: Callable[[list[TrackedPoint], bool], None] = lambda _points, _enabled: None
+    """FR12's checklist, pushed after every utterance (T7.4).
+
+    Second argument is FR37's progress-tracker switch, sent with the points rather than
+    read by the widget: the switch lives on `SessionManager` and a UI that reached into
+    it would be a second reader of the same state, free to disagree with the one that
+    decides whether tracking actually runs. Sent even when it is off, because "off" is
+    the update that clears the checklist.
+
+    Same shape as `on_result` and for the same reason — `app.py` stays Qt-free, so the
+    surface that renders this is injected rather than imported.
+    """
+
     config_override: AppConfig | None = None
     """Injected for tests; `config.json` is loaded when omitted (T9.2a).
 
@@ -357,6 +370,10 @@ class Application:
                 self.tracker.submit_user(answer, now)
         if tracking:
             self.tracker.tick(now)
+        # Pushed on every call, not only when something was newly marked: the checklist
+        # also has to appear at the start of a session and disappear when FR37's switch
+        # goes off, and neither of those is a mark.
+        self.on_tracker_update(self.tracker.points(), tracking)
 
     # ---------- the report path ----------
 
@@ -443,6 +460,11 @@ class Application:
         self.pipeline.start_session()
         self.record.clear()
         self.tracker.reset()
+        # The marks are gone, so the rendered checklist has to lose its ticks with them.
+        # Without this the next interview opens showing the previous one's coverage —
+        # points the user has not made this time, presented as already covered, which is
+        # the reading FR12 exists to get right.
+        self.on_tracker_update(self.tracker.points(), self.session.switches.progress_tracker)
 
     def wired_purge_hooks(self) -> frozenset[str]:
         """Which FR59 purge hooks actually reach a component (see `__post_init__`).
