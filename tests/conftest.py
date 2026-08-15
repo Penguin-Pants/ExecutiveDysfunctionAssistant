@@ -103,3 +103,65 @@ def app_data(tmp_path: Path) -> Path:
     root = tmp_path / "InterviewPrepRecall"
     root.mkdir()
     return root
+
+
+@pytest.fixture(scope="session", autouse=True)
+def qt_settings_sandbox(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+    """Point `QSettings` at a throwaway directory for the whole test session.
+
+    **Session-scoped, and that is not an optimisation.** `setDefaultFormat` and `setPath`
+    are process-global Qt state. Setting and restoring them around every test churns the
+    configuration underneath `QSettings` objects created inside a test and destroyed after
+    it, which segfaults the interpreter once enough have accumulated — found while adding
+    the overlay geometry store, and it cost more to diagnose than the fixture saves.
+
+    The T0.4 guard above cannot see these writes: `QSettings` persists through Qt's C++
+    layer, not through Python's `open`, so a test that constructs one and stores a value
+    writes to the user's real registry or `~/.config` and the allowlist never fires. That
+    is the one hole in an otherwise per-test guarantee, and T5.4 made it reachable —
+    `MainWindow` now owns the overlay's geometry store (FR26).
+
+    `IniFormat` is forced because `setPath` has no effect on the native backend, which on
+    the Windows target is the registry. Redirecting only the format we do not ship on
+    would have looked like protection and provided none.
+    """
+    try:
+        from PySide6.QtCore import QSettings
+    except ImportError:  # the [ui] extra is optional; nothing to sandbox without it
+        yield
+        return
+
+    previous_format = QSettings.defaultFormat()
+    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+    QSettings.setPath(
+        QSettings.Format.IniFormat,
+        QSettings.Scope.UserScope,
+        str(tmp_path_factory.mktemp("qsettings")),
+    )
+    yield
+    QSettings.setDefaultFormat(previous_format)
+
+
+@pytest.fixture(scope="session")
+def qapp() -> Iterator[object]:
+    """The one `QApplication` for the test session, **with a teardown**.
+
+    Six test modules each defined their own copy of this and none of them tore anything
+    down, which left every widget ever built alive until interpreter shutdown — where Qt
+    destroys them in whatever order it likes, after the `QApplication` may already be
+    gone. That is an intermittent segfault at exit, and it became reachable once
+    `MainWindow` started owning an overlay and a dialog: the suite reported all tests
+    passing and then the process died with 139, which on CI is a red build with a green
+    test report.
+
+    Closing and deleting the top-level widgets here destroys them **while the application
+    is still alive**, which is the ordering Qt actually supports.
+    """
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    yield app
+    for widget in app.topLevelWidgets():
+        widget.close()
+        widget.deleteLater()
+    app.processEvents()
