@@ -227,3 +227,51 @@ def test_preflight_records_into_the_applications_ring(tmp_path: Path) -> None:
     assert result.application is not None
     events = {e.event for e in result.application.ring.snapshot()}
     assert "preflight" in events
+
+
+def _sweeping_builder(returns: list[str], calls: list[str]):  # type: ignore[no-untyped-def]
+    inner = _builder()
+
+    def build(root: Path) -> Application:
+        application = inner(root)
+
+        def sweep() -> list[str]:
+            calls.append("ran")
+            return returns
+
+        application.sweep_retention = sweep  # type: ignore[method-assign]
+        return application
+
+    return build
+
+
+def test_startup_runs_the_retention_sweep(tmp_path: Path) -> None:
+    """FR84, and the defect behind it: `sweep_retention` had **no production caller**
+    while T11.10's session list told the user that sessions are deleted automatically.
+    A promise of deletion with nothing deleting is worse than no promise — D-20's shape,
+    found by review on PR #24.
+    """
+    calls: list[str] = []
+
+    result = start(tmp_path, present=accept, build_application=_sweeping_builder([], calls))
+
+    assert result.outcome is not StartupOutcome.CONSENT_DECLINED
+    assert calls == ["ran"]
+
+
+def test_a_retention_deletion_is_stated_to_the_user(tmp_path: Path) -> None:
+    """FR84 deletes on a timer the user did not press. Silent deletion of a transcript
+    they were about to read is indistinguishable from data loss."""
+    result = start(
+        tmp_path, present=accept, build_application=_sweeping_builder(["one", "two"], [])
+    )
+
+    assert any("2 stored interview(s)" in notice for notice in result.notices)
+
+
+def test_a_sweep_that_deleted_nothing_says_nothing(tmp_path: Path) -> None:
+    """A launch notice for an empty sweep would train the user to dismiss the one that
+    matters."""
+    result = start(tmp_path, present=accept, build_application=_sweeping_builder([], []))
+
+    assert not any("retention" in notice.lower() for notice in result.notices)

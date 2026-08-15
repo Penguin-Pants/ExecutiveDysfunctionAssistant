@@ -517,3 +517,91 @@ def test_availability_is_rechecked_when_the_window_reappears(
     view.show()
 
     assert not view.generate_button.isEnabled()
+
+
+# ---------- PR #24 review findings ----------
+
+
+def test_a_finding_is_rendered_once_not_twice(qapp: QApplication, app_data) -> None:  # type: ignore[no-untyped-def]
+    """`ReportGenerator._sections` builds a section body by joining its accepted
+    findings, so rendering the body *and* the findings printed every conclusion twice —
+    once bare, once above its own evidence."""
+    app = _app(app_data)
+    note_id = app.context_set.notes[0].id
+    app.reports.client = ScriptedClient(_findings_payload(note_id))
+    app.consent.acknowledge()
+    _session(app)
+
+    view = _view(app)
+    document = view.generate()
+    assert document is not None
+
+    finding_text = "You answered the opening question directly."
+    assert view.body.toPlainText().count(finding_text) == 1
+    assert render_markdown(document).count(finding_text) == 1
+
+
+def test_the_truncation_notice_survives_de_duplication(qapp: QApplication, app_data) -> None:  # type: ignore[no-untyped-def]
+    """FR75's notice is appended to `WHAT_TO_CHANGE`'s body by the generator, so a
+    renderer that dropped the body to avoid duplication would drop the recording-cap
+    warning with it — a requirement lost to a rendering fix."""
+    app = _app(app_data)
+    app.reports.client = ScriptedClient(
+        {
+            "findings": [
+                {
+                    "section": ReportSection.WHAT_TO_CHANGE.value,
+                    "text": "Ask about the team's on-call rotation.",
+                    "indices": [0],
+                }
+            ]
+        }
+    )
+    app.consent.acknowledge()
+    session_id = _session(app)
+    app.generate_report(session_id=session_id, confirm=lambda _: True)
+
+    stored = app.sessions.load(session_id)
+    payload = dict(stored.report or {})
+    sections = dict(payload["sections"])
+    sections[ReportSection.WHAT_TO_CHANGE.value] += (
+        "\n\n(This session hit the recording cap; the later part of the "
+        "conversation is not covered by this report.)"
+    )
+    payload["sections"] = sections
+    app.sessions.attach_report(session_id, payload)
+
+    document = document_from_stored(app.sessions.load(session_id), headline=lambda _id: None)
+    assert document is not None
+    rendered = render_markdown(document)
+
+    assert rendered.count("Ask about the team's on-call rotation.") == 1
+    assert "recording cap" in rendered
+
+
+def test_a_failing_model_call_is_reported_not_raised(qapp: QApplication, app_data) -> None:  # type: ignore[no-untyped-def]
+    """Offline, rate-limited, bad key: the generator lets those propagate because it is
+    not the layer that knows what to tell a person, and this slot is the end of the line.
+    An exception escaping a Qt callback leaves a button that did nothing."""
+    app = _app(app_data, ScriptedClient(boom=ConnectionError("no route to host")))
+    app.consent.acknowledge()
+    _session(app)
+
+    view = _view(app)
+    document = view.generate()
+
+    assert document is None
+    assert "ConnectionError" in view.status.text()
+    assert "no route to host" in view.status.text()
+    assert view.generate_button.isEnabled(), "the control must come back"
+
+
+def test_a_failed_generation_is_recorded_structurally(qapp: QApplication, app_data) -> None:  # type: ignore[no-untyped-def]
+    """FR36: the failure is in the diagnostics ring, by error type and nothing else."""
+    app = _app(app_data, ScriptedClient(boom=ConnectionError("no route to host")))
+    app.consent.acknowledge()
+    _session(app)
+
+    _view(app).generate()
+
+    assert any(event.event == "report_failed" for event in app.ring.snapshot())

@@ -273,10 +273,17 @@ def render_text(document: ReportDocument) -> str:
         lines += [f"Context not loaded for: {', '.join(document.absent_sources)}", ""]
 
     for section, body in document.sections:
-        lines += [SECTION_TITLES[section].upper(), body]
-        for finding in document.findings_for(section):
-            lines.append(f"  • {finding.text}")
-            lines += [f"      {citation}" for citation in finding.citations]
+        lines.append(SECTION_TITLES[section].upper())
+        findings = document.findings_for(section)
+        if findings:
+            for finding in findings:
+                lines.append(f"  • {finding.text}")
+                lines += [f"      {citation}" for citation in finding.citations]
+            lines += _section_remainder(body, findings, indent="  ")
+        else:
+            # No findings, so the body is the generator's own words: "nothing notable",
+            # or FR77's "not assessed — no job description was loaded".
+            lines.append(body)
         lines.append("")
 
     if document.discarded:
@@ -311,10 +318,15 @@ def render_markdown(document: ReportDocument) -> str:
         lines += [f"**Context not loaded for:** {', '.join(document.absent_sources)}", ""]
 
     for section, body in document.sections:
-        lines += [f"## {SECTION_TITLES[section]}", "", body, ""]
-        for finding in document.findings_for(section):
-            lines.append(f"- {finding.text}")
-            lines += [f"  - _{citation}_" for citation in finding.citations]
+        lines += [f"## {SECTION_TITLES[section]}", ""]
+        findings = document.findings_for(section)
+        if findings:
+            for finding in findings:
+                lines.append(f"- {finding.text}")
+                lines += [f"  - _{citation}_" for citation in finding.citations]
+            lines += _section_remainder(body, findings)
+        else:
+            lines.append(body)
         lines.append("")
 
     if document.discarded:
@@ -324,6 +336,26 @@ def render_markdown(document: ReportDocument) -> str:
             "",
         ]
     return "\n".join(lines)
+
+
+def _section_remainder(
+    body: str, findings: Sequence[ResolvedFinding], indent: str = ""
+) -> list[str]:
+    """Whatever the section body says **beyond** the findings it was built from.
+
+    `ReportGenerator._sections` builds a section's body by joining its accepted findings,
+    so rendering the body *and* the findings printed every conclusion twice — once bare
+    and once above its own evidence. Found by review on PR #24.
+
+    The body is not simply discarded, because it is not always only the findings: FR75's
+    truncation notice is appended to `WHAT_TO_CHANGE` there, and dropping the body would
+    take the recording-cap warning with it — a requirement lost to a de-duplication.
+    """
+    remainder = body
+    for finding in findings:
+        remainder = remainder.replace(finding.text, "", 1)
+    extra = [line for line in remainder.splitlines() if line.strip()]
+    return ["", *(f"{indent}{line}" for line in extra)] if extra else []
 
 
 def _format_size(size: int) -> str:
@@ -536,6 +568,23 @@ class ReportView(QDialog):
             # The generator's message is shown verbatim (FR80): it names which of the
             # several refusals happened, and paraphrasing it here would lose that.
             self.status.setText(str(error))
+            return None
+        except Exception as error:  # noqa: BLE001 — a UI boundary, see below
+            # **Anything the model client raises lands here**: offline, rate-limited,
+            # a bad key, a socket reset. The generator lets those propagate on purpose —
+            # it is not the layer that knows what to tell a person — and this slot is the
+            # end of the line. An exception escaping a Qt callback leaves the user with a
+            # button that did nothing and no way to tell an outage from a broken control.
+            #
+            # Broad on purpose, and it is not swallowing: the error type and message are
+            # both shown, and the failure is recorded structurally (FR36). Found by
+            # review on PR #24.
+            self.application.ring.record("report_failed", code=type(error).__name__)
+            self.status.setText(
+                f"The report could not be generated: {type(error).__name__}: {error}. "
+                "Nothing was saved; you can try again."
+            )
+            self._sync_buttons()
             return None
 
         self.refresh()
