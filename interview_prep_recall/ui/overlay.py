@@ -29,6 +29,7 @@ than a `sleep`.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 
@@ -177,11 +178,18 @@ class RenderError(ValueError):
 class SnippetView:
     """What the panel is asked to show.
 
-    Construction **verifies** rather than trusts: every rendered string must be a
-    byte-exact substring of the source chunk it claims to come from. That is FR11's
-    acceptance criterion, and checking it here means a future producer — a summariser, a
-    template, a translation layer — cannot quietly become the first thing to render text
-    the user never wrote.
+    **The check here is a consistency check, not the guarantee.** Every rendered string
+    must be a byte-exact substring of `source_text` — but `source_text` is supplied by the
+    same caller, so a producer that passed generated text as both would satisfy it
+    trivially. An earlier version of this docstring claimed the boundary enforced
+    retrieval-only on its own; it does not, and saying so was the more dangerous half of
+    the mistake.
+
+    **`from_stored_note` is the guarantee.** It resolves the source text from the note
+    store by id, so the text being rendered is checked against what is actually persisted
+    rather than against whatever the caller asserted. Construct through it on any path
+    that renders user content; direct construction is for the fixed product copy in
+    `no_match_view` and for tests. Found by review on PR #20.
     """
 
     headline: str
@@ -220,6 +228,42 @@ class SnippetView:
         if self.state is SnippetState.DEGRADED:
             return f"{DEGRADED_GLYPH} {self.headline}"
         return self.headline
+
+
+NoteResolver = Callable[[str], str | None]
+"""Returns the stored text for a note id, or None if there is no such note."""
+
+
+class UnknownNoteError(RenderError):
+    """A snippet claimed a note id the store does not have."""
+
+
+def from_stored_note(
+    resolve: NoteResolver,
+    note_id: str,
+    headline: str,
+    bullets: tuple[str, ...],
+    state: SnippetState,
+) -> SnippetView:
+    """Build a view whose source text comes from the **store**, not from the caller.
+
+    This is where FR11's retrieval-only guarantee actually lives. `SnippetView`'s own
+    check compares the rendered strings against a `source_text` the caller supplied, which
+    a fabricating producer would simply supply to match — so the trust boundary has to be
+    a lookup the producer does not control.
+    """
+    source = resolve(note_id)
+    if source is None:
+        raise UnknownNoteError(
+            f"note {note_id!r} is not in the store; the overlay renders stored text only (FR11)."
+        )
+    return SnippetView(
+        headline=headline,
+        bullets=bullets,
+        state=state,
+        source_text=source,
+        note_id=note_id,
+    )
 
 
 def no_match_view() -> SnippetView:
@@ -267,10 +311,17 @@ class OverlayGeometry:
     def reset(self) -> OverlayGeometry:
         """FR27. Back to defaults, keeping nothing that could still be unreachable.
 
-        The whole point is a user who cannot see the overlay: preserving their position
-        or lock state would preserve the thing they are trying to escape.
+        Position and lock go, because those are what make the panel unreachable. Size,
+        opacity and brightness **stay**: they are preferences, and none of them can hide
+        the overlay, so discarding them would make reset cost more than it fixes. Found by
+        review on PR #20.
         """
-        return OverlayGeometry(brightness=self.brightness)
+        return OverlayGeometry(
+            width=self.width,
+            height=self.height,
+            opacity=self.opacity,
+            brightness=self.brightness,
+        )
 
 
 SETTINGS_KEYS = ("x", "y", "width", "height", "opacity", "brightness", "locked")
@@ -406,6 +457,30 @@ class OverlayPanel(QWidget):
         layout.addStretch(1)
 
         self.apply_geometry(self.geometry_settings)
+        self._clock_timer: object | None = None
+
+    def start_clock(self, interval_ms: int = 500) -> None:
+        """Drive `tick` from the Qt event loop (FR54).
+
+        `tick` was pull-based and **nothing called it**, so an unpinned snippet stayed on
+        screen for the whole interview despite the 25 s lifetime — the auto-clear existed
+        only in its tests. Found by review on PR #20.
+
+        The timer delegates to the same `tick(now)` rather than reimplementing expiry, so
+        the deterministic fake-clock tests still cover the logic that actually runs.
+        """
+        from PySide6.QtCore import QTimer
+
+        timer = QTimer(self)
+        timer.setInterval(interval_ms)
+        timer.timeout.connect(self._on_clock_tick)
+        timer.start()
+        self._clock_timer = timer
+
+    def _on_clock_tick(self) -> None:
+        import time
+
+        self.tick(time.monotonic())
 
     # ---------- content ----------
 
@@ -513,3 +588,31 @@ class OverlayPanel(QWidget):
         self.headline.setStyleSheet(f"color: {ink}; font-style: {style}; border: none;")
         for label in self.bullets:
             label.setStyleSheet(f"color: {palette.muted}; border: none;")
+        self._apply_halo(palette)
+
+    def _apply_halo(self, palette: OverlayPalette) -> None:
+        """The contrasting outline promised below 70% opacity.
+
+        `halo_engaged` was computed and then never consulted, so the ink was bare over
+        arbitrary video content in exactly the range where the fixed contrast figures stop
+        holding — the promise was in a docstring and a property and nowhere else. Found by
+        review on PR #20.
+
+        A drop shadow in the *opposing* tone rather than a literal 1 px stroke: Qt style
+        sheets have no text-shadow, and an effect reads correctly against both a light and
+        a dark ground because the halo colour follows the band.
+        """
+        from PySide6.QtGui import QColor
+        from PySide6.QtWidgets import QGraphicsDropShadowEffect
+
+        for label in (self.headline, *self.bullets):
+            if not self.halo_engaged:
+                # `setGraphicsEffect(None)` is the documented way to clear one; the stub
+                # types it as non-optional, so the ignore is about the stub, not the call.
+                label.setGraphicsEffect(None)  # type: ignore[arg-type]
+                continue
+            effect = QGraphicsDropShadowEffect(label)
+            effect.setBlurRadius(4)
+            effect.setOffset(0, 0)
+            effect.setColor(QColor(palette.panel))
+            label.setGraphicsEffect(effect)

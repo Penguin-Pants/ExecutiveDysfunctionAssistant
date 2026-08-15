@@ -13,13 +13,15 @@ Two guarantees carry real weight here and both are checked rather than described
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 pytest.importorskip("PySide6", reason="Qt UI tests require the [ui] extra")
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from interview_prep_recall.ui.overlay import (  # noqa: E402
+from interview_prep_recall.ui.overlay import (  # noqa: E402  # noqa: E402
     DARK_BAND_MAX,
     DEFAULT_BRIGHTNESS,
     DEGRADED_GLYPH,
@@ -36,8 +38,10 @@ from interview_prep_recall.ui.overlay import (  # noqa: E402
     SnippetState,
     SnippetTimer,
     SnippetView,
+    UnknownNoteError,
     clamp_brightness,
     contrast_ratio,
+    from_stored_note,
     load_geometry,
     no_match_view,
     palette_for,
@@ -472,3 +476,105 @@ def test_reset_recovers_an_off_screen_overlay() -> None:
     assert (recovered.x, recovered.y) == (OverlayGeometry().x, OverlayGeometry().y)
     assert recovered.locked is False
     assert recovered.brightness == 80, "brightness is a preference, not a way to lose the panel"
+
+
+# ---------- PR #20 review findings ----------
+
+
+def test_the_substring_check_alone_does_not_stop_a_fabricating_producer() -> None:
+    """The finding, stated as a test: `source_text` comes from the same caller.
+
+    A producer passing generated text as both the headline and the source satisfies the
+    consistency check trivially. This test documents the limit so nobody re-reads the
+    check as the guarantee — which the docstring previously invited.
+    """
+    fabricated = "I single-handedly rewrote the billing system."
+
+    view = SnippetView(
+        headline=fabricated,
+        bullets=(),
+        state=SnippetState.CONFIRMED,
+        source_text=fabricated,
+    )
+
+    assert view.headline == fabricated  # accepted, and it should not have been
+
+
+def test_from_stored_note_checks_against_the_store() -> None:
+    """Where FR11's guarantee actually lives: the source text is resolved by id from
+    storage the producer does not control."""
+    store = {"n1": SOURCE}
+
+    view = from_stored_note(
+        store.get, "n1", "Team of four, six months.", (), SnippetState.CONFIRMED
+    )
+
+    assert view.source_text == SOURCE
+    assert view.note_id == "n1"
+
+
+def test_from_stored_note_refuses_text_absent_from_the_stored_note() -> None:
+    store = {"n1": SOURCE}
+
+    with pytest.raises(RenderError, match="byte-exact substring"):
+        from_stored_note(
+            store.get,
+            "n1",
+            "I single-handedly rewrote the billing system.",
+            (),
+            SnippetState.CONFIRMED,
+        )
+
+
+def test_from_stored_note_refuses_an_unknown_note_id() -> None:
+    with pytest.raises(UnknownNoteError, match="not in the store"):
+        from_stored_note({}.get, "missing", "anything", (), SnippetState.CONFIRMED)
+
+
+def test_the_clock_drives_auto_clear(qapp: QApplication) -> None:
+    """`tick` was pull-based and nothing called it, so an unpinned snippet stayed on
+    screen for the whole interview despite the 25 s lifetime."""
+    panel = OverlayPanel(tau_visible_s=0.0)
+    panel.show_snippet(
+        SnippetView(
+            headline="Team of four, six months.",
+            bullets=(),
+            state=SnippetState.CONFIRMED,
+            source_text=SOURCE,
+        ),
+        now=0.0,
+    )
+    panel.start_clock(interval_ms=1)
+
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and panel.headline.text() != NO_MATCH_TEXT:
+        qapp.processEvents()
+        time.sleep(0.01)
+
+    assert panel.headline.text() == NO_MATCH_TEXT, "the clock never fired"
+
+
+def test_low_opacity_applies_a_halo_effect(qapp: QApplication) -> None:
+    """`halo_engaged` was computed and never consulted, so the ink was bare over arbitrary
+    video content in exactly the range where the contrast figures stop holding."""
+    faint = OverlayPanel(OverlayGeometry(opacity=0.5))
+    solid = OverlayPanel(OverlayGeometry(opacity=1.0))
+
+    assert faint.headline.graphicsEffect() is not None
+    assert solid.headline.graphicsEffect() is None
+
+
+def test_reset_keeps_preferences_that_cannot_hide_the_panel() -> None:
+    """Size, opacity and brightness are preferences; none of them can make the overlay
+    unreachable, so discarding them would make reset cost more than it fixes."""
+    tuned = OverlayGeometry(
+        x=-9000, y=-9000, width=880, height=560, opacity=0.55, brightness=80, locked=True
+    )
+
+    recovered = tuned.reset()
+
+    assert (recovered.x, recovered.y) == (OverlayGeometry().x, OverlayGeometry().y)
+    assert recovered.locked is False
+    assert (recovered.width, recovered.height) == (880, 560)
+    assert recovered.opacity == pytest.approx(0.55)
+    assert recovered.brightness == 80
