@@ -51,6 +51,7 @@ from interview_prep_recall.ui.overlay import (
     load_geometry,
     save_geometry,
 )
+from interview_prep_recall.ui.report_view import ReportView
 from interview_prep_recall.ui.settings import SettingsDialog
 
 WINDOW_TITLE = "Interview Prep Recall"
@@ -62,14 +63,21 @@ RESTART_NOTICE = "Some changes take effect the next time you start the app:"
 RESET_OVERLAY_TEXT = "Reset overlay position"
 LOCK_OVERLAY_TEXT = "Lock overlay position"
 PREVIEW_OVERLAY_TEXT = "Show overlay"
+REPORTS_TEXT = "Interview reports…"
 
 DialogFactory = Callable[[Application], SettingsDialog]
 DiagnosticsFactory = Callable[[Application, QWidget], DiagnosticsView]
 """Takes the parent, because a modeless window this one opens must be owned by it."""
 
+ReportsFactory = Callable[[Application, QWidget], ReportView]
+
 
 def _default_diagnostics(application: Application, parent: QWidget) -> DiagnosticsView:
     return DiagnosticsView(application.ring, parent=parent)
+
+
+def _default_reports(application: Application, parent: QWidget) -> ReportView:
+    return ReportView(application, parent=parent)
 
 
 def _default_dialog(application: Application) -> SettingsDialog:
@@ -101,6 +109,7 @@ class MainWindow(QMainWindow):
         *,
         dialog_factory: DialogFactory = _default_dialog,
         diagnostics_factory: DiagnosticsFactory = _default_diagnostics,
+        reports_factory: ReportsFactory = _default_reports,
         overlay_settings: object,
         refresh_preflight: Callable[[], PreflightReport] | None = None,
         parent: QWidget | None = None,
@@ -110,6 +119,7 @@ class MainWindow(QMainWindow):
         self.application = application
         self._dialog_factory = dialog_factory
         self._diagnostics_factory = diagnostics_factory
+        self._reports_factory = reports_factory
         self._refresh_preflight = refresh_preflight
         self._overlay_settings = overlay_settings
 
@@ -128,6 +138,10 @@ class MainWindow(QMainWindow):
         self.diagnostics_button = QPushButton("Diagnostics…")
         self.diagnostics_button.clicked.connect(self.open_diagnostics)
         layout.addWidget(self.diagnostics_button)
+
+        self.reports_button = QPushButton(REPORTS_TEXT)
+        self.reports_button.clicked.connect(self.open_reports)
+        layout.addWidget(self.reports_button)
 
         # The overlay is built here, from the persisted geometry, so FR26's stored layout
         # is what the chrome controls below actually operate on.
@@ -233,6 +247,22 @@ class MainWindow(QMainWindow):
         if result.needs_restart:
             self.notify_restart(result)
         return result
+
+    def open_reports(self) -> ReportView:
+        """M11's surface, reached from here (T11.10).
+
+        Same ownership rules as the diagnostics view: held on the instance so a modeless
+        dialog is not collected on return, and parented so Qt decides the teardown order.
+
+        Modeless, because the session list is somewhere the user browses — and because
+        the retention default means a session they are looking at can be one launch away
+        from deletion, which is a thing to read next to the rest of the app rather than
+        in a window that blocks it.
+        """
+        view = self._reports_factory(self.application, self)
+        self._reports = view
+        view.show()
+        return view
 
     def open_diagnostics(self) -> DiagnosticsView:
         """FR36's "viewable in-app". Returns the view so a caller can drive it.

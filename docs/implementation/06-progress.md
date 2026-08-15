@@ -23,22 +23,26 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | **M8 — Cloud STT backends** | 🟢 T8.1–T8.5 complete | Deepgram, ElevenLabs, fallback, egress. Protocols unverified against a live endpoint (**AS-8**) |
 | **M9 — Packaging & first run** | 🟡 T9.0–T9.2, T9.6 complete | Composition root, FR63 disclosure, config store, settings surface, **entry point**. T9.3 is **blocked on M1** (three of four steps are audio). T9.6a needs FR43; T9.4 is PyInstaller; T9.5 needs live vendor docs |
 | **M10 — Typed context sources** | 🟢 T10.1–T10.7 complete | Five kinds, per-kind caps and thresholds, schema v1→v2 migration, **FR72's per-kind marking**. T10.7's 1 m glance test and bundled-font glyph coverage ride with T5.9/T9.4 |
-| **M11 — Post-interview report** | 🟢 T11.1, T11.3–T11.9 complete | Record, evidence binding, encrypted store, retention, generation. T11.2's DPAPI binding and T11.10 need Windows |
+| **M11 — Post-interview report** | 🟢 T11.1, T11.3–T11.10 complete | Record, evidence binding, encrypted store, retention, generation, **and the view/export**. Only T11.2's DPAPI cipher needs Windows |
 
-**Next action: T11.10's report view and export.** T10.7 landed on 2026-08-15, closing M10, and
-T11.10 is now the last Qt task the plan names. It is filed as "(Windows / Qt)" — which is the
-label the caution below is about, and Qt has never been the Windows half of it. Re-test by trying
-it rather than by reading this line.
+**Next action: nothing is left that this container can build.** T11.10 landed on 2026-08-15 and
+was the last of them. What remains is genuinely external — hardware, the user's fixtures, or a
+vendor key — and the lists below name each blocked *task* with a falsifiable reason.
 
-The previous version of this paragraph named T10.7 and described it as marking **in the editor**.
-The task is the *overlay* (07's table, FR72), and the editor was this file's own paraphrase — a
-third instance of a summary line here being trusted over the document it summarises. Do not read
-the sentence above as a specification of T11.10; read 07's table.
+**Treat that as the claim it is.** The same sentence has been wrong six times, most recently on
+T11.10 itself: it was filed "(Windows / Qt)" and the entire task — list, reader, generation,
+export, deletion — built and tested headless. The check that has caught every one of them is the
+same: try it for four minutes before believing the label. If a task below looks blocked, the
+reason is written next to it; test *that reason*, not the milestone it belongs to.
 
-**Two claims in this file were wrong on T10.7 and both cost time.** The task-level deferral note
-said "§9b tokens are specified" for a section that has no per-kind row at all, and this paragraph
-relocated the work to the wrong surface. Both were written *here*, in the summary, and neither
-was ever re-read as a claim. See the M10/T10.7 log entry and D-55.
+The two highest-value external items, if a machine becomes available: **M1's WASAPI spike** (the
+AS-2 gate, and M9's packaging is blocked behind it) and **T4.7's labelled fixtures** (the OQ-1
+gate, which decides whether matching is good enough to ship at all). Neither is code.
+
+**T10.7's two wrong claims, kept because they are the pattern.** The task note said "§9b tokens
+are specified" for a section with no per-kind row at all, and the next-action line put the work
+in the editor rather than the overlay. Both were written *here*, in the summary, and neither was
+re-read as a claim before being acted on. See the M10/T10.7 log entry and D-55.
 
 That sentence has been wrong five times, so treat it as a claim to re-test rather than a fact.
 What is different this time is that T9.3's blocker was *verified* rather than assumed:
@@ -64,14 +68,15 @@ behind that one word for five milestones.
 
 Remaining, re-sorted after the Qt discovery:
 
-- **Buildable and testable here (Qt, offscreen):** T11.10's report view — *claimed*, on the same
-  grounds that turned out to hold for the four Qt tasks before it, and unverified until someone
-  tries it. Plus **T10.7a** (a kind legend in the editor) as a follow-up. *(M5's overlay widget,
-  T7.4's checklist and T10.7's per-kind marking were all on this list and are now done — T5.4,
-  T5.7, T5.8, T7.4 and T10.7 all landed on 2026-08-15.)*
+- **Buildable and testable here (Qt, offscreen):** nothing from the named task list. The
+  follow-ups are: **T10.7a** (a kind legend in the editor), **T11.10a** (FR87's signpost, which
+  needs a panic surface to sit on), **T7.4a**. *(M5's overlay widget, T7.4's checklist, T10.7's
+  per-kind marking and T11.10's report view were all on this list and are now done — T5.4, T5.7,
+  T5.8, T7.4, T10.7 and T11.10 all landed on 2026-08-15.)*
 - **Genuinely needs Windows:** M1 (WASAPI, AS-2 gate), T2.4 (AS-1, needs the D-U6 laptop's CPU),
   T5.2's `SetWindowDisplayAffinity`, T6.4's ProcMon trace, T9.1a's device-open enforcement,
-  T9.4's PyInstaller build, T11.2's DPAPI binding, T11.10's *export* path.
+  T9.4's PyInstaller build, T11.2's DPAPI cipher. **T11.10 is off this list** — it was on it, and
+  the export writes an ordinary file to an ordinary path.
 - **Needs the real surface (not merely Windows):** T5.9's end-to-end latency, and now **FR72's
   1 m glance test and the bundled-font glyph coverage** — Qt substitutes a fallback font per
   missing glyph, which is invisible headless and wrong only where it is looked at.
@@ -161,6 +166,64 @@ conservative choice, just a broken one.
 ---
 
 ## Log
+
+### M11 — T11.10 · complete · 2026-08-15
+
+New `ui/report_view.py` (`ReportView`, `ReportDocument`, `render_markdown`), reached from
+`ui/main_window.py`. Tests: new `tests/test_report_view.py` (24 cases), `tests/test_main_window.py`
++3. **1054 passing**, ruff, format and `mypy interview_prep_recall` clean.
+
+**Qt was not the Windows half, for the sixth time.** T11.10 was filed "(Windows / Qt)" and the
+whole of it — session list, reader, generation, export, deletion — is built and tested headless.
+The export writes an ordinary file to an ordinary path; there is nothing platform-bound left in
+this task. What remains Windows-only in M11 is T11.2's DPAPI cipher, which was always named
+correctly.
+
+**The task row had no acceptance criteria at all** — `T11.10 | — | (Windows / Qt)`. Rather than
+inventing some, the scope came from the requirements that had logic and no surface: FR83's list,
+FR78's evidence, FR80's disabled-with-a-reason, FR81's per-run confirmation, FR85's disclosure,
+FR84's retention notice, FR83/FR87's deletion. 07's table now carries that list, so the next
+reader is not deriving it again.
+
+**What the surface is for, stated once.** FR78 makes every judgment carry resolvable evidence,
+and until now nothing resolved it: presence evidence was a list of integers in an encrypted file.
+The reader shows the utterance behind each finding and the note behind each absence. A view that
+displayed conclusions alone would satisfy FR78 in storage and defeat it exactly where the user
+reads it — back to an LLM's impression of an interview it did not attend.
+
+**Three choices worth re-reading before changing them.**
+
+* **One resolution path, through the store.** A freshly generated report is attached and then
+  *re-read from disk*, not rendered from the live `Report`. Two paths diverge, and the one
+  exercised least — the week-old report, which is the whole point of D-U8 — is the one that breaks.
+* **`setPlainText`, never rich text (D-57).** `QTextEdit` renders HTML. This is the only string
+  in the product that came from a language model.
+* **Every outbound and destructive action is an injected callable.** `confirm`, `acknowledge`,
+  `choose_path`, `confirm_delete` — defaulting to Qt dialogs. The requirements *live* in those
+  modal windows (FR81 every run, FR85 blocking, FR83 deletion), and a surface whose modals can
+  only be driven by synthesised clicks is one whose requirements are never tested.
+
+**A stored citation can outlive what it cites**, and the finding is shown with the citation marked
+unresolvable rather than dropped. Silently hiding it would change a report's contents between two
+readings with nothing to explain the difference.
+
+**Review round before push — three findings, all mine, all fixed.**
+
+| Severity | Finding | Why it mattered |
+|---|---|---|
+| P1 | **FR84 had no surface anywhere.** The requirement says the 30-day default is stated at first use of the feature and *not buried in settings*; the session list is the only place a stored session is ever visible, and it said nothing. | `retention_notice()`, read from the store rather than restated, so a user who changed it is told what is true of their machine. |
+| P2 | **`getattr(self.application.reports, "local_only", False)`** — FR80 failing **open**. If the attribute ever moved, the default would *enable* the button that sends an interview off the device. Same defaulted-collaborator shape as D-26. | Read straight off the generator. Same fix for the consent lookup. |
+| P3 | The dialog is modeless, so FR37's switch can be flipped in Settings while it sits open, leaving an enabled Generate button. | `showEvent` re-syncs. Generation was already safe — the generator refuses and says why — but a control that looks available and is not is still a small lie. |
+
+**`report/separation.py`'s `imported_modules` now accepts a file as well as a directory.** FR79's
+wall is checked against the report package, and this new module renders generated prose from
+*inside* `ui/`, next to the overlay — the one place the way around that check would be built.
+Passing a file to the directory-only version globbed nothing and asserted nothing: a check that
+could not fail. It now checks `ui/report_view.py` directly.
+
+**Follow-up T11.10a:** FR87 asks for delete-all to be signposted **at the panic surface**. The
+control exists here and is named plainly, but the panic surface itself has no UI yet, so the
+signpost has nowhere to live. That is a gap in FR87's coverage, not a gap in this task.
 
 ### M10 — T10.7 · complete · 2026-08-15
 

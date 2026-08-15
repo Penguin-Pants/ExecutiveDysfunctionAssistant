@@ -205,7 +205,7 @@ anything, and it is what a user reaching for panic actually wants.
 | **T11.7** Pre-send confirmation with size, every run, **and ownership of the FR20 egress indicator across the upload** | FR81, FR81a | Decline sends nothing; preference is not remembered; indicator lit for the whole call and dark after, including on failure |
 | **T11.8** Consent re-acknowledgement on first enable | FR85 | Fresh disclosure blocks despite prior FR63 ack |
 | **T11.9** Signposted delete-all at the panic surface | FR87 | Affordance present. *(Scoping half dropped — D-U11 leaves panic with nothing to scope.)* |
-| **T11.10** Report view and export | — | **(Windows / Qt)** |
+| **T11.10** Report view and export | FR77–FR85, FR87 (surfaces) | ✅ **Built and tested headless.** `ui/report_view.py`: FR83's session list, the report reader with **FR78's evidence resolved and shown**, FR81's per-run confirmation, FR80's disabled-with-a-reason, FR85's disclosure gate, FR84's retention notice, FR83/FR87 deletion, and a Markdown export (**D-56**). Not Windows — the acceptance row was blank and is now filled from the requirements it surfaces |
 
 ### Buildable on Linux now
 
