@@ -24,6 +24,7 @@ from PySide6.QtCore import QPoint, Qt  # noqa: E402
 from PySide6.QtGui import QFontMetrics  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+from interview_prep_recall.notes.model import SourceKind  # noqa: E402
 from interview_prep_recall.session.health import Egress, Health, Status  # noqa: E402
 from interview_prep_recall.ui.overlay import (  # noqa: E402  # noqa: E402
     BULLET_PX_RANGE,
@@ -33,6 +34,7 @@ from interview_prep_recall.ui.overlay import (  # noqa: E402  # noqa: E402
     ELLIPSIS,
     HALO_OPACITY_THRESHOLD,
     HEADLINE_PX_RANGE,
+    KIND_MARKS,
     LIGHT_BAND_MIN,
     MAX_BULLETS,
     MAX_SIZE,
@@ -61,6 +63,7 @@ from interview_prep_recall.ui.overlay import (  # noqa: E402  # noqa: E402
     headline_px,
     line_count,
     load_geometry,
+    mark_for,
     no_match_view,
     palette_for,
     resized,
@@ -93,6 +96,7 @@ def test_a_string_not_in_the_source_is_refused() -> None:
             bullets=("Reduced latency by roughly 87%",),  # true, and not what they wrote
             state=SnippetState.CONFIRMED,
             source_text=SOURCE,
+            kind=SourceKind.PREP,
         )
 
 
@@ -102,6 +106,7 @@ def test_verbatim_strings_are_accepted() -> None:
         bullets=("Cut p99 latency from 900ms to 120ms.", "Team of four, six months."),
         state=SnippetState.CONFIRMED,
         source_text=SOURCE,
+        kind=SourceKind.PREP,
     )
     assert view.rendered_strings[0] in SOURCE
 
@@ -114,6 +119,7 @@ def test_a_near_miss_is_still_a_miss() -> None:
             bullets=(),
             state=SnippetState.CONFIRMED,
             source_text=SOURCE,
+            kind=SourceKind.PREP,
         )
 
 
@@ -124,6 +130,7 @@ def test_more_than_three_bullets_is_refused() -> None:
             bullets=("Team of four, six months.",) * 4,
             state=SnippetState.CONFIRMED,
             source_text=SOURCE,
+            kind=SourceKind.PREP,
         )
 
 
@@ -135,8 +142,12 @@ def test_the_degraded_glyph_is_not_part_of_the_stored_text() -> None:
         bullets=(),
         state=SnippetState.DEGRADED,
         source_text=SOURCE,
+        kind=SourceKind.PREP,
     )
-    assert view.display_headline == f"{DEGRADED_GLYPH} Team of four, six months."
+    # The kind mark rides in the same prefix (T10.7), so the assertion is on the two
+    # channels and the untouched text rather than on one fixed string.
+    mark = mark_for(SourceKind.PREP)
+    assert view.display_headline == f"{DEGRADED_GLYPH} {mark.glyph} Team of four, six months."
     assert view.headline in SOURCE
 
 
@@ -279,11 +290,14 @@ def test_panel_renders_headline_and_bullets(qapp: QApplication) -> None:
             bullets=("Team of four, six months.",),
             state=SnippetState.CONFIRMED,
             source_text=SOURCE,
+            kind=SourceKind.PREP,
         ),
         now=0.0,
     )
 
-    assert panel.headline.text() == "Led the migration off the monolith."
+    assert panel.headline.text() == (
+        f"{mark_for(SourceKind.PREP).glyph} Led the migration off the monolith."
+    )
     assert panel.visible_bullet_count == 1
 
 
@@ -295,6 +309,7 @@ def test_fewer_bullets_hides_the_spare_labels(qapp: QApplication) -> None:
         bullets=("Cut p99 latency from 900ms to 120ms.", "Team of four, six months.", "monolith"),
         state=SnippetState.CONFIRMED,
         source_text=SOURCE,
+        kind=SourceKind.PREP,
     )
     panel.show_snippet(three, now=0.0)
     assert panel.visible_bullet_count == 3
@@ -305,6 +320,7 @@ def test_fewer_bullets_hides_the_spare_labels(qapp: QApplication) -> None:
             bullets=(),
             state=SnippetState.CONFIRMED,
             source_text=SOURCE,
+            kind=SourceKind.PREP,
         ),
         now=1.0,
     )
@@ -323,6 +339,7 @@ def test_clearing_shows_the_no_match_line_not_a_blank_panel(qapp: QApplication) 
             bullets=(),
             state=SnippetState.CONFIRMED,
             source_text=SOURCE,
+            kind=SourceKind.PREP,
         ),
         now=0.0,
     )
@@ -342,6 +359,7 @@ def test_tick_clears_an_expired_snippet(qapp: QApplication) -> None:
             bullets=(),
             state=SnippetState.CONFIRMED,
             source_text=SOURCE,
+            kind=SourceKind.PREP,
         ),
         now=0.0,
     )
@@ -447,6 +465,7 @@ def test_a_replacement_runs_a_transition(qapp: QApplication) -> None:
         bullets=(),
         state=SnippetState.CONFIRMED,
         source_text=SOURCE,
+        kind=SourceKind.PREP,
     )
     panel.show_snippet(first, now=0.0)
     assert panel.transition_running is False, "the first snippet is an appearance, not a replace"
@@ -457,6 +476,7 @@ def test_a_replacement_runs_a_transition(qapp: QApplication) -> None:
             bullets=(),
             state=SnippetState.CONFIRMED,
             source_text=SOURCE,
+            kind=SourceKind.PREP,
         ),
         now=1.0,
     )
@@ -473,6 +493,7 @@ def test_the_transition_returns_to_the_users_opacity(qapp: QApplication) -> None
         bullets=(),
         state=SnippetState.CONFIRMED,
         source_text=SOURCE,
+        kind=SourceKind.PREP,
     )
     panel.show_snippet(view, now=0.0)
     panel.show_snippet(view, now=1.0)
@@ -509,6 +530,7 @@ def test_the_substring_check_alone_does_not_stop_a_fabricating_producer() -> Non
         bullets=(),
         state=SnippetState.CONFIRMED,
         source_text=fabricated,
+        kind=SourceKind.PREP,
     )
 
     assert view.headline == fabricated  # accepted, and it should not have been
@@ -518,13 +540,20 @@ def test_from_stored_note_checks_against_the_store() -> None:
     """Where FR11's guarantee actually lives: the source text is resolved by id from
     storage the producer does not control."""
     store = {"n1": SOURCE}
+    kinds = {"n1": SourceKind.RESUME}
 
     view = from_stored_note(
-        store.get, "n1", "Team of four, six months.", (), SnippetState.CONFIRMED
+        store.get,
+        "n1",
+        "Team of four, six months.",
+        (),
+        SnippetState.CONFIRMED,
+        resolve_kind=kinds.get,
     )
 
     assert view.source_text == SOURCE
     assert view.note_id == "n1"
+    assert view.kind is SourceKind.RESUME
 
 
 def test_from_stored_note_refuses_text_absent_from_the_stored_note() -> None:
@@ -537,12 +566,20 @@ def test_from_stored_note_refuses_text_absent_from_the_stored_note() -> None:
             "I single-handedly rewrote the billing system.",
             (),
             SnippetState.CONFIRMED,
+            resolve_kind=lambda _: SourceKind.PREP,
         )
 
 
 def test_from_stored_note_refuses_an_unknown_note_id() -> None:
     with pytest.raises(UnknownNoteError, match="not in the store"):
-        from_stored_note({}.get, "missing", "anything", (), SnippetState.CONFIRMED)
+        from_stored_note(
+            {}.get,
+            "missing",
+            "anything",
+            (),
+            SnippetState.CONFIRMED,
+            resolve_kind=lambda _: SourceKind.PREP,
+        )
 
 
 def test_the_clock_drives_auto_clear(qapp: QApplication) -> None:
@@ -555,6 +592,7 @@ def test_the_clock_drives_auto_clear(qapp: QApplication) -> None:
             bullets=(),
             state=SnippetState.CONFIRMED,
             source_text=SOURCE,
+            kind=SourceKind.PREP,
         ),
         now=0.0,
     )
@@ -868,6 +906,7 @@ def test_a_long_bullet_elides_rather_than_growing_unboundedly(qapp: QApplication
             bullets=(long_source.strip(),),
             state=SnippetState.CONFIRMED,
             source_text=long_source,
+            kind=SourceKind.PREP,
         ),
         now=0.0,
     )
@@ -890,6 +929,7 @@ def test_a_short_bullet_is_rendered_verbatim(qapp: QApplication) -> None:
             bullets=("Cut p99 latency from 900ms to 120ms.",),
             state=SnippetState.CONFIRMED,
             source_text=SOURCE,
+            kind=SourceKind.PREP,
         ),
         now=0.0,
     )
@@ -913,7 +953,11 @@ def test_widening_the_panel_restores_elided_text(qapp: QApplication) -> None:
     narrow = OverlayPanel(OverlayGeometry(width=MIN_SIZE[0], height=MIN_SIZE[1]))
     wide = OverlayPanel(OverlayGeometry(width=MAX_SIZE[0], height=MIN_SIZE[1]))
     view = SnippetView(
-        headline="Cut p99", bullets=(text,), state=SnippetState.CONFIRMED, source_text=source
+        headline="Cut p99",
+        bullets=(text,),
+        state=SnippetState.CONFIRMED,
+        source_text=source,
+        kind=SourceKind.PREP,
     )
 
     narrow.show_snippet(view, now=0.0)
@@ -964,6 +1008,7 @@ def test_elision_only_ever_cuts_from_the_end(qapp: QApplication) -> None:
             bullets=(long_source.strip(),),
             state=SnippetState.CONFIRMED,
             source_text=long_source,
+            kind=SourceKind.PREP,
         ),
         now=0.0,
     )
@@ -1027,6 +1072,7 @@ def test_a_tall_panel_shows_more_lines_than_the_minimum_one(qapp: QApplication) 
         bullets=(long_source.strip(),),
         state=SnippetState.CONFIRMED,
         source_text=long_source,
+        kind=SourceKind.PREP,
     )
     short = OverlayPanel(OverlayGeometry(width=420, height=MIN_SIZE[1]))
     tall = OverlayPanel(OverlayGeometry(width=420, height=MAX_SIZE[1]))
@@ -1054,9 +1100,208 @@ def test_text_that_fits_the_taller_panel_is_never_cut(qapp: QApplication) -> Non
 
     panel.show_snippet(
         SnippetView(
-            headline="Cut p99", bullets=(text,), state=SnippetState.CONFIRMED, source_text=source
+            headline="Cut p99",
+            bullets=(text,),
+            state=SnippetState.CONFIRMED,
+            source_text=source,
+            kind=SourceKind.PREP,
         ),
         now=0.0,
     )
 
     assert panel.bullets[0].text() == text
+
+
+# ---------- T10.7 — per-kind marking (FR72) ----------
+
+
+def test_every_kind_has_a_mark() -> None:
+    """FR72 is a property of the *set* of kinds, so an unmarked kind is a gap in the
+    requirement rather than a missing dictionary entry."""
+    for kind in SourceKind:
+        assert mark_for(kind).glyph
+        assert mark_for(kind).label
+
+
+def test_the_marks_are_pairwise_distinct() -> None:
+    """The acceptance criterion, asserted the only way it can be: pairwise.
+
+    A per-kind assertion cannot express "distinguishable", because distinctness is not a
+    property any single kind has. Same shape as T5.7's health-state test, for the same
+    reason.
+    """
+    glyphs = [mark_for(kind).glyph for kind in SourceKind]
+    labels = [mark_for(kind).label for kind in SourceKind]
+
+    assert len(set(glyphs)) == len(glyphs)
+    assert len(set(labels)) == len(labels)
+
+
+def test_the_mark_is_a_shape_not_a_colour() -> None:
+    """D-55. The overlay's colour channel is fully allocated to *state* (FR51's rail,
+    FR20's egress, FR14a's failure bar, FR12's marked point), and PRISM §1 forbids
+    remapping its semantic dots — so a kind that arrived as a hue would either collide
+    with a state or break the design system. The mark is a glyph and no colour token
+    exists for it; this test is what stops one being added without revisiting D-55.
+    """
+    assert not hasattr(mark_for(SourceKind.PREP), "colour")
+    assert set(vars(KIND_MARKS[SourceKind.PREP])) == {"glyph", "label"}
+
+
+def test_the_glyph_is_never_confusable_with_the_degraded_glyph() -> None:
+    """FR51's channel and FR72's channel share the headline, so they have to stay
+    readable as two marks rather than one."""
+    assert DEGRADED_GLYPH not in {mark_for(kind).glyph for kind in SourceKind}
+
+
+def test_the_headline_carries_the_kind_mark() -> None:
+    view = SnippetView(
+        headline="Team of four, six months.",
+        bullets=(),
+        state=SnippetState.CONFIRMED,
+        source_text=SOURCE,
+        kind=SourceKind.ROLE,
+    )
+
+    assert view.display_headline.startswith(mark_for(SourceKind.ROLE).glyph)
+    assert view.display_headline.endswith("Team of four, six months.")
+
+
+def test_a_degraded_snippet_carries_both_marks_state_first() -> None:
+    """Two channels, and the order is not arbitrary: how much to trust the panel is read
+    before what the panel is about."""
+    view = SnippetView(
+        headline="Team of four, six months.",
+        bullets=(),
+        state=SnippetState.DEGRADED,
+        source_text=SOURCE,
+        kind=SourceKind.COMPANY,
+    )
+
+    rendered = view.display_headline
+    assert rendered.index(DEGRADED_GLYPH) < rendered.index(mark_for(SourceKind.COMPANY).glyph)
+    assert rendered.endswith("Team of four, six months.")
+
+
+def test_the_mark_is_not_part_of_the_stored_text(qapp: QApplication) -> None:
+    """FR11's substring check must see what the user wrote, not what the panel drew.
+
+    The glyph is prepended at display time for exactly this reason — stored into the
+    headline it would either fail the check or, worse, have to be exempted from it.
+    """
+    view = SnippetView(
+        headline="Team of four, six months.",
+        bullets=(),
+        state=SnippetState.CONFIRMED,
+        source_text=SOURCE,
+        kind=SourceKind.PREP,
+    )
+
+    assert all(mark_for(SourceKind.PREP).glyph not in s for s in view.rendered_strings)
+
+
+def test_the_no_match_line_is_unmarked(qapp: QApplication) -> None:
+    """FR35's line is product copy from no source at all. Marking it with a kind would
+    be a false claim about provenance on the one view that has none."""
+    view = no_match_view()
+
+    assert view.kind is None
+    assert view.mark is None
+    assert view.display_headline == NO_MATCH_TEXT
+
+
+def test_marking_the_no_match_line_with_a_kind_is_refused() -> None:
+    """The invariant behind the unmarked no-match line, asserted rather than trusted to
+    the one constructor that currently honours it."""
+    with pytest.raises(RenderError, match="provenance"):
+        SnippetView(
+            headline=NO_MATCH_TEXT,
+            bullets=(),
+            state=SnippetState.NO_MATCH,
+            source_text="",
+            kind=SourceKind.PREP,
+        )
+
+
+def test_clearing_drops_the_previous_snippets_source_label(qapp: QApplication) -> None:
+    """The tooltip is state on a reused widget, so the no-match line would otherwise
+    still claim to have come from the last snippet's source."""
+    panel = OverlayPanel()
+    panel.show_snippet(
+        SnippetView(
+            headline="Team of four, six months.",
+            bullets=(),
+            state=SnippetState.CONFIRMED,
+            source_text=SOURCE,
+            kind=SourceKind.RESUME,
+        ),
+        now=0.0,
+    )
+    assert mark_for(SourceKind.RESUME).label in panel.headline.toolTip()
+
+    panel.clear()
+
+    assert panel.headline.toolTip() == ""
+
+
+def test_the_panel_renders_a_distinct_headline_per_kind(qapp: QApplication) -> None:
+    """The end of the chain: the same stored text under five kinds paints five different
+    headlines. Asserted on the widget rather than on the view, because the mark reaching
+    `display_headline` and never reaching the label is exactly the failure mode T7.4's
+    review found in the checklist feed."""
+    panel = OverlayPanel()
+    painted = set()
+
+    for kind in SourceKind:
+        panel.show_snippet(
+            SnippetView(
+                headline="Team of four, six months.",
+                bullets=(),
+                state=SnippetState.CONFIRMED,
+                source_text=SOURCE,
+                kind=kind,
+            ),
+            now=0.0,
+        )
+        painted.add(panel.headline.text())
+
+    assert len(painted) == len(SourceKind)
+
+
+def test_the_mark_is_learnable_from_the_panel(qapp: QApplication) -> None:
+    """FR72 asks for a glance channel; a glance channel nobody can decode is a private
+    code. The label is the reading channel that makes the shapes learnable."""
+    panel = OverlayPanel()
+
+    panel.show_snippet(
+        SnippetView(
+            headline="Team of four, six months.",
+            bullets=(),
+            state=SnippetState.CONFIRMED,
+            source_text=SOURCE,
+            kind=SourceKind.INTERVIEWER,
+        ),
+        now=0.0,
+    )
+
+    tooltip = panel.headline.toolTip()
+    assert mark_for(SourceKind.INTERVIEWER).glyph in tooltip
+    assert mark_for(SourceKind.INTERVIEWER).label in tooltip
+
+
+def test_a_content_view_without_a_kind_is_refused() -> None:
+    """The other half of the same invariant, and the half that fails silently: an
+    unmarked confirmed snippet renders correctly and is missing only FR72's mark.
+
+    `from_stored_note` cannot be the sole enforcement point while direct construction
+    stays reachable — the field's docstring asserted this and nothing checked it, which
+    is the defect shape this file exists to catch. Found by review on PR #23.
+    """
+    for state in (SnippetState.CONFIRMED, SnippetState.DEGRADED):
+        with pytest.raises(RenderError, match="FR72"):
+            SnippetView(
+                headline="Team of four, six months.",
+                bullets=(),
+                state=state,
+                source_text=SOURCE,
+            )

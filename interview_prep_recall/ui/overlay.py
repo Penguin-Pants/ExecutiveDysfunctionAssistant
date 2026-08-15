@@ -1,4 +1,4 @@
-"""The overlay panel (T5.1, T5.3, T5.4, T5.5, T5.6 — FR11, FR13, FR22–27, FR51, FR54, FR55, FR65).
+"""The overlay panel (T5.1, T5.3–T5.6, T10.7 — FR11, FR13, FR22–27, FR51, FR54, FR55, FR65, FR72).
 
 The product's one visible surface during an interview, and the place where the
 **retrieval-only guarantee** either holds or does not. Everything upstream — the forced
@@ -44,6 +44,7 @@ from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtGui import QFontMetrics, QMouseEvent
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
+from interview_prep_recall.notes.model import SourceKind
 from interview_prep_recall.session.health import Health
 from interview_prep_recall.tracker.progress import TrackedPoint
 from interview_prep_recall.ui.checklist import TrackerChecklist
@@ -111,6 +112,7 @@ NO_MATCH_TEXT = "Nothing in your notes matched that."
 """FR35/OB-1: **never a blank panel.** A blank overlay is indistinguishable from a crashed
 one, and the user cannot debug it mid-interview."""
 
+
 DARK_BAND_MAX = 25
 LIGHT_BAND_MIN = 75
 DEFAULT_BRIGHTNESS = 12
@@ -121,6 +123,55 @@ HALO_OPACITY_THRESHOLD = 0.70
 figures stop being guarantees. Ink gets a 1 px contrasting halo — the technique broadcast
 captions use — and the settings copy says the figures are best-effort. An honest limit
 stated is better than a promise the physics does not support."""
+
+
+@dataclass(frozen=True)
+class KindMark:
+    """FR72's per-kind marking — a shape and a name, deliberately not a colour (D-55).
+
+    `glyph` is the glance channel: FR72 asks for the kind to be distinguishable
+    *without reading*, and five shapes are readable at a metre where five words are not.
+    `label` is the reading channel — a tooltip and a legend, so the shapes are learnable
+    rather than a private code.
+    """
+
+    glyph: str
+    label: str
+
+
+KIND_MARKS: dict[SourceKind, KindMark] = {
+    SourceKind.COMPANY: KindMark("◆", "Company research"),
+    SourceKind.ROLE: KindMark("▲", "Job description"),
+    SourceKind.INTERVIEWER: KindMark("●", "About the interviewer"),
+    SourceKind.PREP: KindMark("■", "Your prep notes"),
+    SourceKind.RESUME: KindMark("▼", "Your resume"),
+}
+"""FR72, and **no new hue** (D-55).
+
+Design §9b allocates the overlay's whole colour channel to *state*: the rail is FR51's
+confirmed/degraded, amber is FR20's egress, red is FR14a's exclusion failure, green is
+FR12's marked point. A sixth through tenth hue for kind would either collide with one of
+those or remap a PRISM semantic dot, which PRISM §1 forbids in as many words. So kind
+gets the channel §9b says colour must never be the only one of — shape — and the ink
+stays the palette's, already measured against both brightness bands.
+
+The five are one geometric family so they read as the same kind of mark, and differ in
+outline rather than in fill weight, because fill weight is what a translucent panel over
+arbitrary video is worst at preserving. ▲/▼ are the closest pair; they are the two kinds
+(job description, resume) least likely to be confused by *content* if the shape is
+misread at a glance."""
+
+
+def mark_for(kind: SourceKind) -> KindMark:
+    """Every kind has a mark, and an unmapped kind is a bug rather than a blank panel.
+
+    A `.get(kind)` returning None would let a kind added later render unmarked —
+    FR72 silently unmet for exactly the source the user just started using.
+    """
+    try:
+        return KIND_MARKS[kind]
+    except KeyError as exc:  # pragma: no cover — unreachable while the enum is closed
+        raise RenderError(f"no FR72 mark defined for {kind!r}") from exc
 
 
 class SnippetState(Enum):
@@ -363,11 +414,41 @@ class SnippetView:
 
     note_id: str = ""
 
+    kind: SourceKind | None = None
+    """FR72's source kind, resolved from the store by `from_stored_note` rather than
+    asserted by the caller. `None` **only** for `NO_MATCH`, which came from no source at
+    all — marking product copy with a kind would be a claim about provenance that is not
+    true, and leaving stored content unmarked drops the mark FR72 requires.
+
+    Both halves are enforced in `__post_init__`. The first draft enforced only the
+    no-match half and left this docstring asserting the other, which is the shape of
+    defect this codebase keeps finding: a guarantee written where it is read rather than
+    where it is checked. Found by review on PR #23.
+    """
+
     def __post_init__(self) -> None:
         if len(self.bullets) > MAX_BULLETS:
             raise RenderError(f"FR11 allows at most {MAX_BULLETS} bullets, got {len(self.bullets)}")
         if self.state is SnippetState.NO_MATCH:
+            # The no-match line is product copy from no source at all, so a kind on it is
+            # a false claim about provenance — the same class of statement FR11 exists to
+            # make impossible, about where text came from rather than about what it says.
+            if self.kind is not None:
+                raise RenderError(
+                    "the no-match line came from no stored source; marking it with "
+                    f"{self.kind!r} would claim a provenance it does not have (FR72)."
+                )
             return
+        if self.kind is None:
+            # The other direction, and the one that fails silently: an unmarked content
+            # view renders correctly, reads correctly, and is missing only the mark FR72
+            # requires. `from_stored_note` cannot be the sole enforcement point when
+            # direct construction is reachable from every producer.
+            raise RenderError(
+                f"a {self.state.value} snippet came from a stored source, so it carries "
+                "that source's kind (FR72). Build it with `from_stored_note`, which "
+                "resolves the kind from the store."
+            )
         for rendered in self.rendered_strings:
             if rendered and rendered not in self.source_text:
                 raise RenderError(
@@ -380,20 +461,43 @@ class SnippetView:
         return (self.headline, *self.bullets)
 
     @property
-    def display_headline(self) -> str:
-        """FR51's second channel for the degraded state.
+    def mark(self) -> KindMark | None:
+        """FR72's mark, or None when the view came from no stored source."""
+        return None if self.kind is None else mark_for(self.kind)
 
-        Prepended at display time rather than stored, so the glyph can never be mistaken
-        for part of the user's text — and so the substring check above sees what the user
-        actually wrote.
+    @property
+    def display_headline(self) -> str:
+        """FR51's second channel for the degraded state, and FR72's for the kind.
+
+        Both prepended at display time rather than stored, so neither glyph can be
+        mistaken for part of the user's text — and so the substring check above sees what
+        the user actually wrote.
+
+        **Order is state, then kind, then text.** The degraded glyph stays leftmost
+        because it qualifies how much the panel should be trusted, and that has to be
+        read before the content it qualifies; kind sits next to the text it describes.
         """
+        mark = self.mark
+        prefix = ""
         if self.state is SnippetState.DEGRADED:
-            return f"{DEGRADED_GLYPH} {self.headline}"
-        return self.headline
+            prefix += f"{DEGRADED_GLYPH} "
+        if mark is not None:
+            prefix += f"{mark.glyph} "
+        return f"{prefix}{self.headline}"
+
+    @property
+    def kind_tooltip(self) -> str:
+        """The reading channel for FR72's shapes, so they are learnable rather than a
+        private code. Empty when there is no mark, which clears any previous tooltip."""
+        mark = self.mark
+        return "" if mark is None else f"{mark.glyph}  {mark.label}"
 
 
 NoteResolver = Callable[[str], str | None]
 """Returns the stored text for a note id, or None if there is no such note."""
+
+KindResolver = Callable[[str], SourceKind | None]
+"""Returns the stored kind for a note id, or None if there is no such note."""
 
 
 class UnknownNoteError(RenderError):
@@ -406,18 +510,31 @@ def from_stored_note(
     headline: str,
     bullets: tuple[str, ...],
     state: SnippetState,
+    *,
+    resolve_kind: KindResolver,
 ) -> SnippetView:
-    """Build a view whose source text comes from the **store**, not from the caller.
+    """Build a view whose source text **and kind** come from the store, not the caller.
 
     This is where FR11's retrieval-only guarantee actually lives. `SnippetView`'s own
     check compares the rendered strings against a `source_text` the caller supplied, which
     a fabricating producer would simply supply to match — so the trust boundary has to be
     a lookup the producer does not control.
+
+    **`resolve_kind` is required, not defaulted** (T10.7). A default would make FR72's
+    mark something a producer can omit by writing one fewer argument, and the failure is
+    invisible: the panel renders, the text is right, and only the provenance is missing.
+    A default *value* would be worse — it would assert a kind the store never said.
     """
     source = resolve(note_id)
     if source is None:
         raise UnknownNoteError(
             f"note {note_id!r} is not in the store; the overlay renders stored text only (FR11)."
+        )
+    kind = resolve_kind(note_id)
+    if kind is None:
+        raise UnknownNoteError(
+            f"note {note_id!r} has no stored kind; the overlay marks the source it came "
+            "from (FR72) and will not guess one."
         )
     return SnippetView(
         headline=headline,
@@ -425,6 +542,7 @@ def from_stored_note(
         state=state,
         source_text=source,
         note_id=note_id,
+        kind=kind,
     )
 
 
@@ -830,6 +948,9 @@ class OverlayPanel(QWidget):
         self.view = view
         self.timer.show(now)
         self.headline.setText(view.display_headline)
+        # FR72's reading channel. Set on every snippet, including the ones with no mark,
+        # so a no-match line never carries the previous snippet's source label.
+        self.headline.setToolTip(view.kind_tooltip)
         self._bullet_texts = view.bullets
         for index, label in enumerate(self.bullets):
             if index < len(view.bullets):

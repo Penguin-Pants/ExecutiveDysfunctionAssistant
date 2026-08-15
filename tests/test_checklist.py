@@ -20,6 +20,7 @@ pytest.importorskip("PySide6", reason="Qt UI tests require the [ui] extra")
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+from interview_prep_recall.notes.model import SourceKind  # noqa: E402
 from interview_prep_recall.tracker.progress import TrackedPoint  # noqa: E402
 from interview_prep_recall.ui.checklist import (  # noqa: E402
     MARKED_GLYPH,
@@ -60,6 +61,7 @@ def snippet() -> SnippetView:
         bullets=("Cut p99 latency from 900ms to 120ms.", "Team of four, six months."),
         state=SnippetState.CONFIRMED,
         source_text=SOURCE,
+        kind=SourceKind.PREP,
     )
 
 

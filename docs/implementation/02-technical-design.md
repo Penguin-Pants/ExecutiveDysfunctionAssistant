@@ -846,6 +846,39 @@ product without tinting the video behind it.
 | Egress indicator (FR20) | 8px `--amber-500` dot, separate per path (cloud STT / LLM) |
 | Capture-exclusion failure (FR14a) | Full-width `--red-500` bar across the panel top, persistent |
 | Tracker checklist (FR12) | `--font-secondary` 13px, docked below the bullets, **max 5 rows then scroll**. Unmarked muted, marked `--green-500` + check glyph. **Never displaces the snippet** — the panel grows downward within the FR23 max height, and the checklist scrolls rather than pushing bullets out |
+| **Source kind (FR72)** | A glyph prefixed to the headline, in the headline's own ink and size. **No colour token** — see the kind table below |
+
+### Per-kind marking (FR72, T10.7) — a shape channel, not a colour one
+
+FR72 asks the panel to show *which of the five sources* a snippet came from,
+distinguishably at a glance. The tokens above had no entry for it; these are that entry.
+
+| Kind | Glyph | Label (tooltip / legend) |
+|---|---|---|
+| Company research | `◆` | Company research |
+| Role (job description) | `▲` | Job description |
+| Interviewer | `●` | About the interviewer |
+| Prep notes | `■` | Your prep notes |
+| Resume | `▼` | Your resume |
+
+**Why no hue (D-55).** Every colour on this panel already means a *state*: the left rail is
+FR51's confirmed/degraded, amber is FR20's egress, red is FR14a's exclusion failure, green is
+FR12's marked point. Five more hues would either collide with one of those or remap a PRISM
+semantic dot, which PRISM §1 forbids in as many words. Kind therefore takes the channel this
+section already insists colour must never be the only one of — shape — and inherits the ink the
+brightness bands have already been measured against, so it adds no new contrast surface.
+
+**Placement.** Prefixed to the headline at display time, never stored into it, for the same
+reason the degraded `~` is: FR11's substring check must see the user's text, not the panel's
+decoration. When both marks are present the order is state, then kind, then text — how much to
+trust the panel is read before what the panel is about.
+
+**The label is the reading channel.** A glance channel nobody can decode is a private code, so
+the panel carries the kind's name as the headline's tooltip. The glyph is what FR72 measures;
+the label is what makes it learnable.
+
+**Still open:** the glance test at 1 m, and glyph coverage in the bundled Plex faces. Both are
+real-surface checks — T5.9 and T9.4 — and neither is answerable in the headless container.
 
 **Why neutral rather than PRISM's plum.** A saturated surface tints whatever is behind it, and
 behind this one is a live video call. A neutral translucent gray disappears against any feed;
