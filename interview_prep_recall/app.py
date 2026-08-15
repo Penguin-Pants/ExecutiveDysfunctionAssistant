@@ -168,7 +168,15 @@ class Application:
     client: MessagesClient
     cipher: Cipher
     context_set: ContextSet
-    on_result: Callable[[MatchResult], None] = lambda _result: None
+    on_result: Callable[[MatchResult], None] = field(init=False, repr=False)
+    """Where a match goes. Assigned by whatever surface renders it (T5.10).
+
+    **The default records rather than doing nothing** (D-60). `lambda _result: None` here
+    is what hid the missing match feed for six milestones: an unwired hook and a wired one
+    behaved identically, at runtime and to the type checker. Dropping a match is now a
+    diagnostic event, so an unwired build says so in the one place FR36 already asks the
+    user to look.
+    """
     on_tracker_update: Callable[[list[TrackedPoint], bool], None] = lambda _points, _enabled: None
     """FR12's checklist, pushed after every utterance (T7.4).
 
@@ -239,11 +247,22 @@ class Application:
         self.prefilter = Prefilter(
             self.index, self.context_set, self.embedder, tau_floor=self.config.tau_floor
         )
+        # D-60: an unwired hook must not be indistinguishable from a wired one. The
+        # default drops the match *and says so*, in the buffer FR36 already points the
+        # user at, so a build whose UI forgot this wire is visible instead of merely
+        # quiet. Set here rather than as a field default because it needs the ring.
+        self.on_result = self._drop_unrendered_match
         self.runner = BackgroundCallRunner()
         self.pipeline = MatchingPipeline(
             prefilter=self.prefilter,
             selector=Stage2Selector(self.client, model_id=self.config.llm_model_id),
-            on_result=self.on_result,
+            # **Delegated, not copied.** `on_result=self.on_result` captured whatever the
+            # field held at construction — the no-op default — so a UI assigning
+            # `application.on_result` afterwards changed nothing the pipeline calls, and
+            # matches still never reached the overlay. The one-line indirection is what
+            # makes the field a *hook* rather than a constructor argument that looks like
+            # one. Found by review on PR #26, in the fix for exactly this defect.
+            on_result=lambda result: self.on_result(result),
             ring=self.ring,
             runner=self.runner,
         )
@@ -378,6 +397,17 @@ class Application:
         self.on_tracker_update(self.tracker.points(), tracking)
 
     # ---------- the report path ----------
+
+    def _drop_unrendered_match(self, result: MatchResult) -> None:
+        """The `on_result` default: nothing is rendering, and that is recorded.
+
+        Not an exception — a headless `Application` is a legitimate configuration (every
+        test, the composition root before a window exists), and raising would make the
+        library unusable without a UI. Recording is the difference between "no surface is
+        attached" and "the surface is attached and broken", which is the distinction that
+        was missing for six milestones.
+        """
+        self.ring.record("match_unrendered", state=result.outcome.name)
 
     def missed_note_ids(self) -> frozenset[str]:
         """FR78a. The tracker's verdict, and the report is told rather than asked.

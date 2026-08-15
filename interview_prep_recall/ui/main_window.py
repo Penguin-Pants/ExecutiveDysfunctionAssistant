@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
 )
 
 from interview_prep_recall.app import Application
+from interview_prep_recall.matching.pipeline import MatchResult
 from interview_prep_recall.session.manager import SessionState
 from interview_prep_recall.session.preflight import PreflightReport
 from interview_prep_recall.settings import AppliedSettings
@@ -93,6 +94,11 @@ DiagnosticsFactory = Callable[[Application, QWidget], DiagnosticsView]
 """Takes the parent, because a modeless window this one opens must be owned by it."""
 
 ReportsFactory = Callable[[Application, QWidget], ReportView]
+
+
+def _no_result(_result: MatchResult) -> None:
+    """What `on_result` reverts to when the window goes. Not a silent default anywhere
+    else: `Application`'s own is the one that hid T5.10 for six milestones."""
 
 
 def _default_diagnostics(application: Application, parent: QWidget) -> DiagnosticsView:
@@ -239,6 +245,17 @@ class MainWindow(QMainWindow):
         # the egress lamp was correct in memory and dark on screen. The panel's own
         # `emit`, for the reason the line above uses one — a bound widget method here
         # would be called from the watchdog and report threads. Found by review on PR #25.
+        # T5.10, the wire the product exists for: a match reaches the panel. The
+        # pipeline's worker thread calls this, so it is the panel's `emit` — the
+        # `tracker_updated` contract, for the third collaborator in a row.
+        self.overlay.context_set = application.context_set
+        application.on_result = self.overlay.match_received.emit
+        self.destroyed.connect(lambda: setattr(application, "on_result", _no_result))
+        # FR54's auto-clear had the same problem one layer down: `tick` was pull-based
+        # and `start_clock` had no production caller either, so an unpinned snippet
+        # would have stayed on screen for the whole interview once one finally arrived.
+        self.overlay.start_clock()
+
         application.monitor.on_change = self.overlay.health_updated.emit
         # **Cleared when this window is destroyed.** The application outlives the window,
         # so a hook holding a bound `emit` of a deleted widget is a dangling C++ pointer

@@ -44,7 +44,7 @@ from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtGui import QFontMetrics, QMouseEvent
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
-from interview_prep_recall.notes.model import SourceKind
+from interview_prep_recall.notes.model import ContextSet, SourceKind
 from interview_prep_recall.session.health import Health
 from interview_prep_recall.tracker.progress import TrackedPoint
 from interview_prep_recall.ui.checklist import TrackerChecklist
@@ -849,6 +849,13 @@ class OverlayPanel(QWidget):
     call, so `MainWindow`'s own redraws cost nothing extra.
     """
 
+    match_received = Signal(object)
+    """T5.10's thread hop: a `MatchResult` from the matching worker.
+
+    Converted to a `SnippetView` in the slot rather than by the producer, so the pipeline
+    never holds a widget-shaped object and `app.py` stays Qt-free.
+    """
+
     health_updated = Signal(object)
     """The thread hop for FR20/FR35, exactly like `tracker_updated` (T11.10b review).
 
@@ -871,6 +878,14 @@ class OverlayPanel(QWidget):
         self.on_geometry_changed = on_geometry_changed
         # Set before `apply_geometry`, which the constructor reaches through `_restyle`.
         self._bullet_texts: tuple[str, ...] = ()
+        self.context_set: ContextSet | None = None
+        """The notes a `MatchResult` is resolved against (T5.10).
+
+        **Plain data, set by whoever owns the window** — not a reference back to the
+        application, which is the coupling D-53 removed from the geometry callback. It
+        changes when the user switches note sets, so the owner re-assigns rather than the
+        panel caching a copy.
+        """
         self._drag_from: QPoint | None = None
         self._press_geometry: OverlayGeometry | None = None
         self._grabbed_edges: set[Edge] = set()
@@ -925,6 +940,7 @@ class OverlayPanel(QWidget):
         # thread, on the next pass of the event loop.
         self.tracker_updated.connect(self.set_tracked_points)
         self.health_updated.connect(self.update_health)
+        self.match_received.connect(self.show_match)
 
     def start_clock(self, interval_ms: int = 500) -> None:
         """Drive `tick` from the Qt event loop (FR54).
@@ -1171,6 +1187,27 @@ class OverlayPanel(QWidget):
             self._restyle()
 
     # ---------- health (FR7, FR20, FR35) ----------
+
+    def show_match(self, result: object) -> None:
+        """Render a pipeline result (T5.10). **GUI thread only** — see `match_received`.
+
+        Imported inside the method: `match_feed` imports this module for `SnippetView`
+        and `from_stored_note`, so a module-level import here would be a cycle. The
+        conversion belongs next to the pipeline's vocabulary rather than in the widget,
+        and the widget is what owns the clock.
+        """
+        import time
+
+        from interview_prep_recall.matching.pipeline import MatchResult
+        from interview_prep_recall.ui.match_feed import snippet_for
+
+        if self.context_set is None or not isinstance(result, MatchResult):
+            # Never blank (FR35/OB-1). An unset context set is a wiring bug rather than a
+            # user state, and the panel says "nothing matched" rather than going dark or
+            # raising into the event loop mid-interview; a test asserts the window sets it.
+            self.show_snippet(no_match_view(), now=time.monotonic())
+            return
+        self.show_snippet(snippet_for(result, self.context_set), now=time.monotonic())
 
     def update_health(self, health: Health) -> None:
         """Push design §7's record at the indicator bar (T5.7).
