@@ -614,9 +614,11 @@ class ReportView(QDialog):
         from a worker is undefined behaviour in Qt, which is the defect PR #22 found in
         the tracker feed. Only `send_report`, which is the network, is dispatched.
 
-        **This is also what makes FR81a true rather than nominal.** The egress indicator
-        is set for the duration of the upload; on a blocked event loop it is lit in
-        memory and dark on screen for exactly the seconds it exists to announce.
+        **Necessary for FR81a, and not sufficient — the other half is a wire.** The
+        egress indicator is set for the duration of the upload, and on a blocked event
+        loop it is lit in memory and dark on screen for exactly the seconds it exists to
+        announce. Freeing the loop only makes the repaint *possible*; `HealthMonitor`
+        also has to reach `OverlayPanel`, which until PR #25's review nothing did.
 
         Returns nothing: the report arrives on `_finished`, which may be after this
         returns. `document` is the property to read once it has.
