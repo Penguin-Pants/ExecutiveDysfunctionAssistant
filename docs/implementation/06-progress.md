@@ -21,12 +21,19 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | **M6 — Session lifecycle** | 🟢 Logic complete · panic on hold (D-U11) | T6.1–T6.3, T6.5 classification, T6.6 backpressure, T6.7 done. T6.4 and the OS trigger paths need Windows |
 | **M7 — Progress tracker** | 🟢 T7.1 + T7.3 complete | Marking and text-domain echo suppression done. T7.2 needs paired audio fixtures; T7.4 is Qt |
 | **M8 — Cloud STT backends** | 🟢 T8.1–T8.5 complete | Deepgram, ElevenLabs, fallback, egress. Protocols unverified against a live endpoint (**AS-8**) |
-| **M9 — Packaging & first run** | 🟡 T9.0–T9.2 complete | Composition root, FR63 disclosure, `config.json` store + settings surface. T9.3 (wizard) is next and is buildable here. T9.4 is PyInstaller; T9.5 needs live vendor docs |
+| **M9 — Packaging & first run** | 🟡 T9.0–T9.2, T9.6 complete | Composition root, FR63 disclosure, config store, settings surface, **entry point**. T9.3 is **blocked on M1** (three of four steps are audio). T9.6a needs FR43; T9.4 is PyInstaller; T9.5 needs live vendor docs |
 | **M10 — Typed context sources** | 🟢 T10.1–T10.6 + migration complete | Five kinds, per-kind caps and thresholds, schema v1→v2 migration. T10.7 is Qt |
 | **M11 — Post-interview report** | 🟢 T11.1, T11.3–T11.9 complete | Record, evidence binding, encrypted store, retention, generation. T11.2's DPAPI binding and T11.10 need Windows |
 
-**Next action: T9.3 (setup wizard), then T9.2b** — wire a main window that actually opens the
-settings dialog. Both are Qt, and **Qt runs here** — see below.
+**Next action: nothing substantial in M9 is buildable here.** T9.3 needs audio hardware, T9.6a
+needs FR43's active-note-set selection *and* the Windows-only embedder and cipher, T9.4 cannot
+cross-compile, T9.5 needs live vendor docs. The remaining Qt work is in **M5's overlay widget**
+and **T7.4's checklist rendering** — both buildable offscreen, both previously mislabelled.
+
+That sentence has been wrong five times, so treat it as a claim to re-test rather than a fact.
+What is different this time is that T9.3's blocker was *verified* rather than assumed:
+`pyaudiowpatch` has no Linux distribution at all, `/dev/snd` does not exist, and there is no sound
+subsystem. Three independent confirmations, unlike the Qt claim which had none.
 
 That last sentence was written three hours after the previous version of this paragraph said
 T9.4 was "the only remaining task with no hardware dependency". It was wrong, for the **fifth**
@@ -47,8 +54,8 @@ behind that one word for five milestones.
 
 Remaining, re-sorted after the Qt discovery:
 
-- **Buildable and testable here (Qt, offscreen):** T9.3, T9.2b, T7.4's checklist rendering,
-  T10.7's per-kind marking, and the *widget* half of M5's overlay.
+- **Buildable and testable here (Qt, offscreen):** T7.4's checklist rendering, T10.7's per-kind
+  marking, and the *widget* half of M5's overlay.
 - **Genuinely needs Windows:** M1 (WASAPI, AS-2 gate), T2.4 (AS-1, needs the D-U6 laptop's CPU),
   T5.2's `SetWindowDisplayAffinity`, T6.4's ProcMon trace, T9.1a's device-open enforcement,
   T9.4's PyInstaller build, T11.2's DPAPI binding, T11.10.
@@ -138,6 +145,77 @@ conservative choice, just a broken one.
 ---
 
 ## Log
+
+### T9.6 — Application entry point · complete · 2026-08-14
+
+`interview_prep_recall/startup.py`, `interview_prep_recall/__main__.py`,
+`interview_prep_recall/ui/main_window.py`, plus `tests/test_startup.py` (13) and
+`tests/test_main_window.py` (13). 565 passing.
+
+**T9.3 was the planned next phase and it is genuinely blocked.** Three of its four steps — device
+selection, audio test, echo check — are audio, and this was *verified* rather than assumed:
+`pyaudiowpatch` has **no Linux distribution at all** (`pip` reports "from versions: none"),
+`/dev/snd` does not exist, and there is no `/proc/asound`. Three independent confirmations. That
+matters because the last five "needs Windows" labels turned out to be false on inspection; this
+one is not.
+
+**So the phase became the thing three tasks were waiting on.** T9.1a ("no production caller"),
+T9.2b ("no main window") and T9.4 ("needs an entry point") all record the same blocker in
+different words, and **no task owned building it** — the third unowned prerequisite in this plan
+after T9.0's composition root and T9.2a's config store. Recorded as **T9.6**.
+
+**Closed by it:**
+
+* **T9.2b.** Something in production now constructs `SettingsDialog`, feeds `on_switch` to
+  `SessionManager.set_switch`, and passes the result to `Application.apply_settings`.
+* **The startup half of T9.1a.** FR63's gate runs before anything is constructed. The capture-open
+  enforcement still belongs to M1.
+* **A D-20 instance I created last phase.** `ConfigLoadStatus.settings_were_lost` had **no
+  production consumer** — I wrote in the config module's docstring that "the user is notified" was
+  load-bearing, and then gave the notification nowhere to go. It now produces a startup notice.
+
+**The order is the requirement, and one ordering is load-bearing.** Consent is checked *before*
+`build_application` is called, and the test asserts the factory was never invoked and the
+directory is still empty. A gate that runs after the composition root has created directories,
+built an index and loaded notes is a gate that ran too late — "declined" would leave behind the
+state of a session the user refused.
+
+**Preflight now runs automatically (FR38), and on this machine it correctly blocks.** `Preflight`
+treats a check with no probe as unsatisfied rather than passed, so with no audio devices the
+window shows real blocking reasons instead of a fake Start button. That is the honest screen for
+"you cannot start yet", and it is specified behaviour rather than scaffolding.
+
+**T9.6a is deliberately unimplemented.** `_build_application` raises rather than guessing, because
+two of its four dependencies need decisions that are not this task's to make: FR43's active
+note-set selection (nothing reads or writes `QSettings` yet) and what an absent API key means
+(D-U3's local-only path — a product decision belonging with T9.3). Inventing answers here would
+ship them as decisions nobody made.
+
+**Five defects found in the local two-pass review:**
+
+1. **`python -m interview_prep_recall` crashed with a traceback.** Found by *running* it, not by
+   reading it. An entry point's job is to start or say why it cannot; a stack trace is neither.
+   Now caught, printed to stderr and shown, with a distinct exit code.
+2. **`test_switch_names_are_accepted_by_the_session_manager` asserted nothing.** It toggled each
+   checkbox and then asserted `hasattr(switches, name)` — trivially true, unrelated to whether the
+   toggle landed, and named for a guarantee it did not check. Written minutes earlier, by me.
+3. **Two more near-vacuous tests** restated library behaviour rather than checking this module.
+   Deleted; one was replaced by real coverage of finding 1.
+4. **`vars()` on a dataclass** where `asdict` states the intent and will not silently start
+   offering a non-field attribute added later.
+5. **`EXIT_OK` defined and never used.**
+
+**A constraint recorded for T9.4:** a failed startup shows a *modal* message box, which is correct
+for a human and a hang for automation — verified by running the entry point headless, where it
+blocked until timeout. Any non-interactive smoke test of the packaged exe must drive or suppress
+it.
+
+Finding 2 is the third time in three phases that a test I wrote asserted something weaker than its
+name claimed. The pattern is specific enough to name: **when a test's assertion is a `hasattr`, a
+truthiness check, or an equality against a value the code under test never touched, it is
+measuring the test's own setup.**
+
+---
 
 ### T9.2 + T9.2a — Settings surface and the `config.json` store · complete · 2026-08-14
 
