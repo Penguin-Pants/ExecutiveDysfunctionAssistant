@@ -743,3 +743,78 @@ def test_the_route_the_signpost_names_actually_exists(
     view = window.open_reports()
 
     assert view.delete_all_button.text() == DELETE_ALL_TEXT
+
+
+# ---------- PR #25 review: the wires that did not exist ----------
+
+
+def test_health_changes_reach_the_overlay(
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
+) -> None:
+    """FR20/FR35. The monitor recorded every state the indicators were built to render
+    and **nothing connected them** — correct in memory, never drawn. Both halves had
+    passing tests; the wire between them was the part nobody owned (D-20).
+    """
+    window = window_with(application, overlay_settings)
+    before = window.overlay.indicators.visual_state()
+
+    application.egress.set_llm(True)
+
+    assert window.overlay.indicators.visual_state() != before, "the egress lamp moved"
+
+
+def test_the_indicator_shows_the_current_state_when_the_window_opens(
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
+) -> None:
+    """A window built mid-session must not start from a default nobody chose."""
+    application.egress.set_llm(True)
+
+    window = window_with(application, overlay_settings)
+
+    assert window.overlay.indicators.visual_state() == _egress_state(application)
+
+
+def _egress_state(application: Application) -> tuple[str, ...]:
+    from interview_prep_recall.ui.indicators import IndicatorBar
+
+    bar = IndicatorBar()
+    bar.update_health(application.monitor.health)
+    return bar.visual_state()
+
+
+def test_the_panic_control_comes_alive_when_a_session_starts(
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
+) -> None:
+    """The window is built at IDLE and the session starts later, so a one-shot refresh
+    at construction left the emergency control disabled for the whole session — dead in
+    exactly the case it exists for. The first tests missed it by starting the session
+    before building the window. Found by review on PR #25.
+    """
+    window = window_with(application, overlay_settings)
+    assert not window.panic_button.isEnabled()
+
+    application.session.request_start()
+    application.session.preflight_result(blocked=False)
+
+    assert window.panic_button.isEnabled()
+    assert window.panic_status.text() == "Listening."
+
+
+def test_the_state_subscription_does_not_outlive_the_window(
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
+) -> None:
+    """The application outlives the window, so a hook holding a bound `emit` of a deleted
+    widget is a dangling pointer the next transition walks into — the segfault shape this
+    codebase has now hit three times (D-53, D-54)."""
+    from PySide6.QtCore import QCoreApplication, QEvent
+
+    window = window_with(application, overlay_settings)
+    window.close()
+    window.deleteLater()
+    # `processEvents` alone does not run deferred deletions; this is the documented way
+    # to force them, and forcing them is the point — the hazard is what happens *after*
+    # the C++ object is gone.
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+    assert application.session.on_state_change is None
+    assert application.monitor.on_change is None

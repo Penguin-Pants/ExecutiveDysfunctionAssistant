@@ -193,9 +193,22 @@ class SessionStore:
         self.ring.record("session_stored", session=sid, count=len(record))
         return sid
 
-    def attach_report(self, session_id: str, report: dict[str, Any]) -> None:
+    def attach_report(self, session_id: str, report: dict[str, Any]) -> bool:
+        """Store a report against its session. Returns False if the session is gone.
+
+        **Checked rather than assumed.** Generation can outlive its session: the upload
+        takes seconds and delete-all takes one click, so a report can arrive for a
+        transcript that no longer exists. Writing it anyway leaves an orphan `.report`
+        with no transcript to resolve its evidence against — a file the user deleted the
+        session to be rid of. The UI gates the control as well; this is the half that
+        holds for any caller. Found by review on PR #25.
+        """
+        if not self.transcript_path(session_id).exists():
+            self.ring.record("report_orphaned", session=session_id)
+            return False
         self._write_encrypted(self.report_path(session_id), report)
         self._reindex()
+        return True
 
     def _write_encrypted(self, path: Path, payload: dict[str, Any]) -> None:
         blob = self.cipher.encrypt(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
@@ -361,12 +374,19 @@ def _parse_context_set(raw: Any, *, sid: str, ring: DiagnosticRing) -> ContextSe
 
     Recorded when it happens, because the consequence — today's notes substituted for the
     interview's own — is exactly what D-58 exists to stop being invisible.
+
+    **Every exception, not a named tuple of them.** The first version caught
+    `KeyError | ValueError | TypeError`, and a `notes` list containing a `null` raises
+    `AttributeError` from the sort key — which escaped, failed `load()`, and made the
+    transcript unreadable: the exact outcome the paragraph above promises cannot happen.
+    A guarantee stated in a docstring and enumerated in an `except` clause is only as
+    good as the enumeration. Found by review on PR #25.
     """
     if not isinstance(raw, dict):
         return None
     try:
         return ContextSet.from_dict(raw)
-    except (KeyError, ValueError, TypeError) as error:
+    except Exception as error:  # noqa: BLE001 — see below
         ring.record("session_context_unreadable", session=sid, code=type(error).__name__)
         return None
 

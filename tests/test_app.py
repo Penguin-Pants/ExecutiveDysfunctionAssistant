@@ -730,3 +730,47 @@ def test_an_unreadable_snapshot_does_not_cost_the_transcript(app_data) -> None: 
     assert stored.context_set is None
     assert [u.text for u in stored.utterances] == ["a question"]
     assert any(e.event == "session_context_unreadable" for e in app.ring.snapshot())
+
+
+def test_a_snapshot_with_a_malformed_note_entry_does_not_cost_the_transcript(app_data) -> None:  # type: ignore[no-untyped-def]
+    """`ContextSet.from_dict` sorts on `d.get(...)`, so a `null` in `notes` raises
+    `AttributeError` — which the first handler's named-exception tuple did not catch, so
+    `load()` failed and the transcript became unreadable. That is the precise outcome the
+    fallback exists to prevent. Found by review on PR #25."""
+    app = _app(app_data)
+    app.session.request_start()
+    app.session.preflight_result(blocked=False)
+    app.consume(_utterance("a question", stream="interviewer"), now=1.0)
+    session_id = app.end_session(role="Role")
+    assert session_id is not None
+
+    path = app.sessions.transcript_path(session_id)
+    payload = json.loads(app.sessions.cipher.decrypt(path.read_bytes()).decode("utf-8"))
+    payload["context_set"] = {"id": payload["id"], "name": "x", "notes": [None, "also bad"]}
+    path.write_bytes(app.sessions.cipher.encrypt(json.dumps(payload).encode("utf-8")))
+
+    stored = app.sessions.load(session_id)
+
+    assert stored.context_set is None
+    assert [u.text for u in stored.utterances] == ["a question"]
+
+
+def test_a_report_for_a_deleted_session_is_not_stored(app_data) -> None:  # type: ignore[no-untyped-def]
+    """Generation can outlive its session: the upload takes seconds and delete-all takes
+    one click. Writing the report anyway leaves an orphan with no transcript to resolve
+    its evidence against — a file the user deleted the session to be rid of."""
+    app = _app(app_data)
+    app.consent.acknowledge()
+    app.session.request_start()
+    app.session.preflight_result(blocked=False)
+    app.consume(_utterance("a question", stream="interviewer"), now=1.0)
+    session_id = app.end_session(role="Role")
+    assert session_id is not None
+
+    _sid, prepared = app.prepare_report(session_id=session_id)
+    app.sessions.delete_all()
+
+    with pytest.raises(ReportUnavailableError, match="deleted while"):
+        app.send_report(session_id, prepared)
+
+    assert not app.sessions.report_path(session_id).exists()

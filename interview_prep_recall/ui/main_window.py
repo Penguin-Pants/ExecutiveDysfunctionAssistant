@@ -28,7 +28,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import asdict
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -125,6 +125,10 @@ class MainWindow(QMainWindow):
     and a dependency with a working default never has its connection tested.
     """
 
+    session_state_changed = Signal()
+    """A session transition reached the window. Emitted, never called directly: `_to`
+    runs on whichever thread drove the transition, and this slot touches widgets."""
+
     def __init__(
         self,
         application: Application,
@@ -185,6 +189,16 @@ class MainWindow(QMainWindow):
         self.panic_status.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(self.panic_status)
 
+        # FR60's control has to be live *while a session runs*, and a session starts
+        # long after this window is built. Without this subscription the initial IDLE
+        # refresh disabled the panic button for the rest of the process — the emergency
+        # control dead in exactly the case it exists for. The tests missed it by starting
+        # the session first. Found by review on PR #25.
+        #
+        # Through a signal: `_to` runs on whichever thread drove the transition.
+        emit_state_change = self.session_state_changed.emit
+        application.session.on_state_change = lambda _old, _new: emit_state_change()
+        self.destroyed.connect(lambda: setattr(application.session, "on_state_change", None))
         self.refresh_panic()
 
         # The overlay is built here, from the persisted geometry, so FR26's stored layout
@@ -220,6 +234,21 @@ class MainWindow(QMainWindow):
         # for the collector to decide the teardown order of — the hazard the comment above
         # records.
         application.on_tracker_update = self.overlay.tracker_updated.emit
+        # FR20/FR35, and the wire that did not exist: the monitor recorded every state
+        # the indicators were built to render and nothing carried one to the other, so
+        # the egress lamp was correct in memory and dark on screen. The panel's own
+        # `emit`, for the reason the line above uses one — a bound widget method here
+        # would be called from the watchdog and report threads. Found by review on PR #25.
+        application.monitor.on_change = self.overlay.health_updated.emit
+        # **Cleared when this window is destroyed.** The application outlives the window,
+        # so a hook holding a bound `emit` of a deleted widget is a dangling C++ pointer
+        # the next health update walks into — an interpreter segfault, and the third time
+        # this project has hit that shape (D-53, D-54). The lambda closes over
+        # `application` and never over `self`, so it is not a cycle either.
+        self.destroyed.connect(lambda: setattr(application.monitor, "on_change", None))
+        # Pushed once so the strip shows the current state rather than a default nobody
+        # chose, on a window that may be built mid-session.
+        self.overlay.update_health(application.monitor.health)
         # Pushed once now so the panel is not blank until the first utterance: the
         # checklist is what the user reads before they have said anything.
         self.refresh_checklist()
@@ -238,6 +267,7 @@ class MainWindow(QMainWindow):
         self.reset_overlay_button.clicked.connect(self.reset_overlay)
         layout.addWidget(self.reset_overlay_button)
 
+        self.session_state_changed.connect(self.refresh_panic)
         self.setCentralWidget(central)
 
     # ---------- overlay chrome (T5.4 — FR26, FR27, FR55) ----------

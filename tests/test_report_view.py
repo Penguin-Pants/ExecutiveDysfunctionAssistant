@@ -816,3 +816,50 @@ def test_the_default_dispatch_really_leaves_the_gui_thread(
 
     assert seen and seen[0] != calling_thread, "the model call ran off the GUI thread"
     assert view.status.text() == "Report generated."
+
+
+def test_an_absence_citation_uses_the_headline_the_finding_came_from(
+    qapp: QApplication,
+    app_data,  # type: ignore[no-untyped-def]
+) -> None:
+    """Note ids are stable across edits (FR41), so resolving through today's set finds
+    the right note and renders the wrong words — the same substitution D-58 removed from
+    generation, one layer down and harder to spot because the citation still resolves.
+    Found by review on PR #25."""
+    app = _app(app_data)
+    note_id = app.context_set.notes[0].id
+    app.reports.client = ScriptedClient(_findings_payload(note_id))
+    app.consent.acknowledge()
+    session_id = _session(app)
+    app.generate_report(session_id=session_id, confirm=lambda _: True)
+
+    edited = "Completely rewritten after the interview"
+    app.context_set.get(note_id).headline = edited  # type: ignore[union-attr]
+
+    view = _view(app)
+    body = view.body.toPlainText()
+
+    assert f"expected from: {PREP_HEADLINE}" in body
+    assert edited not in body
+
+
+def test_delete_all_is_blocked_while_a_report_is_generating(
+    qapp: QApplication,
+    app_data,  # type: ignore[no-untyped-def]
+) -> None:
+    """Delete-all removes the transcript the worker is still generating against, and the
+    view would then announce success for an interview the user had just deleted."""
+    app = _app(app_data)
+    app.consent.acknowledge()
+    _session(app)
+    during: list[bool] = []
+
+    def dispatch(work):  # type: ignore[no-untyped-def]
+        during.append(view.delete_all_button.isEnabled())
+        work()
+
+    view = _view(app, dispatch=dispatch)
+    view.generate()
+
+    assert during == [False]
+    assert view.delete_all_button.isEnabled(), "restored afterwards"

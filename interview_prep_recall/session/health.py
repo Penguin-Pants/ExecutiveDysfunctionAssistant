@@ -13,6 +13,7 @@ broken at the exact moment they most need to — so `nominal` is a first-class q
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from enum import Enum, auto
 
@@ -151,14 +152,36 @@ class HealthMonitor:
     health: Health = field(default_factory=Health)
     _history: list[Health] = field(default_factory=list)
 
+    on_change: Callable[[Health], None] | None = None
+    """Pushed on every change, for the surfaces that display it (FR20, FR35).
+
+    **Push rather than poll, and it had no consumer at all until T11.10b's review.** The
+    monitor was written, the indicators were built to design §7, `OverlayPanel.update_health`
+    existed — and nothing connected them, so FR20's egress lamp and FR35's health states
+    were correct in memory and never drawn. The requirement's tests all passed: they
+    asserted the model and the widget separately, and the wire between them was the part
+    nobody owned. That is D-20 in its purest form.
+
+    **Consumers must marshal.** This fires from the watchdog thread, from an STT
+    backend's thread and from a report worker, so a Qt consumer connects a signal rather
+    than a bound widget method — the contract `OverlayPanel.tracker_updated` already
+    states for the same reason.
+    """
+
     def update(self, **changes: object) -> Health:
         self._history.append(self.health)
         if len(self._history) > 64:
             self._history.pop(0)
         self.health = self.health.with_(**changes)
+        self._notify()
         return self.health
 
     def reset(self) -> Health:
         self.health = Health()
         self._history.clear()
+        self._notify()
         return self.health
+
+    def _notify(self) -> None:
+        if self.on_change is not None:
+            self.on_change(self.health)

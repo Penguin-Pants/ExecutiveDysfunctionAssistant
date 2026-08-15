@@ -849,6 +849,14 @@ class OverlayPanel(QWidget):
     call, so `MainWindow`'s own redraws cost nothing extra.
     """
 
+    health_updated = Signal(object)
+    """The thread hop for FR20/FR35, exactly like `tracker_updated` (T11.10b review).
+
+    `HealthMonitor.on_change` fires from the watchdog thread, from an STT backend's
+    thread and from the report worker. Binding `update_health` to it directly would
+    mutate `QWidget` state from those threads; this signal is the queue.
+    """
+
     def __init__(
         self,
         geometry: OverlayGeometry | None = None,
@@ -916,6 +924,7 @@ class OverlayPanel(QWidget):
         # this is the whole of the hop: a backend thread's emit lands here, on the GUI
         # thread, on the next pass of the event loop.
         self.tracker_updated.connect(self.set_tracked_points)
+        self.health_updated.connect(self.update_health)
 
     def start_clock(self, interval_ms: int = 500) -> None:
         """Drive `tick` from the Qt event loop (FR54).

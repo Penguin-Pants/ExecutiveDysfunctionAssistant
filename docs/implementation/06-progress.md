@@ -208,6 +208,23 @@ both halves: that panic destroys nothing, and where the deliberate route is. A t
 route it names actually exists, because a signpost pointing at an absent control satisfies the
 wording and fails the reader.
 
+**PR #25 review — five findings, all valid, all fixed.** Two of them were wires that did not
+exist, which is this codebase's most repeated defect and the reason D-20 has a number.
+
+| Severity | Finding | Why it mattered |
+|---|---|---|
+| P1 | **Nothing forwarded `HealthMonitor` changes to the overlay.** The monitor recorded every state design §7 specifies, `IndicatorBar` rendered them, `OverlayPanel.update_health` existed — and no line connected them. FR20's egress lamp and FR35's health states were correct in memory and never drawn. | It also makes the FR81a claim above only half true: freeing the event loop was necessary and not sufficient. Both halves had passing tests; the wire between them was the part nobody owned. |
+| P1 | **The panic button was refreshed once, at construction.** A window built at IDLE — which is every real launch — left the emergency control disabled for the entire session that started afterwards. | Dead in exactly the case it exists for. My own tests hid it by starting the session *before* building the window, which is the reverse of what a user does. |
+| P1 | **Delete-all stayed enabled during an upload.** The worker then wrote a report for a transcript the user had just deleted, and the view announced success. | Fixed at both ends: the control is gated, and `attach_report` refuses to write for a session with no transcript — the half that holds for any caller. |
+| P2 | **`_parse_context_set` caught a named tuple of exceptions.** A `notes` list containing `null` raises `AttributeError` from the sort key, which escaped and failed `load()` — making the transcript unreadable, the exact outcome the fallback exists to prevent. | A guarantee stated in a docstring and enumerated in an `except` clause is only as good as the enumeration. |
+| P2 | **Absence citations resolved through today's notes.** Ids are stable across edits (FR41), so an edited headline rendered today's words under a finding generated from the snapshot. | The same substitution D-58 removed from generation, one layer down — and harder to notice, because the citation still resolves. |
+
+**Wiring the monitor cost a segfault first, and the fix is worth reading.** Handing the
+application a bound `emit` of a widget makes the app outlive a reference into a deleted C++
+object; the next health update walks into it. That is the third time this project has produced
+that shape (D-53, D-54). Both hooks are now cleared on the window's `destroyed`, through lambdas
+that close over the *application* and never over `self`.
+
 **The two tests worth keeping.** `test_the_default_dispatch_really_leaves_the_gui_thread` drives
 the *production* dispatcher and asserts the model call ran on another thread — every other test
 injects an inline dispatcher and would pass whether or not a thread was ever created. And

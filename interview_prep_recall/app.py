@@ -457,7 +457,10 @@ class Application:
         rendered and was never stored would be regenerated at full cost on the next look.
         """
         report = self.reports.send(prepared)
-        self.sessions.attach_report(session_id, report.to_dict())
+        if not self.sessions.attach_report(session_id, report.to_dict()):
+            raise ReportUnavailableError(
+                "That session was deleted while its report was being generated. Nothing was stored."
+            )
         return report
 
     def _resolve_report_inputs(

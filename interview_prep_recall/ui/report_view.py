@@ -550,16 +550,34 @@ class ReportView(QDialog):
             return
 
         stored = self.sessions.load(session_id)
-        self._document = document_from_stored(stored, headline=self._headline)
+        self._document = document_from_stored(stored, headline=self._headline_for(stored))
         # `setPlainText`, never `setHtml` or `setText`: this is generated prose, and a
         # rich-text widget handed markup renders it. See the module docstring.
         self.body.setPlainText("" if self._document is None else render_text(self._document))
         self.status.setText("" if self._document is not None else NO_REPORT_TEXT)
         self._sync_buttons()
 
-    def _headline(self, note_id: str) -> str | None:
-        note = self.application.context_set.get(note_id)
-        return None if note is None else note.headline
+    def _headline_for(self, stored: StoredSession) -> NoteHeadline:
+        """Resolve citations against **the notes the finding was generated from** (D-58).
+
+        Note ids are stable across edits (FR41), so resolving through today's set finds
+        the right note and renders the wrong words: an absence finding says "expected
+        from: <today's headline>" while it was produced from the snapshot's. The same
+        substitution D-58 removed from generation, one layer down in the rendering — and
+        harder to notice, because the citation still resolves.
+
+        Falls back to the current set only for a session that genuinely has no snapshot,
+        which is the case the report already marks on its face. Found by review on PR #25.
+        """
+        source = (
+            stored.context_set if stored.context_set is not None else self.application.context_set
+        )
+
+        def headline(note_id: str) -> str | None:
+            note = source.get(note_id)
+            return None if note is None else note.headline
+
+        return headline
 
     def _sync_buttons(self) -> None:
         """FR80: local-only mode disables generation **and says why**.
@@ -580,7 +598,11 @@ class ReportView(QDialog):
         )
         self.export_button.setEnabled(self._document is not None)
         self.delete_button.setEnabled(has_selection)
-        self.delete_all_button.setEnabled(bool(self._summaries))
+        # **Also gated on `_running`.** Delete-all removes the transcript the worker is
+        # still generating against; `attach_report` would then write a report file for a
+        # session that no longer exists, and the view would announce success for an
+        # interview the user had just deleted. Found by review on PR #25.
+        self.delete_all_button.setEnabled(bool(self._summaries) and not self._running)
 
     # ---------- generating ----------
 
