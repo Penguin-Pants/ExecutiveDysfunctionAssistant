@@ -36,7 +36,7 @@ off-screen and clamping behaviour never gets tested.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from enum import Enum, auto
 
@@ -45,6 +45,8 @@ from PySide6.QtGui import QFontMetrics, QMouseEvent
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from interview_prep_recall.session.health import Health
+from interview_prep_recall.tracker.progress import TrackedPoint
+from interview_prep_recall.ui.checklist import TrackerChecklist
 from interview_prep_recall.ui.indicators import IndicatorBar
 
 # ---------- design §9b tokens ----------
@@ -140,6 +142,13 @@ class OverlayPalette:
     muted: str
     confirmed_rail: str
     degraded_rail: str
+    marked: str
+    """FR12's marked colour, and it swaps at the crossover like the rails do.
+
+    PRISM's `--green-500` measures 8.29:1 on the darkest panel and **1.26:1** on the
+    light band's edge, so a single value would make the checklist tick over invisibly
+    for a light-band user. The light variant is a darkened green; a test measures both
+    against both panel stops rather than trusting these numbers."""
 
     def rail_for(self, state: SnippetState) -> str | None:
         if state is SnippetState.CONFIRMED:
@@ -149,13 +158,20 @@ class OverlayPalette:
         return None
 
 
+MARKED_DARK = "#34C77B"
+"""PRISM's `--green-500`, which the dark band can use as written (≥6.3:1)."""
+
+MARKED_LIGHT = "#0F5C36"
+"""The darkened form, for the same reason the degraded rail has one: 4.66:1 at the light
+band's edge and 6.69:1 at its top, against 1.26:1 for `--green-500`."""
+
 DARK_BAND = (
-    OverlayPalette("#141619", "#F2F4F6", "#A8ADB5", "#2D7DF6", "#FFC93D"),
-    OverlayPalette("#2A2D31", "#F2F4F6", "#A8ADB5", "#2D7DF6", "#FFC93D"),
+    OverlayPalette("#141619", "#F2F4F6", "#A8ADB5", "#2D7DF6", "#FFC93D", MARKED_DARK),
+    OverlayPalette("#2A2D31", "#F2F4F6", "#A8ADB5", "#2D7DF6", "#FFC93D", MARKED_DARK),
 )
 LIGHT_BAND = (
-    OverlayPalette("#C2C5CA", "#15171B", "#4A4F57", "#0B4EA8", "#8A5A00"),
-    OverlayPalette("#E8EAEE", "#15171B", "#4A4F57", "#0B4EA8", "#8A5A00"),
+    OverlayPalette("#C2C5CA", "#15171B", "#4A4F57", "#0B4EA8", "#8A5A00", MARKED_LIGHT),
+    OverlayPalette("#E8EAEE", "#15171B", "#4A4F57", "#0B4EA8", "#8A5A00", MARKED_LIGHT),
 )
 
 
@@ -742,6 +758,11 @@ class OverlayPanel(QWidget):
             label.setTextFormat(Qt.TextFormat.PlainText)
             label.hide()
             layout.addWidget(label)
+
+        # FR12, docked below the bullets (design §9b). Built before the geometry is
+        # applied because `bullet_lines_available` asks it how much height it has taken.
+        self.checklist = TrackerChecklist(self)
+        layout.addWidget(self.checklist)
         layout.addStretch(1)
 
         # FR22's default is top-centre, and only the widget knows which screen it is on.
@@ -853,11 +874,28 @@ class OverlayPanel(QWidget):
 
     # ---------- appearance ----------
 
+    @property
+    def rendered_height(self) -> int:
+        """The height the window is actually given, which is the user's height **plus**
+        whatever the checklist reserved (design §9b: "the panel grows downward within the
+        FR23 max height").
+
+        Growth rather than sharing is what makes "never displaces the snippet" true: the
+        bullets keep the space they had before there was a checklist, because the space
+        the checklist takes is space that did not exist a moment ago.
+
+        `geometry_settings.height` stays the user's own value, so FR26 persists what they
+        chose and §9b's height-driven text scaling does not jump a size every time a
+        point is marked. Clamped to FR23's maximum, which is the one case where the panel
+        cannot grow — see `bullet_lines_available` for what gives way then.
+        """
+        return min(MAX_SIZE[1], self.geometry_settings.height + self.checklist.reserved_height)
+
     def apply_geometry(self, geometry: OverlayGeometry) -> None:
         self.geometry_settings = geometry.clamped()
         self.setMinimumSize(*MIN_SIZE)
         self.setMaximumSize(*MAX_SIZE)
-        self.resize(self.geometry_settings.width, self.geometry_settings.height)
+        self.resize(self.geometry_settings.width, self.rendered_height)
         self.move(self.geometry_settings.x, self.geometry_settings.y)
         self.setWindowOpacity(self.geometry_settings.opacity)
         self._rescale_text()
@@ -932,7 +970,13 @@ class OverlayPanel(QWidget):
         """
         metrics = QFontMetrics(self.bullets[0].font())
         headline_metrics = QFontMetrics(self.headline.font())
-        content = self.geometry_settings.height - 2 * PADDING_PX
+        # The rendered height already contains the checklist's reservation, so taking it
+        # back out leaves exactly the space the bullets had before the checklist existed
+        # — that identity is FR12's "never displaces the snippet", and a test holds it.
+        # The one exception is a panel already at FR23's maximum, where the growth is
+        # clamped and the difference comes out of the bullets. They elide rather than
+        # clip, and never past `MIN_BULLET_LINES`, which is what the floor below is for.
+        content = self.rendered_height - self.checklist.reserved_height - 2 * PADDING_PX
         headline_height = (
             line_count(self.headline.text(), headline_metrics, self.text_width)
             * headline_metrics.lineSpacing()
@@ -944,6 +988,31 @@ class OverlayPanel(QWidget):
         # spacing would misjudge the allowance for the size about to be applied.
         spacing = max(bullet_size_px, metrics.lineSpacing())
         return max(MIN_BULLET_LINES, int(spare // shown) // spacing)
+
+    # ---------- tracker checklist (T7.4 — FR12, FR37) ----------
+
+    def set_tracked_points(self, points: Sequence[TrackedPoint], enabled: bool = True) -> None:
+        """Render FR12's checklist. `enabled` is FR37's progress-tracker switch.
+
+        Read from the switch on every push rather than latched here, so turning tracking
+        off mid-session removes the list on the next update instead of leaving a frozen
+        one on screen — a stale checklist is read as "you have not said these yet", which
+        is the one reading the user would act on.
+
+        **The full re-layout runs only when the reservation actually changed**, which is
+        the difference between a mark and a new point. This is called once per finalised
+        utterance, and `apply_geometry` rescales every font and rebuilds the halo's four
+        drop-shadow effects — the cost `move_to` already refuses to pay at pointer rate.
+        The restyle still runs on every push, because a row that was created since the
+        last one has no halo until something applies it.
+        """
+        reserved = self.checklist.reserved_height
+        self.checklist.set_tracking(enabled)
+        self.checklist.set_points(points)
+        if self.checklist.reserved_height != reserved:
+            self.apply_geometry(self.geometry_settings)
+        else:
+            self._restyle()
 
     # ---------- health (FR7, FR20, FR35) ----------
 
@@ -971,7 +1040,11 @@ class OverlayPanel(QWidget):
 
     def allowed_edges(self, local: QPoint) -> set[Edge]:
         """Resize edges available at `local`, after FR27's lock has taken its share."""
-        grabbed = edges_at(local, self.geometry_settings.width, self.geometry_settings.height)
+        # `rendered_height`, not the stored one: the bottom edge the user can actually
+        # grab is the bottom of the window, and with a checklist showing that is lower
+        # than the height FR26 persists. Hit-testing the stored value would put the
+        # resize band in the middle of the checklist and leave the real edge inert.
+        grabbed = edges_at(local, self.geometry_settings.width, self.rendered_height)
         if self.locked:
             grabbed -= MOVING_EDGES
         return grabbed
@@ -1066,6 +1139,7 @@ class OverlayPanel(QWidget):
         self.headline.setStyleSheet(f"color: {ink}; font-style: {style}; border: none;")
         for label in self.bullets:
             label.setStyleSheet(f"color: {palette.muted}; border: none;")
+        self.checklist.apply_colours(palette.panel, palette.muted, palette.marked)
         self._apply_halo(palette)
 
     def _apply_halo(self, palette: OverlayPalette) -> None:
@@ -1083,7 +1157,7 @@ class OverlayPanel(QWidget):
         from PySide6.QtGui import QColor
         from PySide6.QtWidgets import QGraphicsDropShadowEffect
 
-        for label in (self.headline, *self.bullets):
+        for label in (self.headline, *self.bullets, *self.checklist.ink_labels):
             if not self.halo_engaged:
                 # `setGraphicsEffect(None)` is the documented way to clear one; the stub
                 # types it as non-optional, so the ignore is about the stub, not the call.

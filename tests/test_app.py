@@ -407,6 +407,70 @@ def test_tracking_still_works_with_the_switch_on(app_data) -> None:  # type: ign
     assert app.tracker.marked_ids, "tracking is on and nothing was marked"
 
 
+def test_the_checklist_is_pushed_after_every_utterance(app_data) -> None:  # type: ignore[no-untyped-def]
+    """T7.4. The tracker's state has to *reach* the overlay, and `points()` had no
+    production consumer at all — the D-20 shape the plan records six times."""
+    app = _app(app_data)
+    pushed: list[tuple[list, bool]] = []
+    app.on_tracker_update = lambda points, enabled: pushed.append((points, enabled))
+    app.session.request_start()
+    app.session.preflight_result(blocked=False)
+
+    app.consume(_utterance("I led a migration", stream="user", start=0.0), now=0.1)
+
+    assert pushed, "the checklist was never told anything"
+    points, enabled = pushed[-1]
+    assert enabled is True
+    assert [p.note_id for p in points] == [n.id for n in app.context_set.tracked()]
+
+
+def test_a_mark_reaches_the_checklist(app_data) -> None:  # type: ignore[no-untyped-def]
+    """The push carries the marks, not just the points. A checklist fed a list that never
+    changes is a checklist that never ticks."""
+    app = _app(app_data)
+    pushed: list[list] = []
+    app.on_tracker_update = lambda points, _enabled: pushed.append(points)
+    app.session.request_start()
+    app.session.preflight_result(blocked=False)
+
+    app.consume(_utterance("I led a migration", stream="user", start=0.0), now=0.1)
+    app.consume(_utterance("and then some", stream="user", start=2.0), now=99.0)
+
+    assert any(p.mentioned for p in pushed[-1]), "nothing was reported as covered"
+
+
+def test_the_push_reports_the_fr37_switch_as_off(app_data) -> None:  # type: ignore[no-untyped-def]
+    """FR37. The switch travels with the points rather than being read by the widget:
+    two readers of the same state are free to disagree about it."""
+    app = _app(app_data)
+    pushed: list[bool] = []
+    app.on_tracker_update = lambda _points, enabled: pushed.append(enabled)
+    app.session.request_start()
+    app.session.preflight_result(blocked=False)
+    app.session.set_switch("progress_tracker", False)
+
+    app.consume(_utterance("I led a migration", stream="user", start=0.0), now=0.1)
+
+    assert pushed[-1] is False
+
+
+def test_a_new_session_clears_the_rendered_checklist(app_data) -> None:  # type: ignore[no-untyped-def]
+    """`tracker.reset()` clears the marks; the panel keeps showing them until something
+    says so. The next interview would open presenting the previous one's coverage."""
+    app = _app(app_data)
+    pushed: list[list] = []
+    app.session.request_start()
+    app.session.preflight_result(blocked=False)
+    app.consume(_utterance("I led a migration", stream="user", start=0.0), now=0.1)
+    app.consume(_utterance("and then some", stream="user", start=2.0), now=99.0)
+    app.on_tracker_update = lambda points, _enabled: pushed.append(points)
+
+    app.reset_for_new_session()
+
+    assert pushed, "nothing was pushed when the session was reset"
+    assert not any(p.mentioned for p in pushed[-1])
+
+
 def test_the_wired_purge_hooks_are_pinned(app_data) -> None:  # type: ignore[no-untyped-def]
     """Three of the five FR59 hooks have no component to wire to yet — `stop_capture`
     and `zero_audio` need M1, `clear_overlay` needs M5.

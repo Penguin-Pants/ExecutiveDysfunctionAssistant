@@ -19,20 +19,20 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | **M4 — Matching pipeline** | 🟢 T4.1–T4.6 complete | T4.7 **blocked**: needs the user's labelled fixtures |
 | **M5 — Overlay UI** | 🟢 Everything buildable here is done | T5.1, T5.3, T5.4, T5.4a, T5.5, T5.6, T5.7, T5.8 complete and tested offscreen. Remaining: **T5.2** (`SetWindowDisplayAffinity` — Windows) and **T5.9** (end-to-end latency, needs the D-U6 laptop). Nothing else in M5 is buildable in this container |
 | **M6 — Session lifecycle** | 🟢 Logic complete · panic on hold (D-U11) | T6.1–T6.3, T6.5 classification, T6.6 backpressure, T6.7 done. T6.4 and the OS trigger paths need Windows |
-| **M7 — Progress tracker** | 🟢 T7.1 + T7.3 complete | Marking and text-domain echo suppression done. T7.2 needs paired audio fixtures; T7.4 is Qt |
+| **M7 — Progress tracker** | 🟢 Everything buildable here is done | T7.1, T7.3 and **T7.4** complete. T7.2 needs paired audio fixtures — the only M7 task left |
 | **M8 — Cloud STT backends** | 🟢 T8.1–T8.5 complete | Deepgram, ElevenLabs, fallback, egress. Protocols unverified against a live endpoint (**AS-8**) |
 | **M9 — Packaging & first run** | 🟡 T9.0–T9.2, T9.6 complete | Composition root, FR63 disclosure, config store, settings surface, **entry point**. T9.3 is **blocked on M1** (three of four steps are audio). T9.6a needs FR43; T9.4 is PyInstaller; T9.5 needs live vendor docs |
 | **M10 — Typed context sources** | 🟢 T10.1–T10.6 + migration complete | Five kinds, per-kind caps and thresholds, schema v1→v2 migration. T10.7 is Qt |
 | **M11 — Post-interview report** | 🟢 T11.1, T11.3–T11.9 complete | Record, evidence binding, encrypted store, retention, generation. T11.2's DPAPI binding and T11.10 need Windows |
 
-**Next action: T7.4's checklist rendering (FR12), then T10.7's per-kind marking.** M5 is now
-closed except for its two genuinely hardware-bound tasks, so the remaining buildable Qt work is
-in M7 and M10. T7.4 is specified in design §9b's tracker token row — docked below the bullets,
-max 5 rows then scroll, never displacing the snippet — and the overlay it docks into now exists.
+**Next action: T10.7's per-kind marking in the editor.** T7.4 landed on 2026-08-15, so M7 is
+closed apart from T7.2's paired audio fixtures, and T10.7 is the last Qt task the plan currently
+names. Before starting it, re-test that claim by trying it rather than by reading this line —
+see the caution below, which has been earned five times.
 
-The previous version of this paragraph named M5's overlay widget and T7.4 together. M5's half is
-done; T7.4's is not, and it was not touched here because it is a different milestone and this
-phase was M5.
+The previous version of this paragraph named T7.4 as the next action and said M5's overlay half
+was done. Both were true; T7.4 is now done as well, and this line has been rewritten rather than
+appended to so it does not accumulate a history of what used to be next.
 
 That sentence has been wrong five times, so treat it as a claim to re-test rather than a fact.
 What is different this time is that T9.3's blocker was *verified* rather than assumed:
@@ -58,9 +58,9 @@ behind that one word for five milestones.
 
 Remaining, re-sorted after the Qt discovery:
 
-- **Buildable and testable here (Qt, offscreen):** T7.4's checklist rendering and T10.7's per-kind
-  marking. *(M5's overlay widget was on this list and is now done — T5.4, T5.7 and T5.8 landed on
-  2026-08-15.)*
+- **Buildable and testable here (Qt, offscreen):** T10.7's per-kind marking. *(M5's overlay widget
+  and T7.4's checklist were both on this list and are now done — T5.4, T5.7, T5.8 and T7.4 all
+  landed on 2026-08-15.)*
 - **Genuinely needs Windows:** M1 (WASAPI, AS-2 gate), T2.4 (AS-1, needs the D-U6 laptop's CPU),
   T5.2's `SetWindowDisplayAffinity`, T6.4's ProcMon trace, T9.1a's device-open enforcement,
   T9.4's PyInstaller build, T11.2's DPAPI binding, T11.10.
@@ -150,6 +150,74 @@ conservative choice, just a broken one.
 ---
 
 ## Log
+
+### M7 — T7.4 · complete · 2026-08-15
+
+New `ui/checklist.py` (`TrackerChecklist`), wired into `ui/overlay.py`, fed by a new
+`Application.on_tracker_update` and pushed at the panel by `ui/main_window.py`. Tests: new
+`tests/test_checklist.py` (125 cases, most of them the 101-value brightness sweep),
+`tests/test_app.py` +4, `tests/test_main_window.py` +4. **1012 passing**, ruff, format and
+`mypy` clean.
+
+**Run `mypy` as `python -m mypy`, not `mypy`.** The `mypy` on this container's PATH is a `uv`
+tool install with its own environment: it cannot see `numpy` or `PySide6` and reports 23 errors
+on a clean checkout of `main`. Twenty minutes went into "which of these did I cause" before that
+was the answer. `python -m ruff` for the same reason.
+
+#### What T7.4 closed
+
+**FR12's checklist, docked below the bullets.** Design §9b's row: `--font-secondary` 13px,
+unmarked muted, marked `--green-500` with a check glyph, max 5 rows then scroll, never
+displacing the snippet. Both states carry a glyph — the marked one a check, the unmarked one a
+hollow ring — so the list is readable without the colour and every row's text starts at the
+same x.
+
+**"Never displaces the snippet" is implemented as growth, and that is what makes it checkable.**
+The panel's window height becomes the user's height *plus* the checklist's reservation, so the
+bullets keep the space they had before the checklist existed. `geometry_settings.height` stays
+the user's own value, so FR26 persists what they chose and §9b's height-driven text scaling does
+not jump a size every time a point is marked. Two tests hold it: the bullets' line allowance is
+unchanged when a checklist appears, and so is the rendered bullet text.
+
+**The one place it cannot hold is FR23's 600px maximum**, where there is no room to grow and the
+checklist's height comes out of the bullets' allowance instead. They elide rather than clip, and
+never past `MIN_BULLET_LINES`. Recorded as **T7.4a** rather than hidden: it is a real limit of
+§9b's "grows downward *within* the FR23 max height", and the panel is at that height only if the
+user dragged it there.
+
+**The marked colour swaps at the brightness crossover.** PRISM's `--green-500` measures 8.29:1
+on the darkest panel and **1.26:1** at the light band's edge, so a single value would have made
+the checklist tick over invisibly for a light-band user — the same failure the degraded rail
+already has a variant for. `OverlayPalette` carries both; the 101-value sweep now covers the
+marked colour alongside the ink and the rails.
+
+**FR37's switch travels with the points**, from `SessionManager` through `on_tracker_update`,
+rather than being read by the widget. Two readers of one piece of state are free to disagree
+about it, and the disagreement here would be a checklist that keeps ticking while the switch
+reports tracking as off — the D-23 shape, in the one place the user can watch it be wrong. Off
+removes the rows entirely: a frozen checklist reads as "things you have not said yet", which is
+the one reading a user acts on.
+
+#### Two defects found in local review, both fixed here
+
+**A stale checklist survived a purge.** `reset_for_new_session` clears the tracker's marks and
+nothing told the panel, so the next interview would have opened showing the previous one's
+coverage — points the user has not made this time, presented as already covered.
+
+**The rows were painted on nothing.** `background: transparent` on the scroll area reads
+correctly and is wrong: a child widget carrying a style sheet paints its own rect, so it cleared
+the panel's surface rather than revealing it, leaving the rows over whatever the video call was
+showing. Every contrast figure in §9b is stated against the panel colour, so that is not the
+readability the band promises. The widget is now told the surface colour along with the ink.
+
+**The test for it passed three times before it tested anything**, which is the more useful half
+of this entry. Grabbing the *child* widget renders it against its parent's palette and reports
+the panel colour whether or not the child painted it. Grabbing the panel with the checklist
+unshown does the same. So does grabbing it with only two rows. The difference appears only with
+the panel shown, translucency off, and enough rows to scroll — and it was found by running the
+assertion against a deliberately broken implementation and watching it pass. **Any test written
+for a defect should be run against that defect once.** Three of these did not fail until the
+fourth attempt.
 
 ### M5 — T5.4, T5.7, T5.8 · complete · 2026-08-15
 
@@ -1435,9 +1503,12 @@ wrong reason is the same failure mode in miniature.
 
 - **The three gates are not checkboxes.** T1.2, T2.4 and T4.7 are measurements that can change the
   architecture. A bad number changes the plan; it does not get waived.
-- **This project's recurring defect is a test that passes while the guarantee is broken.** Eleven
-  instances so far, the latest being an injected `DiagnosticRing` silently replaced by an orphan
-  because an empty ring is falsy (D-26). Four early instances: the PRD's absolute no-disk claim, the zeroed-`bytearray` purge assertion, the
+- **This project's recurring defect is a test that passes while the guarantee is broken.** Twelve
+  instances so far, the latest being T7.4's rendered-surface check, which reported the panel's
+  colour whether or not the checklist painted it — three separate versions of it passed against a
+  deliberately broken implementation before the fourth failed. **Run any test written for a defect
+  against that defect once.** The instance before it was an injected `DiagnosticRing` silently
+  replaced by an orphan because an empty ring is falsy (D-26). Four early instances: the PRD's absolute no-disk claim, the zeroed-`bytearray` purge assertion, the
   `weakref`-on-`str` sweep, and D-13 above. When writing a test for a privacy or correctness
   guarantee, verify the property, not the claim.
 - **Fixtures are the long pole and only the user can make them.** Real prep notes, two or three

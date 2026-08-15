@@ -151,6 +151,15 @@ class MainWindow(QMainWindow):
             parent=self,
         )
 
+        # FR12's checklist gets its production feed here (T7.4). The bound method is the
+        # **panel's**, not this window's, so the callback the application holds reaches
+        # the widget without a window→application→window cycle for the collector to
+        # decide the teardown order of — the hazard the comment above records.
+        application.on_tracker_update = self.overlay.set_tracked_points
+        # Pushed once now so the panel is not blank until the first utterance: the
+        # checklist is what the user reads before they have said anything.
+        self.refresh_checklist()
+
         self.preview_overlay_button = QPushButton(PREVIEW_OVERLAY_TEXT)
         self.preview_overlay_button.setCheckable(True)
         self.preview_overlay_button.toggled.connect(self.set_overlay_visible)
@@ -201,7 +210,13 @@ class MainWindow(QMainWindow):
         so cancelling is genuinely a no-op rather than something to undo.
         """
         dialog = self._dialog_factory(self.application)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        # Whether or not the dialog was accepted: FR37's switches apply the moment they
+        # are toggled, so cancelling still leaves tracking off. Without this the
+        # checklist keeps the rows it had until the next utterance arrives — and between
+        # sessions there is no next utterance, so it would keep them indefinitely.
+        self.refresh_checklist()
+        if not accepted:
             return None
         result = self.application.apply_settings(dialog.config())
         # Re-run FR38's checks: which ones apply depends on the configured backend, so a
@@ -231,6 +246,17 @@ class MainWindow(QMainWindow):
         self._diagnostics = view
         view.show()
         return view
+
+    def refresh_checklist(self) -> None:
+        """Push the tracker's current state at the overlay (T7.4 — FR12, FR37).
+
+        The marks come from the tracker rather than being remembered here, so this is a
+        redraw of what is already true and never a second opinion about coverage.
+        """
+        self.overlay.set_tracked_points(
+            self.application.tracker.points(),
+            self.application.session.switches.progress_tracker,
+        )
 
     def refresh_status(self) -> None:
         if self._refresh_preflight is not None:

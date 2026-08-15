@@ -146,7 +146,7 @@ own §12 open risk and it gets answered here, not assumed.
 | **T7.1** Mic-only tracking against `track_progress` notes | FR12, FR56 | Speaking a tracked point marks it within 5 s; the same phrase played through loopback only does **not** mark it. |
 | **T7.2** Echo detection in preflight | FR57 | Over speakers: warning fires. Over headphones: no warning. Measured cross-correlation logged to the ring buffer. |
 | **T7.3** Runtime echo suppression | FR57, FR56, D-8 | Play a question through speakers so it reaches both streams: assert the **interviewer utterance still matches normally**, and assert the echoed **mic** utterance does **not** mark a tracked point. Both assertions required — passing only the first would mean the echo is being dropped from the wrong stream. |
-| **T7.4** Checklist rendering in overlay | FR12 | Built to §9b's tracker tokens; visible without displacing the snippet; respects FR37's off switch. |
+| **T7.4** Checklist rendering in overlay | FR12 | Built to §9b's tracker tokens; visible without displacing the snippet; respects FR37's off switch. ✅ **Done** — `ui/checklist.py`, docked below the bullets, max 5 rows then scroll, fed from `Application.on_tracker_update` and pushed at the panel by `MainWindow`. Tested headless. **Follow-up T7.4a**: the panel cannot grow past FR23's 600px maximum, so a user who has already maximised the panel gives the checklist's height up from the bullets' elision allowance (floored at `MIN_BULLET_LINES`). Confirm against the real surface in T5.9. |
 
 ---
 
