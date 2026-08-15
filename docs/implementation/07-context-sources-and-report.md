@@ -190,7 +190,7 @@ anything, and it is what a user reaching for panic actually wants.
 | **T10.4** Per-kind prefilter with the 2-per-kind cap | FR68, FR69 | 200 skewed chunks, no kind exceeds 2 enum members |
 | **T10.5** Kind labels in the stage-2 prompt | FR71 | Label present on every candidate, every request |
 | **T10.6** Tracker restricted to PREP + RESUME | FR70 | `track_progress` on other kinds raises |
-| **T10.7** Overlay per-kind visual marking | FR72 | Distinct tokens; glance test **(Windows)** |
+| **T10.7** Overlay per-kind visual marking | FR72 | Distinct tokens; glance test **(Windows)**. ✅ **Built and tested headless** — a glyph per kind prefixed to the headline, distinctness asserted pairwise, kind resolved from the store rather than from the caller (D-55, design §9b's new kind table). The **1 m glance test and the bundled-font glyph coverage remain open** and are real-surface checks (T5.9, T9.4) |
 
 ### M11 — Post-interview report
 
@@ -209,7 +209,8 @@ anything, and it is what a user reaching for panic actually wants.
 
 ### Buildable on Linux now
 
-T10.1–T10.2a, T10.3–T10.6, T11.1, T11.3–T11.9. **T10.7 and T11.10 are Qt. T11.2's DPAPI binding is Windows**,
+T10.1–T10.2a, T10.3–T10.7, T11.1, T11.3–T11.9. **T11.10 is Qt. T11.2's DPAPI binding is Windows**,
+and T10.7 was Qt too — which turned out to mean buildable here, headless, like every other Qt task.
 though the store's envelope, listing and deletion logic are testable here behind the same
 `CredentialBackend`-style Protocol already used for the credential store.
 

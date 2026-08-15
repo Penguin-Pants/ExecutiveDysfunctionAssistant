@@ -22,17 +22,23 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | **M7 — Progress tracker** | 🟢 Everything buildable here is done | T7.1, T7.3 and **T7.4** complete. T7.2 needs paired audio fixtures — the only M7 task left |
 | **M8 — Cloud STT backends** | 🟢 T8.1–T8.5 complete | Deepgram, ElevenLabs, fallback, egress. Protocols unverified against a live endpoint (**AS-8**) |
 | **M9 — Packaging & first run** | 🟡 T9.0–T9.2, T9.6 complete | Composition root, FR63 disclosure, config store, settings surface, **entry point**. T9.3 is **blocked on M1** (three of four steps are audio). T9.6a needs FR43; T9.4 is PyInstaller; T9.5 needs live vendor docs |
-| **M10 — Typed context sources** | 🟢 T10.1–T10.6 + migration complete | Five kinds, per-kind caps and thresholds, schema v1→v2 migration. T10.7 is Qt |
+| **M10 — Typed context sources** | 🟢 T10.1–T10.7 complete | Five kinds, per-kind caps and thresholds, schema v1→v2 migration, **FR72's per-kind marking**. T10.7's 1 m glance test and bundled-font glyph coverage ride with T5.9/T9.4 |
 | **M11 — Post-interview report** | 🟢 T11.1, T11.3–T11.9 complete | Record, evidence binding, encrypted store, retention, generation. T11.2's DPAPI binding and T11.10 need Windows |
 
-**Next action: T10.7's per-kind marking in the editor.** T7.4 landed on 2026-08-15, so M7 is
-closed apart from T7.2's paired audio fixtures, and T10.7 is the last Qt task the plan currently
-names. Before starting it, re-test that claim by trying it rather than by reading this line —
-see the caution below, which has been earned five times.
+**Next action: T11.10's report view and export.** T10.7 landed on 2026-08-15, closing M10, and
+T11.10 is now the last Qt task the plan names. It is filed as "(Windows / Qt)" — which is the
+label the caution below is about, and Qt has never been the Windows half of it. Re-test by trying
+it rather than by reading this line.
 
-The previous version of this paragraph named T7.4 as the next action and said M5's overlay half
-was done. Both were true; T7.4 is now done as well, and this line has been rewritten rather than
-appended to so it does not accumulate a history of what used to be next.
+The previous version of this paragraph named T10.7 and described it as marking **in the editor**.
+The task is the *overlay* (07's table, FR72), and the editor was this file's own paraphrase — a
+third instance of a summary line here being trusted over the document it summarises. Do not read
+the sentence above as a specification of T11.10; read 07's table.
+
+**Two claims in this file were wrong on T10.7 and both cost time.** The task-level deferral note
+said "§9b tokens are specified" for a section that has no per-kind row at all, and this paragraph
+relocated the work to the wrong surface. Both were written *here*, in the summary, and neither
+was ever re-read as a claim. See the M10/T10.7 log entry and D-55.
 
 That sentence has been wrong five times, so treat it as a claim to re-test rather than a fact.
 What is different this time is that T9.3's blocker was *verified* rather than assumed:
@@ -58,12 +64,17 @@ behind that one word for five milestones.
 
 Remaining, re-sorted after the Qt discovery:
 
-- **Buildable and testable here (Qt, offscreen):** T10.7's per-kind marking. *(M5's overlay widget
-  and T7.4's checklist were both on this list and are now done — T5.4, T5.7, T5.8 and T7.4 all
-  landed on 2026-08-15.)*
+- **Buildable and testable here (Qt, offscreen):** T11.10's report view — *claimed*, on the same
+  grounds that turned out to hold for the four Qt tasks before it, and unverified until someone
+  tries it. Plus **T10.7a** (a kind legend in the editor) as a follow-up. *(M5's overlay widget,
+  T7.4's checklist and T10.7's per-kind marking were all on this list and are now done — T5.4,
+  T5.7, T5.8, T7.4 and T10.7 all landed on 2026-08-15.)*
 - **Genuinely needs Windows:** M1 (WASAPI, AS-2 gate), T2.4 (AS-1, needs the D-U6 laptop's CPU),
   T5.2's `SetWindowDisplayAffinity`, T6.4's ProcMon trace, T9.1a's device-open enforcement,
-  T9.4's PyInstaller build, T11.2's DPAPI binding, T11.10.
+  T9.4's PyInstaller build, T11.2's DPAPI binding, T11.10's *export* path.
+- **Needs the real surface (not merely Windows):** T5.9's end-to-end latency, and now **FR72's
+  1 m glance test and the bundled-font glyph coverage** — Qt substitutes a fallback font per
+  missing glyph, which is invisible headless and wrong only where it is looked at.
 - **Needs the user's fixtures:** T4.7 (the OQ-1 gate), T7.2 (paired audio).
 - **Needs a vendor key:** AS-8, T9.5.
 
@@ -150,6 +161,60 @@ conservative choice, just a broken one.
 ---
 
 ## Log
+
+### M10 — T10.7 · complete · 2026-08-15
+
+FR72's per-kind marking, in `ui/overlay.py`. `tests/test_overlay.py` +14 (**1026 passing**),
+ruff and format clean; mypy's error count is unchanged from the pre-change baseline (49, all
+pre-existing and all raised by a mypy newer than the one this tree was last checked against —
+none of them in the changed code, and a stash-and-recheck confirmed the count rather than
+assuming it).
+
+**What it is.** A `KindMark` (glyph + label) per `SourceKind`, prefixed to the headline at
+display time exactly as FR51's degraded `~` is, with the kind's name as the headline's tooltip.
+`SnippetView` gains a `kind`, and `from_stored_note` gains a **required** `resolve_kind`.
+
+**The design gap this task actually had, and why it was not treated as a blocker.** Both the
+task table and this file said "§9b tokens are specified". They are not: §9b's token table has a
+row for every state the panel can be in and **no row for source kind at all** — the one thing
+T10.7 was supposed to render to spec. That is the same failure mode as D-45's contradictory
+scaling table, found the same way, by trying to implement from the document rather than reading
+it. It is resolved rather than escalated because the surrounding documents decide it: §9b already
+requires colour never to be the only channel, PRISM §1 forbids remapping semantic dots, and every
+hue on this panel is already spoken for by a *state* (FR51's rail, FR20's amber, FR14a's red,
+FR12's green). Shape is the only channel left, and it is the one FR72's "without reading" wants.
+Recorded as **D-55**, and §9b now carries the kind table it was missing.
+
+**Three choices worth re-reading before changing them.**
+
+* **`resolve_kind` is required, not defaulted.** FR72's mark is the kind of guarantee that fails
+  invisibly — the panel renders, the text is right, and only the provenance is missing. A
+  defaulted resolver makes that failure one omitted argument away; a defaulted *kind* would be
+  worse, asserting a provenance the store never stated. Same reasoning as `from_stored_note`
+  itself, which exists because `source_text` from the caller is not a guarantee.
+* **The glyph is prepended at display time, never stored.** FR11's substring check has to see
+  what the user wrote. Stored into the headline the mark would either fail that check or have to
+  be exempted from it, and an exemption is how the guarantee ends.
+* **State glyph first, then kind, then text.** How far to trust the panel is read before what
+  the panel is about.
+
+**One review finding, mine, fixed before push.** `SnippetView` documented "kind is `None` only
+for `NO_MATCH`" on the field and enforced it nowhere, so a caller could mark the FR35 line with
+a source it never came from. That is a false statement about provenance on the one view that has
+none — the same class of defect FR11 exists to prevent, aimed at *where* text came from rather
+than at what it says — so it is now rejected in `__post_init__` with a test, not described.
+
+**Not done, and it is the half that needs the hardware.** FR72's acceptance is a *glance test at
+1 m*, and glyph coverage in the bundled Plex faces is unverified — Qt will substitute a fallback
+font per glyph, which is invisible here and is exactly the sort of thing that looks wrong only on
+the real surface. Both ride with T5.9 and T9.4. What is verified here is distinctness (pairwise,
+over the whole set, because distinctness is not a property any one kind has), that the mark never
+enters the FR11-checked strings, and that the no-match line stays unmarked and does not inherit
+the previous snippet's source label.
+
+**Follow-up T10.7a:** the shapes are learnable only by hovering the overlay. A legend in the
+editor, beside the per-kind sources it already lists, is where a user would actually look. Small,
+and outside FR72 as written.
 
 ### M7 — T7.4 · complete · 2026-08-15
 
