@@ -274,6 +274,12 @@ def test_a_non_verbatim_bullet_is_refused_before_the_write(
     assert editor.dirty, "still unsaved, so the user can fix it"
     assert "not saved" in editor.status.text().lower()
 
+    # And the promise is kept: fixing the bullet saves. Asserted rather than left
+    # implied, which also means this test does not hand the session a dirty editor —
+    # CI on PR #27 crashed in teardown deleting a widget whose close was refused.
+    editor.bullets_edit.setPlainText("Led it.")
+    assert editor.flush() is True
+
 
 # ---------- T3.8: the set lifecycle (FR43, FR60) ----------
 
@@ -482,6 +488,11 @@ def test_a_failed_save_blocks_the_switch(qapp: QApplication, tmp_path: Path) -> 
     assert editor.activate(first) is False
     assert app.context_set.id == created.id, "still on the set with the unsaved edit"
 
+    # Fix it, and the switch that was refused now works.
+    editor.bullets_edit.setPlainText("")
+    assert editor.flush() is True
+    assert editor.activate(first) is True
+
 
 def test_a_failed_save_keeps_the_window_open(qapp: QApplication, tmp_path: Path) -> None:
     """The refusal tells the user they can fix it. Closing anyway makes that false: the
@@ -498,6 +509,14 @@ def test_a_failed_save_keeps_the_window_open(qapp: QApplication, tmp_path: Path)
 
     assert not event.isAccepted()
     assert editor.dirty
+
+    # Then fix it and confirm the window will close — the refusal is a hold, not a trap,
+    # and leaving a dirty editor behind is what crashed CI's teardown on PR #27.
+    editor.bullets_edit.setPlainText("Led it.")
+    reopened = QCloseEvent()
+    editor.closeEvent(reopened)
+    assert reopened.isAccepted()
+    assert not editor.dirty
 
 
 def test_deleting_a_set_removes_its_backups(qapp: QApplication, tmp_path: Path) -> None:

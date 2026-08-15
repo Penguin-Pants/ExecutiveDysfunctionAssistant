@@ -156,12 +156,26 @@ def qapp() -> Iterator[object]:
 
     Closing and deleting the top-level widgets here destroys them **while the application
     is still alive**, which is the ordering Qt actually supports.
+
+    **Hidden before deleted, because `close()` can legitimately be refused.** A dialog is
+    allowed to ignore a close — `NotesEditor` does exactly that when a save was rejected
+    and the user would otherwise lose the edits (T3.7) — and this loop then went on to
+    delete a widget that was still *visible*. On Windows that is an access violation in
+    the teardown, which is a red build with a green test report: every test passed and
+    the process died at the end. The Linux runs never hit it, so it arrived from CI.
+
+    `hide()` first makes the deletion safe whatever `closeEvent` decides, and does not
+    take the decision away from the dialog — the refusal is still the behaviour under
+    test, and a test that leaves a widget dirty is no longer a hazard to the whole
+    session. Found by CI on PR #27; third instance of destroy-order trouble here after
+    D-53 and D-54.
     """
     from PySide6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication([])
     yield app
     for widget in app.topLevelWidgets():
+        widget.hide()
         widget.close()
         widget.deleteLater()
     app.processEvents()
