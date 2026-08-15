@@ -279,7 +279,10 @@ class MainWindow(QMainWindow):
         # FR54's auto-clear had the same problem one layer down: `tick` was pull-based
         # and `start_clock` had no production caller either, so an unpinned snippet
         # would have stayed on screen for the whole interview once one finally arrived.
-        self.overlay.start_clock()
+        #
+        # **The panel starts its own clock when it becomes visible**, rather than being
+        # started here at construction. A clock on a hidden panel is work nobody sees and
+        # a timer that can tick into a teardown; see `OverlayPanel.showEvent`.
 
         application.monitor.on_change = self.overlay.health_updated.emit
         # **Cleared when this window is destroyed.** The application outlives the window,

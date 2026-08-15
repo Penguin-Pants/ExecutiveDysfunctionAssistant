@@ -41,7 +41,7 @@ from dataclasses import dataclass, replace
 from enum import Enum, auto
 
 from PySide6.QtCore import QPoint, Qt, Signal
-from PySide6.QtGui import QFontMetrics, QMouseEvent
+from PySide6.QtGui import QFontMetrics, QHideEvent, QMouseEvent, QShowEvent
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from interview_prep_recall.notes.model import ContextSet, SourceKind
@@ -951,14 +951,44 @@ class OverlayPanel(QWidget):
 
         The timer delegates to the same `tick(now)` rather than reimplementing expiry, so
         the deterministic fake-clock tests still cover the logic that actually runs.
+
+        **One timer, reused.** Each call used to build another `QTimer`, so a panel whose
+        clock was started twice ticked twice as often and only the last was stoppable.
         """
         from PySide6.QtCore import QTimer
 
-        timer = QTimer(self)
-        timer.setInterval(interval_ms)
-        timer.timeout.connect(self._on_clock_tick)
-        timer.start()
-        self._clock_timer = timer
+        timer = self._clock_timer
+        if timer is None:
+            timer = QTimer(self)
+            timer.timeout.connect(self._on_clock_tick)
+            self._clock_timer = timer
+        timer.setInterval(interval_ms)  # type: ignore[attr-defined]
+        timer.start()  # type: ignore[attr-defined]
+
+    def stop_clock(self) -> None:
+        """Stop FR54's clock. Idempotent."""
+        timer = self._clock_timer
+        if timer is not None:
+            timer.stop()  # type: ignore[attr-defined]
+
+    def showEvent(self, event: QShowEvent) -> None:  # noqa: N802 — Qt override
+        """The clock runs **only while the panel is on screen** (T5.10, corrected).
+
+        Started unconditionally at construction it ran on every panel ever built, visible
+        or not: wasted work twice a second on the surface NFR3 measures frame time
+        against, and — because a timer fires inside `processEvents` — a tick that can
+        reach a widget already queued for deletion. That is an access violation on
+        Windows and survivable on Linux, which is why only CI saw it (PR #27).
+
+        Tying it to visibility is also what FR54 actually means: the auto-clear exists so
+        a stale snippet does not sit *on screen*, and a hidden panel has none.
+        """
+        super().showEvent(event)
+        self.start_clock()
+
+    def hideEvent(self, event: QHideEvent) -> None:  # noqa: N802 — Qt override
+        super().hideEvent(event)
+        self.stop_clock()
 
     def _on_clock_tick(self) -> None:
         import time

@@ -234,6 +234,32 @@ the no-API-key policy and the Windows-only embedder and cipher.
 surface either, so a `.md` of prep notes still cannot be brought in through the UI. That is the
 next instance of this same pattern, and it is now named rather than waiting to be tripped over.
 
+**Three Windows CI failures, and what they cost.** PR #27's Windows job died with *"Windows fatal
+exception: access violation"* in the `qapp` fixture's teardown, after every test had passed and
+with Linux green on the same commit. The crash does not reproduce here, so each attempt was a
+guess until the third one stopped being one.
+
+1. **Hide before delete.** The editor's `closeEvent` can refuse a close (a non-verbatim set), so a
+   dialog could still be visible when `deleteLater` ran. Plausible; wrong.
+2. **Delete only parentless roots, and check `isValid` first.** `topLevelWidgets()` returns
+   objects the C++ side may already have freed, and deleting a parented child double-frees. Also
+   real, also not it — the third stack pointed at the same `app.processEvents()` line.
+3. **The clock.** `processEvents()` dispatches **timers**, not just deferred deletions. T5.10 had
+   `MainWindow.__init__` call `overlay.start_clock()`, and `start_clock` built a *new* `QTimer`
+   every call — so every overlay any test ever constructed left a repeating 500 ms timer alive for
+   the rest of the session, firing into widgets queued for deletion. That is the access violation,
+   and it is a leak on the real product too: a panel the user never sees still ticks.
+
+   The fix puts the clock's lifetime where it belongs — `showEvent` starts it, `hideEvent` stops
+   it, one timer reused — so FR54's auto-clear runs exactly while the panel is on screen. Three
+   tests cover it, including that showing twice does not stack timers.
+
+**The lesson is about method, not about Qt.** The first two fixes were written from a reading of
+the code; the third was written from the stack trace, which had named `processEvents` all along.
+*Ask what else that line does* before proposing what to change around it. And a teardown crash
+with all tests passing is the same family as this project's recurring defect — the suite reported
+green while the process was dying.
+
 ### T5.10 — the match feed · complete · 2026-08-15
 
 New `ui/match_feed.py`, wired in `ui/main_window.py`. New `tests/test_match_feed.py` (17

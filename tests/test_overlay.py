@@ -1305,3 +1305,45 @@ def test_a_content_view_without_a_kind_is_refused() -> None:
                 state=state,
                 source_text=SOURCE,
             )
+
+
+# ---------- FR54's clock runs only while the panel is on screen ----------
+
+
+def test_a_hidden_panel_has_no_clock(qapp: QApplication) -> None:
+    """Started at construction it ran on every panel ever built, visible or not: wasted
+    work twice a second on the surface NFR3 measures, and — because timers fire inside
+    `processEvents` — a tick that can reach a widget already queued for deletion. That is
+    an access violation on Windows and survivable on Linux, so only CI saw it (PR #27).
+    """
+    panel = OverlayPanel()
+
+    assert panel._clock_timer is None or not panel._clock_timer.isActive()  # noqa: SLF001
+
+
+def test_showing_the_panel_starts_the_clock(qapp: QApplication) -> None:
+    """FR54's auto-clear exists so a stale snippet does not sit *on screen*."""
+    panel = OverlayPanel()
+
+    panel.show()
+
+    assert panel._clock_timer is not None  # noqa: SLF001
+    assert panel._clock_timer.isActive()  # noqa: SLF001
+
+    panel.hide()
+
+    assert not panel._clock_timer.isActive()  # noqa: SLF001
+
+
+def test_showing_twice_does_not_stack_timers(qapp: QApplication) -> None:
+    """Each `start_clock` built another `QTimer`, so a panel shown twice ticked twice as
+    often and only the last one could be stopped."""
+    panel = OverlayPanel()
+
+    panel.show()
+    first = panel._clock_timer  # noqa: SLF001
+    panel.hide()
+    panel.show()
+
+    assert panel._clock_timer is first  # noqa: SLF001
+    panel.hide()
