@@ -40,7 +40,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from enum import Enum, auto
 
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtGui import QFontMetrics, QMouseEvent
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
@@ -712,6 +712,25 @@ class OverlayPanel(QWidget):
     `platform/win_capture_exclusion.py`.
     """
 
+    tracker_updated = Signal(list, bool)
+    """The thread hop for FR12's checklist. **Producers must emit this, not call
+    `set_tracked_points`.**
+
+    `Application.consume` runs on whichever thread the STT backend chose — design's STT
+    contract, item 7: "callbacks run on whichever thread the backend chooses… consumers
+    must enqueue and return". A bound widget method stored as `on_tracker_update` is not
+    enqueueing: it mutates `QWidget` state from that thread, which is undefined behaviour
+    in Qt and shows up as warnings, torn paints or a crash mid-interview. Found by review
+    on PR #22.
+
+    The hop lives on the panel rather than on `MainWindow` because the panel is what the
+    update is *for*, and because routing it through the window would put the window back
+    in the application's reference graph — the cycle `main_window.py` already avoids for
+    its geometry callback. A signal emitted across threads is queued to the receiving
+    object's thread by Qt's default connection; emitted from the GUI thread it is a direct
+    call, so `MainWindow`'s own redraws cost nothing extra.
+    """
+
     def __init__(
         self,
         geometry: OverlayGeometry | None = None,
@@ -775,6 +794,10 @@ class OverlayPanel(QWidget):
         self.geometry_settings = resolved
         self.apply_geometry(self.geometry_settings)
         self._clock_timer: object | None = None
+        # Qt's default connection is direct within a thread and queued across one, so
+        # this is the whole of the hop: a backend thread's emit lands here, on the GUI
+        # thread, on the next pass of the event loop.
+        self.tracker_updated.connect(self.set_tracked_points)
 
     def start_clock(self, interval_ms: int = 500) -> None:
         """Drive `tick` from the Qt event loop (FR54).
@@ -993,6 +1016,9 @@ class OverlayPanel(QWidget):
 
     def set_tracked_points(self, points: Sequence[TrackedPoint], enabled: bool = True) -> None:
         """Render FR12's checklist. `enabled` is FR37's progress-tracker switch.
+
+        **GUI thread only.** Anything that might be on another thread emits
+        `tracker_updated` instead; see that signal for why.
 
         Read from the switch on every push rather than latched here, so turning tracking
         off mid-session removes the list on the next update instead of leaving a frozen

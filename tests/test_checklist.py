@@ -179,6 +179,50 @@ def test_the_panel_pushes_the_switch_through(qapp: QApplication) -> None:
     assert panel.rendered_height == panel.geometry_settings.height
 
 
+# ---------- PR #22 review: the update crosses threads ----------
+
+
+def test_an_update_from_another_thread_is_queued_not_applied_there(qapp: QApplication) -> None:
+    """The STT contract's item 7: callbacks run on whichever thread the backend chose,
+    and consumers must enqueue and return. A bound widget setter stored as
+    `on_tracker_update` does not enqueue — it mutates `QWidget` state from that thread.
+
+    Both halves are asserted. That the rows appear proves the update arrives; that they
+    are *absent* until the event loop runs proves it did not happen on the worker thread,
+    which is the half a direct call would also pass.
+    """
+    import threading
+
+    panel = OverlayPanel()
+    done = threading.Event()
+
+    def worker() -> None:
+        panel.tracker_updated.emit(points(3), True)
+        done.set()
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    thread.join()
+    assert done.is_set()
+
+    assert panel.checklist.rows == (), "the widget was mutated on the worker thread"
+
+    QApplication.processEvents()
+
+    assert len(panel.checklist.rows) == 3
+
+
+def test_an_update_from_the_gui_thread_applies_immediately(qapp: QApplication) -> None:
+    """Qt's default connection is direct within a thread, so the window's own redraws pay
+    nothing for the hop — and a caller that reads the rows back straight away still sees
+    them."""
+    panel = OverlayPanel()
+
+    panel.tracker_updated.emit(points(2), True)
+
+    assert len(panel.checklist.rows) == 2
+
+
 # ---------- design §9b: never displaces the snippet ----------
 
 

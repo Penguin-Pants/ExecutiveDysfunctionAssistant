@@ -198,6 +198,25 @@ reports tracking as off — the D-23 shape, in the one place the user can watch 
 removes the rows entirely: a frozen checklist reads as "things you have not said yet", which is
 the one reading a user acts on.
 
+#### The checklist update crosses threads (PR #22 review)
+
+`Application.consume` runs on whichever thread the STT backend chose — the STT contract's item
+7 says so in as many words: *"callbacks run on whichever thread the backend chooses… consumers
+must enqueue and return."* The first wiring stored the panel's bound setter as
+`on_tracker_update`, which is not enqueueing: it mutates `QWidget` state from that thread. Qt
+prints `QObject::setParent: Cannot set parent, new parent is in a different thread` and the real
+consequences are torn paints or a crash mid-interview.
+
+`OverlayPanel.tracker_updated` is now the hop — a `Signal(list, bool)` connected to
+`set_tracked_points`. Qt's default connection is queued across threads and direct within one, so
+a backend thread's emit lands on the GUI thread and `MainWindow`'s own redraws pay nothing. The
+signal is on the *panel*, not the window, so the application's reference graph still does not
+reach the window.
+
+**The same shape exists on `on_result`** and is not a live defect only because nothing Qt
+consumes it yet — `MatchingPipeline._emit` runs on the stage-2 worker thread. Whoever wires the
+snippet path to the panel must use a signal too; there is now one to copy.
+
 #### Two defects found in local review, both fixed here
 
 **A stale checklist survived a purge.** `reset_for_new_session` clears the tracker's marks and

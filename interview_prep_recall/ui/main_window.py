@@ -151,11 +151,17 @@ class MainWindow(QMainWindow):
             parent=self,
         )
 
-        # FR12's checklist gets its production feed here (T7.4). The bound method is the
-        # **panel's**, not this window's, so the callback the application holds reaches
-        # the widget without a window→application→window cycle for the collector to
-        # decide the teardown order of — the hazard the comment above records.
-        application.on_tracker_update = self.overlay.set_tracked_points
+        # FR12's checklist gets its production feed here (T7.4). **The signal's `emit`,
+        # not the setter**: `Application.consume` runs on whichever thread the STT backend
+        # chose, and a bound widget method stored here would mutate `QWidget` state from
+        # that thread. `OverlayPanel.tracker_updated` is the hop. Found by review on
+        # PR #22.
+        #
+        # It is the *panel's* bound emit, not this window's, so the callback the
+        # application holds reaches the widget without a window→application→window cycle
+        # for the collector to decide the teardown order of — the hazard the comment above
+        # records.
+        application.on_tracker_update = self.overlay.tracker_updated.emit
         # Pushed once now so the panel is not blank until the first utterance: the
         # checklist is what the user reads before they have said anything.
         self.refresh_checklist()
