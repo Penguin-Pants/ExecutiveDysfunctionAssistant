@@ -96,6 +96,7 @@ def test_a_string_not_in_the_source_is_refused() -> None:
             bullets=("Reduced latency by roughly 87%",),  # true, and not what they wrote
             state=SnippetState.CONFIRMED,
             source_text=SOURCE,
+            kind=SourceKind.PREP,
         )
 
 
@@ -105,6 +106,7 @@ def test_verbatim_strings_are_accepted() -> None:
         bullets=("Cut p99 latency from 900ms to 120ms.", "Team of four, six months."),
         state=SnippetState.CONFIRMED,
         source_text=SOURCE,
+        kind=SourceKind.PREP,
     )
     assert view.rendered_strings[0] in SOURCE
 
@@ -117,6 +119,7 @@ def test_a_near_miss_is_still_a_miss() -> None:
             bullets=(),
             state=SnippetState.CONFIRMED,
             source_text=SOURCE,
+            kind=SourceKind.PREP,
         )
 
 
@@ -127,6 +130,7 @@ def test_more_than_three_bullets_is_refused() -> None:
             bullets=("Team of four, six months.",) * 4,
             state=SnippetState.CONFIRMED,
             source_text=SOURCE,
+            kind=SourceKind.PREP,
         )
 
 
@@ -138,8 +142,12 @@ def test_the_degraded_glyph_is_not_part_of_the_stored_text() -> None:
         bullets=(),
         state=SnippetState.DEGRADED,
         source_text=SOURCE,
+        kind=SourceKind.PREP,
     )
-    assert view.display_headline == f"{DEGRADED_GLYPH} Team of four, six months."
+    # The kind mark rides in the same prefix (T10.7), so the assertion is on the two
+    # channels and the untouched text rather than on one fixed string.
+    mark = mark_for(SourceKind.PREP)
+    assert view.display_headline == f"{DEGRADED_GLYPH} {mark.glyph} Team of four, six months."
     assert view.headline in SOURCE
 
 
@@ -282,11 +290,14 @@ def test_panel_renders_headline_and_bullets(qapp: QApplication) -> None:
             bullets=("Team of four, six months.",),
             state=SnippetState.CONFIRMED,
             source_text=SOURCE,
+            kind=SourceKind.PREP,
         ),
         now=0.0,
     )
 
-    assert panel.headline.text() == "Led the migration off the monolith."
+    assert panel.headline.text() == (
+        f"{mark_for(SourceKind.PREP).glyph} Led the migration off the monolith."
+    )
     assert panel.visible_bullet_count == 1
 
 
@@ -298,6 +309,7 @@ def test_fewer_bullets_hides_the_spare_labels(qapp: QApplication) -> None:
         bullets=("Cut p99 latency from 900ms to 120ms.", "Team of four, six months.", "monolith"),
         state=SnippetState.CONFIRMED,
         source_text=SOURCE,
+        kind=SourceKind.PREP,
     )
     panel.show_snippet(three, now=0.0)
     assert panel.visible_bullet_count == 3
@@ -308,6 +320,7 @@ def test_fewer_bullets_hides_the_spare_labels(qapp: QApplication) -> None:
             bullets=(),
             state=SnippetState.CONFIRMED,
             source_text=SOURCE,
+            kind=SourceKind.PREP,
         ),
         now=1.0,
     )
@@ -326,6 +339,7 @@ def test_clearing_shows_the_no_match_line_not_a_blank_panel(qapp: QApplication) 
             bullets=(),
             state=SnippetState.CONFIRMED,
             source_text=SOURCE,
+            kind=SourceKind.PREP,
         ),
         now=0.0,
     )
@@ -345,6 +359,7 @@ def test_tick_clears_an_expired_snippet(qapp: QApplication) -> None:
             bullets=(),
             state=SnippetState.CONFIRMED,
             source_text=SOURCE,
+            kind=SourceKind.PREP,
         ),
         now=0.0,
     )
@@ -450,6 +465,7 @@ def test_a_replacement_runs_a_transition(qapp: QApplication) -> None:
         bullets=(),
         state=SnippetState.CONFIRMED,
         source_text=SOURCE,
+        kind=SourceKind.PREP,
     )
     panel.show_snippet(first, now=0.0)
     assert panel.transition_running is False, "the first snippet is an appearance, not a replace"
@@ -460,6 +476,7 @@ def test_a_replacement_runs_a_transition(qapp: QApplication) -> None:
             bullets=(),
             state=SnippetState.CONFIRMED,
             source_text=SOURCE,
+            kind=SourceKind.PREP,
         ),
         now=1.0,
     )
@@ -476,6 +493,7 @@ def test_the_transition_returns_to_the_users_opacity(qapp: QApplication) -> None
         bullets=(),
         state=SnippetState.CONFIRMED,
         source_text=SOURCE,
+        kind=SourceKind.PREP,
     )
     panel.show_snippet(view, now=0.0)
     panel.show_snippet(view, now=1.0)
@@ -512,6 +530,7 @@ def test_the_substring_check_alone_does_not_stop_a_fabricating_producer() -> Non
         bullets=(),
         state=SnippetState.CONFIRMED,
         source_text=fabricated,
+        kind=SourceKind.PREP,
     )
 
     assert view.headline == fabricated  # accepted, and it should not have been
@@ -573,6 +592,7 @@ def test_the_clock_drives_auto_clear(qapp: QApplication) -> None:
             bullets=(),
             state=SnippetState.CONFIRMED,
             source_text=SOURCE,
+            kind=SourceKind.PREP,
         ),
         now=0.0,
     )
@@ -886,6 +906,7 @@ def test_a_long_bullet_elides_rather_than_growing_unboundedly(qapp: QApplication
             bullets=(long_source.strip(),),
             state=SnippetState.CONFIRMED,
             source_text=long_source,
+            kind=SourceKind.PREP,
         ),
         now=0.0,
     )
@@ -908,6 +929,7 @@ def test_a_short_bullet_is_rendered_verbatim(qapp: QApplication) -> None:
             bullets=("Cut p99 latency from 900ms to 120ms.",),
             state=SnippetState.CONFIRMED,
             source_text=SOURCE,
+            kind=SourceKind.PREP,
         ),
         now=0.0,
     )
@@ -931,7 +953,11 @@ def test_widening_the_panel_restores_elided_text(qapp: QApplication) -> None:
     narrow = OverlayPanel(OverlayGeometry(width=MIN_SIZE[0], height=MIN_SIZE[1]))
     wide = OverlayPanel(OverlayGeometry(width=MAX_SIZE[0], height=MIN_SIZE[1]))
     view = SnippetView(
-        headline="Cut p99", bullets=(text,), state=SnippetState.CONFIRMED, source_text=source
+        headline="Cut p99",
+        bullets=(text,),
+        state=SnippetState.CONFIRMED,
+        source_text=source,
+        kind=SourceKind.PREP,
     )
 
     narrow.show_snippet(view, now=0.0)
@@ -982,6 +1008,7 @@ def test_elision_only_ever_cuts_from_the_end(qapp: QApplication) -> None:
             bullets=(long_source.strip(),),
             state=SnippetState.CONFIRMED,
             source_text=long_source,
+            kind=SourceKind.PREP,
         ),
         now=0.0,
     )
@@ -1045,6 +1072,7 @@ def test_a_tall_panel_shows_more_lines_than_the_minimum_one(qapp: QApplication) 
         bullets=(long_source.strip(),),
         state=SnippetState.CONFIRMED,
         source_text=long_source,
+        kind=SourceKind.PREP,
     )
     short = OverlayPanel(OverlayGeometry(width=420, height=MIN_SIZE[1]))
     tall = OverlayPanel(OverlayGeometry(width=420, height=MAX_SIZE[1]))
@@ -1072,7 +1100,11 @@ def test_text_that_fits_the_taller_panel_is_never_cut(qapp: QApplication) -> Non
 
     panel.show_snippet(
         SnippetView(
-            headline="Cut p99", bullets=(text,), state=SnippetState.CONFIRMED, source_text=source
+            headline="Cut p99",
+            bullets=(text,),
+            state=SnippetState.CONFIRMED,
+            source_text=source,
+            kind=SourceKind.PREP,
         ),
         now=0.0,
     )
@@ -1255,3 +1287,21 @@ def test_the_mark_is_learnable_from_the_panel(qapp: QApplication) -> None:
     tooltip = panel.headline.toolTip()
     assert mark_for(SourceKind.INTERVIEWER).glyph in tooltip
     assert mark_for(SourceKind.INTERVIEWER).label in tooltip
+
+
+def test_a_content_view_without_a_kind_is_refused() -> None:
+    """The other half of the same invariant, and the half that fails silently: an
+    unmarked confirmed snippet renders correctly and is missing only FR72's mark.
+
+    `from_stored_note` cannot be the sole enforcement point while direct construction
+    stays reachable — the field's docstring asserted this and nothing checked it, which
+    is the defect shape this file exists to catch. Found by review on PR #23.
+    """
+    for state in (SnippetState.CONFIRMED, SnippetState.DEGRADED):
+        with pytest.raises(RenderError, match="FR72"):
+            SnippetView(
+                headline="Team of four, six months.",
+                bullets=(),
+                state=state,
+                source_text=SOURCE,
+            )

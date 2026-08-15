@@ -164,7 +164,7 @@ conservative choice, just a broken one.
 
 ### M10 — T10.7 · complete · 2026-08-15
 
-FR72's per-kind marking, in `ui/overlay.py`. `tests/test_overlay.py` +14 (**1026 passing**),
+FR72's per-kind marking, in `ui/overlay.py`. `tests/test_overlay.py` +15 (**1027 passing**),
 ruff and format clean; mypy's error count is unchanged from the pre-change baseline (49, all
 pre-existing and all raised by a mypy newer than the one this tree was last checked against —
 none of them in the changed code, and a stash-and-recheck confirmed the count rather than
@@ -198,11 +198,27 @@ Recorded as **D-55**, and §9b now carries the kind table it was missing.
 * **State glyph first, then kind, then text.** How far to trust the panel is read before what
   the panel is about.
 
-**One review finding, mine, fixed before push.** `SnippetView` documented "kind is `None` only
-for `NO_MATCH`" on the field and enforced it nowhere, so a caller could mark the FR35 line with
-a source it never came from. That is a false statement about provenance on the one view that has
-none — the same class of defect FR11 exists to prevent, aimed at *where* text came from rather
-than at what it says — so it is now rejected in `__post_init__` with a test, not described.
+**Two review findings on the same invariant, and the second one is the interesting half.**
+`SnippetView` documented "kind is `None` only for `NO_MATCH`" on the field and enforced it
+nowhere.
+
+* **Mine, before push:** a caller could mark the FR35 no-match line with a source it never came
+  from — a false statement about provenance on the one view that has none, which is the class of
+  defect FR11 exists to prevent, aimed at *where* text came from rather than at what it says.
+* **PR #23 review, P2, valid:** the opposite direction, which I fixed only half of and then
+  wrote a docstring claiming both. A directly-constructed `CONFIRMED` or `DEGRADED` view with no
+  `kind` was accepted and rendered **unmarked** — FR72 quietly unmet, and invisible, because the
+  panel renders and the text is right. Requiring `resolve_kind` in `from_stored_note` does not
+  cover it: direct construction stays reachable from every producer.
+
+Both are now rejected in `__post_init__` with tests. **This is the third time in this milestone
+that a guarantee was written where it is read rather than where it is checked** — the field's
+docstring stated the invariant, and half of it was enforced. A docstring is not an enforcement
+point; that sentence should be read as a to-do every time it is written.
+
+Two existing tests changed with it: content views now always carry a mark, so the two assertions
+that pinned the headline to a fixed string assert the two prefix channels and the untouched text
+instead.
 
 **Not done, and it is the half that needs the hardware.** FR72's acceptance is a *glance test at
 1 m*, and glyph coverage in the bundled Plex faces is unverified — Qt will substitute a fallback

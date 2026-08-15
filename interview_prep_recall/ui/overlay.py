@@ -416,24 +416,39 @@ class SnippetView:
 
     kind: SourceKind | None = None
     """FR72's source kind, resolved from the store by `from_stored_note` rather than
-    asserted by the caller. `None` only for `NO_MATCH`, which came from no source at
-    all — marking product copy with a kind would be a claim about provenance that is
-    not true."""
+    asserted by the caller. `None` **only** for `NO_MATCH`, which came from no source at
+    all — marking product copy with a kind would be a claim about provenance that is not
+    true, and leaving stored content unmarked drops the mark FR72 requires.
+
+    Both halves are enforced in `__post_init__`. The first draft enforced only the
+    no-match half and left this docstring asserting the other, which is the shape of
+    defect this codebase keeps finding: a guarantee written where it is read rather than
+    where it is checked. Found by review on PR #23.
+    """
 
     def __post_init__(self) -> None:
         if len(self.bullets) > MAX_BULLETS:
             raise RenderError(f"FR11 allows at most {MAX_BULLETS} bullets, got {len(self.bullets)}")
         if self.state is SnippetState.NO_MATCH:
-            # Enforced rather than merely documented on the field: the no-match line is
-            # product copy from no source at all, so a kind on it is a false claim about
-            # provenance — the same class of statement FR11 exists to make impossible,
-            # about where text came from rather than about what it says.
+            # The no-match line is product copy from no source at all, so a kind on it is
+            # a false claim about provenance — the same class of statement FR11 exists to
+            # make impossible, about where text came from rather than about what it says.
             if self.kind is not None:
                 raise RenderError(
                     "the no-match line came from no stored source; marking it with "
                     f"{self.kind!r} would claim a provenance it does not have (FR72)."
                 )
             return
+        if self.kind is None:
+            # The other direction, and the one that fails silently: an unmarked content
+            # view renders correctly, reads correctly, and is missing only the mark FR72
+            # requires. `from_stored_note` cannot be the sole enforcement point when
+            # direct construction is reachable from every producer.
+            raise RenderError(
+                f"a {self.state.value} snippet came from a stored source, so it carries "
+                "that source's kind (FR72). Build it with `from_stored_note`, which "
+                "resolves the kind from the store."
+            )
         for rendered in self.rendered_strings:
             if rendered and rendered not in self.source_text:
                 raise RenderError(
