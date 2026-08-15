@@ -29,6 +29,7 @@ swapped in behind them leaves matching drawing from the previous corpus.
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from PySide6.QtCore import Qt
@@ -75,6 +76,38 @@ without driving a modal."""
 
 Prompter = Callable[[str, str], str | None]
 """Asks for a name, given a title and a default. None if the user cancelled."""
+
+
+def active_set_id(settings: object) -> str | None:
+    """The set FR43 says is active, as persisted by this editor (T3.8).
+
+    Exists so the composition root has something to *read* — the id was being written
+    with no reader anywhere, which is D-20's shape and was found by review on PR #27.
+    `__main__._build_application` (T9.6a) names FR43's selection as one of its blockers;
+    this is that blocker's answer, and `load_active_set` below is the whole of it.
+    """
+    value = settings.value(ACTIVE_SET_KEY, None)  # type: ignore[attr-defined]
+    return str(value) if value else None
+
+
+def load_active_set(root: Path, settings: object, store: NotesStore | None = None) -> ContextSet:
+    """The set to start with: the persisted one, else the only one, else a new one.
+
+    **Never raises for an ordinary state.** A first run has no sets, and a persisted id
+    can name a set the user deleted from another machine's synced folder — both are
+    situations the entry point has to survive, so they fall through to the next answer
+    rather than up the stack.
+    """
+    store = store if store is not None else NotesStore(root)
+    remembered = active_set_id(settings)
+    candidates = [remembered] if remembered else []
+    candidates += [set_id for set_id in store.list_ids() if set_id != remembered]
+    for set_id in candidates:
+        try:
+            return store.load(set_id)
+        except Exception:  # noqa: BLE001 — try the next one; recovery is T3.9's job
+            continue
+    return ContextSet(name="My notes")
 
 
 class NotesEditor(QDialog):
@@ -241,8 +274,18 @@ class NotesEditor(QDialog):
         self.activate(set_id)
 
     def activate(self, set_id: str) -> bool:
-        """FR43. Flushes first — an unsaved edit belongs to the set being left."""
+        """FR43. Flushes first — an unsaved edit belongs to the set being left.
+
+        **A failed flush aborts the switch.** `flush` refuses a set whose bullets are not
+        verbatim and leaves it dirty on purpose, so switching anyway would replace
+        `application.context_set` and put those edits somewhere the user cannot reach —
+        they would come back to the older version on disk with no sign of what happened.
+        Found by review on PR #27.
+        """
         self.flush()
+        if self._dirty:
+            self.refresh_sets()
+            return False
         try:
             loaded = self.store.load(set_id)
         except Exception as error:  # noqa: BLE001 — a UI boundary
@@ -313,7 +356,13 @@ class NotesEditor(QDialog):
         # deleted file with the app still pointing at it is unrecoverable.
         if not self.activate(remaining[0]):
             return False
+        # **Backups go with it.** FR29 keeps five generations, so deleting only the live
+        # file leaves up to five copies of the complete notes on disk under a control
+        # whose confirmation says "cannot be undone" — true of the user's access, false
+        # of the data. Found by review on PR #27.
         self.store.path_for(target.id).unlink(missing_ok=True)
+        for backup in self.store.list_backups(target.id):
+            backup.path.unlink(missing_ok=True)
         self.application.ring.record("note_set_deleted", noteset_id=target.id)
         self.refresh_sets()
         return True
@@ -487,6 +536,9 @@ class NotesEditor(QDialog):
             return False
         self.store.save(self.context_set)
         self._dirty = False
+        # Vectors, not just JSON: a note added or re-headlined here is matched on its
+        # previous text until this runs (FR34).
+        self.application.notes_changed()
         self.status.setText(f"Saved {len(self.context_set.notes)} note(s).")
         return True
 
@@ -495,8 +547,16 @@ class NotesEditor(QDialog):
 
         The alternative is a dialog that silently discards up to five seconds of typing
         because the user was quicker than the timer.
+
+        **A refused save keeps the window open.** `flush` tells the user they can fix a
+        non-verbatim bullet, and closing anyway would make that false: the next editor
+        opens clean against the mutated object, no timer is pending, and quitting loses
+        the edits. Found by review on PR #27.
         """
         self.flush()
+        if self._dirty:
+            event.ignore()
+            return
         super().closeEvent(event)
 
     # ---------- default Qt prompts ----------

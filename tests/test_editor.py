@@ -27,6 +27,7 @@ from interview_prep_recall.ui.editor import (  # noqa: E402
     NOT_OPTIMISED_TEXT,
     SAVE_DEBOUNCE_MS,
     NotesEditor,
+    load_active_set,
 )
 
 
@@ -434,3 +435,126 @@ def test_both_sets_are_listed_after_creating_one(qapp: QApplication, tmp_path: P
 
     listed = {editor.set_box.itemText(row) for row in range(editor.set_box.count())}
     assert listed == {"Acme", "Second"}
+
+
+# ---------- PR #27 review findings ----------
+
+
+def test_activating_a_set_repoints_the_tracker(qapp: QApplication, tmp_path: Path) -> None:
+    """The tracker holds its own reference and `reset()` only clears session state. Left
+    pointed at the previous set it renders the old checklist and intersects the old
+    tracked ids with the new index, so nothing in the new set can ever be marked."""
+    app = _app(tmp_path)
+    editor = _editor(app, prompt=lambda _t, _d: "Second")
+
+    created = editor.create_set()
+
+    assert created is not None
+    assert app.tracker.note_set is app.context_set
+    assert app.tracker.note_set.id == created.id
+
+
+def test_saving_re_embeds(qapp: QApplication, tmp_path: Path) -> None:
+    """Saving writes JSON and not vectors. Without a rebuild, a note added here is absent
+    from matching until the user switches sets or restarts (FR34)."""
+    app = _app(tmp_path)
+    editor = _editor(app)
+    before = len(app.index.note_ids)
+
+    editor.add_note()
+    editor.flush()
+
+    assert len(app.index.note_ids) == before + 1
+    assert any(e.event == "notes_reindexed" for e in app.ring.snapshot())
+
+
+def test_a_failed_save_blocks_the_switch(qapp: QApplication, tmp_path: Path) -> None:
+    """`flush` leaves a non-verbatim set dirty on purpose. Switching anyway would replace
+    `application.context_set` and put those edits where the user cannot reach them."""
+    app = _app(tmp_path)
+    editor = _editor(app, prompt=lambda _t, _d: "Second")
+    created = editor.create_set()
+    assert created is not None
+    first = app.context_set.id
+    editor.note_list.setCurrentRow(0) if editor.note_list.count() else editor.add_note()
+    editor.bullets_edit.setPlainText("Not a substring of anything")
+
+    assert editor.activate(first) is False
+    assert app.context_set.id == created.id, "still on the set with the unsaved edit"
+
+
+def test_a_failed_save_keeps_the_window_open(qapp: QApplication, tmp_path: Path) -> None:
+    """The refusal tells the user they can fix it. Closing anyway makes that false: the
+    next editor opens clean against the mutated object and quitting loses the edits."""
+    from PySide6.QtGui import QCloseEvent
+
+    app = _app(tmp_path)
+    editor = _editor(app)
+    editor.note_list.setCurrentRow(0)
+    editor.bullets_edit.setPlainText("Not a substring of anything")
+
+    event = QCloseEvent()
+    editor.closeEvent(event)
+
+    assert not event.isAccepted()
+    assert editor.dirty
+
+
+def test_deleting_a_set_removes_its_backups(qapp: QApplication, tmp_path: Path) -> None:
+    """FR29 keeps five generations, so deleting only the live file leaves up to five
+    copies of the complete notes on disk under a control whose confirmation says "cannot
+    be undone" — true of the user's access, false of the data."""
+    app = _app(tmp_path)
+    store = NotesStore(tmp_path)
+    doomed = app.context_set.id
+    store.save(app.context_set)
+    store.save(app.context_set)  # rotates a backup generation into existence
+    assert store.list_backups(doomed)
+
+    editor = _editor(app, prompt=lambda _t, _d: "Second")
+    editor.create_set()
+    # Back to the set we intend to delete, then delete it.
+    assert editor.activate(doomed) is True
+    assert editor.delete_set() is True
+
+    assert store.list_backups(doomed) == []
+    assert not store.path_for(doomed).exists()
+
+
+# ---------- T3.8: the persisted id has a reader ----------
+
+
+def test_the_persisted_set_is_what_loads(qapp: QApplication, tmp_path: Path) -> None:
+    """The id was written with no reader anywhere — D-20's shape, in the requirement this
+    task exists for. `load_active_set` is what the composition root calls."""
+    settings = FakeSettings()
+    store = NotesStore(tmp_path)
+    first = ContextSet(name="First")
+    second = ContextSet(name="Second")
+    store.save(first)
+    store.save(second)
+    settings.setValue(ACTIVE_SET_KEY, second.id)
+
+    assert load_active_set(tmp_path, settings).id == second.id
+
+
+def test_a_first_run_gets_a_new_set(qapp: QApplication, tmp_path: Path) -> None:
+    """No sets on disk and nothing persisted. Raising here would make the entry point
+    fail on the one run where nothing is wrong."""
+    loaded = load_active_set(tmp_path, FakeSettings())
+
+    assert loaded.notes == []
+    assert loaded.name
+
+
+def test_a_persisted_id_that_no_longer_exists_falls_through(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    """A synced folder can lose a set another machine deleted."""
+    settings = FakeSettings()
+    store = NotesStore(tmp_path)
+    survivor = ContextSet(name="Survivor")
+    store.save(survivor)
+    settings.setValue(ACTIVE_SET_KEY, "00000000-0000-4000-8000-000000000000")
+
+    assert load_active_set(tmp_path, settings).id == survivor.id

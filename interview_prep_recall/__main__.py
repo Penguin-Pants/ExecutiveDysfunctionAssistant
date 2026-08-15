@@ -63,12 +63,13 @@ def app_data_root() -> Path:
 def _build_application(root: Path) -> Application:
     """Construct the composition root with its real dependencies. **Not yet written.**
 
-    Deliberately unimplemented rather than guessed at, because three of the four
+    Deliberately unimplemented rather than guessed at, because two of the four
     dependencies need a decision that is not this task's to make:
 
-    * **Which note set.** FR43 puts the active note set id in `QSettings`, and nothing
-      reads or writes it yet. Picking "the only one, or empty" here would quietly become
-      the product's behaviour.
+    * ~~**Which note set.**~~ **Answered by T3.8.** `editor.load_active_set` reads the id
+      FR43 puts in `QSettings` — the persisted set, else the only one, else a new empty
+      one — and the editor is what writes it. The behaviour is the requirement's rather
+      than this function's guess, which is why it was worth waiting for.
     * **What an absent API key means.** D-U3 has a local-only degraded path; whether a
       first run with no key enters it silently or prompts is a product decision that
       belongs with the setup wizard (T9.3).
@@ -80,8 +81,9 @@ def _build_application(root: Path) -> Application:
     answers to the first two would ship them as decisions nobody made.
     """
     raise NotImplementedError(
-        "T9.6a: real dependency construction needs FR43's active-note-set selection and "
-        "the no-API-key policy from T9.3, plus the Windows-only embedder and cipher"
+        "T9.6a: real dependency construction needs the no-API-key policy from T9.3, plus "
+        "the Windows-only embedder and cipher. FR43's active-note-set selection is done — "
+        "`ui.editor.load_active_set(root, default_settings())`"
     )
 
 

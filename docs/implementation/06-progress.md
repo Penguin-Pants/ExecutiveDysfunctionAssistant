@@ -210,6 +210,26 @@ exists on disk it cannot be listed, cannot be switched back to, and vanishes the
 creates a second set. The editor persists it on open. A write as a side effect of opening a window
 is worth stating out loud; the alternative is a surface that quietly loses the thing it is editing.
 
+**PR #27 review — six findings, all valid, all fixed.** Five were P1 and three of them are the
+same sentence: *more than one object holds the active set, and more than one holds its vectors.*
+
+| Severity | Finding | Why it mattered |
+|---|---|---|
+| P1 | **The tracker kept the previous set.** `reset()` clears session state, not the reference, so the checklist rendered the old set and tracking intersected the old tracked ids with the new index — no point in the newly active set could ever be marked. | Third holder of the same object, after the index and the prefilter. The count is the argument for `activate_context_set` existing at all. |
+| P1 | **Saving wrote JSON and not vectors.** A note added or re-headlined in the editor was matched on its previous text — absent entirely if new — until the user switched sets or restarted. | `Application.notes_changed`, on the application because the index is the application's; FR34's content hashes make it cheap enough per save. |
+| P1 | **A failed flush did not block a set switch.** `flush` refuses a non-verbatim set and leaves it dirty *on purpose*; switching anyway replaced `context_set` and put those edits where the user could not reach them. | The refusal says "you can fix it" and this made that false. |
+| P1 | **A failed flush did not block closing**, for the same reason and with a worse ending: the next editor opens clean against the mutated object, no timer is pending, and quitting loses the work. | |
+| P1 | **Deleting a set left its backups.** FR29 keeps five generations, so up to five complete copies of the notes stayed on disk under a control whose confirmation says "cannot be undone" — true of the user's access, false of the data. | |
+| P2 | **`ACTIVE_SET_KEY` had no reader.** The id was written and never read, so FR43's across-restart persistence did not exist. | D-20's shape, in the requirement this task is *for*. |
+
+**The last one is worth more than its severity.** `__main__._build_application` names FR43's
+active-set selection as one of three blockers keeping T9.6a unimplemented — so writing an id
+nobody read left the entry point blocked on a decision that had just been made and not connected.
+`editor.load_active_set` is that reader: the persisted set, else the only one, else a new empty
+one, and it never raises for an ordinary state because a first run and a set deleted on another
+machine are both situations the entry point has to survive. **T9.6a is down to two blockers** —
+the no-API-key policy and the Windows-only embedder and cipher.
+
 **Follow-up T3.7a:** the editor lists sets and cannot *import* into one — T3.5's importer has no
 surface either, so a `.md` of prep notes still cannot be brought in through the UI. That is the
 next instance of this same pattern, and it is now named rather than waiting to be tripped over.

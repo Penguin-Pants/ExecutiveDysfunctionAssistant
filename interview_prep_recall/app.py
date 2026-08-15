@@ -434,11 +434,33 @@ class Application:
         self.context_set = context_set
         self.index.build(context_set)
         self.prefilter.note_set = context_set
+        # **The tracker holds its own reference too**, and `reset()` only clears session
+        # state. Left pointed at the previous set it would render the old checklist and
+        # intersect the old tracked ids with the new index, so no point in the newly
+        # active set could ever be marked. Third holder of the same object, found by
+        # review on PR #27 — the count is the argument for this method existing.
+        self.tracker.note_set = context_set
         self.tracker.reset()
         self.ring.record(
             "context_set_activated", noteset_id=context_set.id, count=len(context_set.notes)
         )
         self.on_context_set_change(context_set)
+
+    def notes_changed(self) -> None:
+        """Re-embed after the active set's contents were edited (T3.7).
+
+        Saving writes JSON; it does not touch vectors. Without this, a note added or
+        re-headlined in the editor is matched on the *previous* text until the user
+        switches sets or restarts — absent entirely if it is new. `EmbeddingIndex.build`
+        re-embeds only what its content hashes say changed (FR34), so this is cheap
+        enough to run on every save.
+
+        On `Application` rather than in the editor because the index is the
+        application's, and a UI reaching into it would be a second owner of the cache
+        FR34 makes guarantees about. Found by review on PR #27.
+        """
+        self.index.build(self.context_set)
+        self.ring.record("notes_reindexed", count=len(self.context_set.notes))
 
     def _context_set_unwired(self, context_set: ContextSet) -> None:
         """D-60's loud default for `on_context_set_change`.
