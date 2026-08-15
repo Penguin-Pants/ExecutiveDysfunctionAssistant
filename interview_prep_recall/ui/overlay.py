@@ -1,4 +1,4 @@
-"""The overlay panel (T5.1, T5.3, T5.4, T5.5, T5.6 — FR11, FR13, FR23–26, FR51, FR54, FR65).
+"""The overlay panel (T5.1, T5.3, T5.4, T5.5, T5.6 — FR11, FR13, FR22–27, FR51, FR54, FR55, FR65).
 
 The product's one visible surface during an interview, and the place where the
 **retrieval-only guarantee** either holds or does not. Everything upstream — the forced
@@ -25,16 +25,27 @@ bands instead of restating them.
 **Auto-clear is pull-based** (`tick(now)`), like `UtteranceAssembler`. Nothing is emitted
 from a background timer, so the FR54 behaviour is testable against a fake clock rather
 than a `sleep`.
+
+**Direct manipulation is split from its Qt events (T5.4).** Drag and edge-resize live in
+`begin_manipulation` / `update_manipulation` / `end_manipulation`, which take plain
+points; `mousePressEvent` and friends only translate. A frameless window has no title bar
+and no system resize grips, so this code *is* the window manager for this panel — and a
+window manager that can only be tested by synthesising OS mouse events is one whose
+off-screen and clamping behaviour never gets tested.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
-from enum import Enum
+from dataclasses import dataclass, replace
+from enum import Enum, auto
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtGui import QFontMetrics, QMouseEvent
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+
+from interview_prep_recall.session.health import Health
+from interview_prep_recall.ui.indicators import IndicatorBar
 
 # ---------- design §9b tokens ----------
 
@@ -51,6 +62,34 @@ MAX_SIZE = (900, 600)
 CORNER_RADIUS_PX = 20
 PADDING_PX = 16
 RAIL_WIDTH_PX = 3
+
+TOP_MARGIN_PX = 48
+"""FR22's default position is *top*-center. Not flush to the edge: a panel at y=0 sits
+under the Windows 11 snap-layout flyout, which opens on hover over any maximised window's
+maximise button and would cover the overlay exactly when a call is being arranged."""
+
+RESIZE_MARGIN_PX = 8
+"""How close to an edge a press counts as a resize rather than a drag (FR23).
+
+A frameless window has no system resize grips, so this margin is the only affordance.
+8px is the smallest band that a trackpad user can reliably hit; below that the panel
+reads as un-resizable."""
+
+HEADLINE_PX_RANGE = (14, 22)
+BULLET_PX_RANGE = (13, 18)
+"""Design §9b's text scaling (FR23): sizes interpolate linearly with panel *height*
+between MIN_SIZE[1] and MAX_SIZE[1] and clamp outside. Width drives wrapping, height
+drives size, so FR23's resize and FR24's opacity stay orthogonal."""
+
+MIN_RENDERED_PX = 13
+"""PRISM's caption size is the floor. Below it the overlay stops being glanceable, which
+is the only thing it exists to be — so `BULLET_PX_RANGE` starts here and a test holds it."""
+
+MAX_BULLET_LINES = 2
+"""Design §9b: ellipsis is the last resort, not the first. A bullet clips only after
+scaling has hit the floor, and then at two lines."""
+
+ELLIPSIS = "…"
 
 DEGRADED_GLYPH = "~"
 """FR51's second channel. Colour alone fails for a colour-blind user, and the rails differ
@@ -168,6 +207,102 @@ def palette_for(brightness: int) -> OverlayPalette:
     # Two stops per band, and the panel is the only channel that moves: ink and rails are
     # fixed per band precisely so their measured contrast holds across the whole band.
     return band[0] if position < 0.5 else band[1]
+
+
+def scaled_px(height: int, size_range: tuple[int, int]) -> int:
+    """Design §9b's `size(h)`, for FR23's "text scales rather than clipping".
+
+    The design states this as a formula *and* as a table of three anchor heights, and the
+    two disagree by 1px on the bullets at the default height (the formula gives 14, the
+    table says 15). The formula is what §9b calls checkable, and a table transcribed into
+    an assertion checks transcription rather than behaviour — so the formula governs and
+    the table now carries the correction. See D-45.
+    """
+    low, high = size_range
+    span = MAX_SIZE[1] - MIN_SIZE[1]
+    raw = low + (high - low) * (height - MIN_SIZE[1]) / span
+    return int(round(max(low, min(high, raw))))
+
+
+def headline_px(height: int) -> int:
+    return scaled_px(height, HEADLINE_PX_RANGE)
+
+
+def bullet_px(height: int) -> int:
+    return scaled_px(height, BULLET_PX_RANGE)
+
+
+def line_count(text: str, metrics: QFontMetrics, width: int) -> int:
+    """How many wrapped lines `text` needs at `width`. 0 for empty text."""
+    if not text or width <= 0:
+        return 0 if not text else 1
+    box = metrics.boundingRect(0, 0, width, 0, int(Qt.TextFlag.TextWordWrap), text)
+    return max(1, round(box.height() / max(1, metrics.lineSpacing())))
+
+
+def elide_to_lines(
+    text: str, metrics: QFontMetrics, width: int, max_lines: int = MAX_BULLET_LINES
+) -> str:
+    """Trim `text` to at most `max_lines` wrapped lines, ending in an ellipsis.
+
+    Only reached once scaling has hit the floor (design §9b) — this is the last resort,
+    not the first. A binary search over the cut point rather than `QFontMetrics.elidedText`,
+    which elides to a *single* line and would throw away the second line the design allows.
+
+    **This is the one place a rendered string is not byte-identical to the stored note**,
+    and it stays inside FR11 because the only operations are *truncation* and appending
+    `ELLIPSIS`: what remains is a prefix of what the user wrote, and the ellipsis is fixed
+    product copy that no note content can forge into something else. Nothing is
+    substituted, reordered or rephrased. A test holds that property, because "we only cut
+    from the end" is exactly the kind of claim that survives until someone adds a smarter
+    middle-elide.
+    """
+    if max_lines < 1:
+        raise ValueError("max_lines must be >= 1")
+    if line_count(text, metrics, width) <= max_lines:
+        return text
+    low, high = 0, len(text)
+    best = ""
+    while low <= high:
+        mid = (low + high) // 2
+        candidate = text[:mid].rstrip() + ELLIPSIS
+        if line_count(candidate, metrics, width) <= max_lines:
+            best = candidate
+            low = mid + 1
+        else:
+            high = mid - 1
+    return best or ELLIPSIS
+
+
+@dataclass(frozen=True)
+class ScreenBounds:
+    """The usable area of the display the overlay lives on.
+
+    A value type rather than a `QScreen`, so FR22's default placement and FR55's recovery
+    are testable against a stated geometry instead of whatever display the test host has.
+    """
+
+    x: int
+    y: int
+    width: int
+    height: int
+
+    @classmethod
+    def of(cls, widget: QWidget) -> ScreenBounds | None:
+        """The widget's screen, or the primary one, or `None` on a host with no screens.
+
+        `None` rather than a made-up 1920×1080: a default position derived from an
+        invented display is worse than the fixed fallback, because it looks deliberate.
+        """
+        screen = widget.screen()
+        if screen is None:
+            from PySide6.QtGui import QGuiApplication
+
+            screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            return None
+        area = screen.availableGeometry()
+        return cls(area.x(), area.y(), area.width(), area.height())
 
 
 class RenderError(ValueError):
@@ -308,20 +443,39 @@ class OverlayGeometry:
             locked=self.locked,
         )
 
-    def reset(self) -> OverlayGeometry:
-        """FR27. Back to defaults, keeping nothing that could still be unreachable.
+    def top_centred(self, bounds: ScreenBounds) -> OverlayGeometry:
+        """FR22's default placement: horizontally centred, near the top of the screen.
+
+        Applied to the *clamped* size, so a persisted width outside FR23's range cannot
+        push the centred panel off the side of the display it was just recovered onto.
+        """
+        clamped = self.clamped()
+        return replace(
+            clamped,
+            x=bounds.x + (bounds.width - clamped.width) // 2,
+            y=bounds.y + TOP_MARGIN_PX,
+        )
+
+    def reset(self, bounds: ScreenBounds | None = None) -> OverlayGeometry:
+        """FR55. Back to defaults, keeping nothing that could still be unreachable.
 
         Position and lock go, because those are what make the panel unreachable. Size,
         opacity and brightness **stay**: they are preferences, and none of them can hide
         the overlay, so discarding them would make reset cost more than it fixes. Found by
         review on PR #20.
+
+        With `bounds` the position becomes FR22's top-centre on that screen; without it,
+        the fixed fallback. Reset is the recovery route for coordinates persisted off the
+        current display (FR55), so recovering onto a *stated* screen is the whole point —
+        the no-bounds path exists only for a host that reports no screens at all.
         """
-        return OverlayGeometry(
+        recovered = OverlayGeometry(
             width=self.width,
             height=self.height,
             opacity=self.opacity,
             brightness=self.brightness,
         )
+        return recovered.top_centred(bounds) if bounds else recovered
 
 
 SETTINGS_KEYS = ("x", "y", "width", "height", "opacity", "brightness", "locked")
@@ -334,10 +488,16 @@ def save_geometry(settings: object, geometry: OverlayGeometry) -> None:
         settings.setValue(f"overlay/{key}", getattr(geometry, key))  # type: ignore[attr-defined]
 
 
-def load_geometry(settings: object) -> OverlayGeometry:
+def load_geometry(settings: object, bounds: ScreenBounds | None = None) -> OverlayGeometry:
     """Read back, clamped. Missing or unreadable values fall back to defaults per key —
-    a corrupt registry entry should cost one setting, not the whole layout."""
-    defaults = OverlayGeometry()
+    a corrupt registry entry should cost one setting, not the whole layout.
+
+    `bounds` supplies FR22's first-run default: with nothing persisted the panel opens
+    top-centre on that screen. It is only a *default*, so a persisted position still
+    wins — FR26 outranks FR22 on every run after the first, and FR55's reset is the way
+    back.
+    """
+    defaults = OverlayGeometry().top_centred(bounds) if bounds else OverlayGeometry()
     values: dict[str, object] = {}
     for key in SETTINGS_KEYS:
         raw = settings.value(f"overlay/{key}", getattr(defaults, key))  # type: ignore[attr-defined]
@@ -377,6 +537,95 @@ def _as_bool(value: object, default: bool) -> bool:
     if text in {"false", "0"}:
         return False
     return default
+
+
+class Edge(Enum):
+    """Which border a press grabbed (FR23's edge-drag resize)."""
+
+    LEFT = auto()
+    RIGHT = auto()
+    TOP = auto()
+    BOTTOM = auto()
+
+
+MOVING_EDGES = frozenset({Edge.LEFT, Edge.TOP})
+"""Dragging these moves the panel's origin as well as its size, so FR27's lock
+withholds them. The lock is about the panel wandering, not about its size — resizing
+from the right or bottom leaves the panel exactly where the user put it."""
+
+
+def edges_at(local: QPoint, width: int, height: int, margin: int = RESIZE_MARGIN_PX) -> set[Edge]:
+    """Which resize edges a press at `local` (panel coordinates) grabbed.
+
+    Empty means the press is interior, which is a drag. A press outside the panel grabs
+    nothing: a synthesised or stale coordinate must not silently resize from the nearest
+    edge.
+    """
+    if not (0 <= local.x() <= width and 0 <= local.y() <= height):
+        return set()
+    grabbed: set[Edge] = set()
+    if local.x() <= margin:
+        grabbed.add(Edge.LEFT)
+    elif local.x() >= width - margin:
+        grabbed.add(Edge.RIGHT)
+    if local.y() <= margin:
+        grabbed.add(Edge.TOP)
+    elif local.y() >= height - margin:
+        grabbed.add(Edge.BOTTOM)
+    return grabbed
+
+
+def resized(start: OverlayGeometry, edges: set[Edge], dx: int, dy: int) -> OverlayGeometry:
+    """FR23's resize, with the un-dragged edges pinned.
+
+    Size is clamped to FR23's range **and then** the origin is recomputed from the
+    clamped size. Moving `x` by the raw delta and clamping the width separately is the
+    obvious version and it is wrong: at the size limit the panel keeps sliding sideways
+    while its width no longer changes, so a user dragging the left edge past the minimum
+    walks the panel off the screen.
+    """
+    width = (
+        start.width - dx
+        if Edge.LEFT in edges
+        else start.width + dx
+        if Edge.RIGHT in edges
+        else start.width
+    )
+    height = (
+        start.height - dy
+        if Edge.TOP in edges
+        else start.height + dy
+        if Edge.BOTTOM in edges
+        else start.height
+    )
+    proposed = replace(start, width=width, height=height).clamped()
+    x = start.x + (start.width - proposed.width) if Edge.LEFT in edges else start.x
+    y = start.y + (start.height - proposed.height) if Edge.TOP in edges else start.y
+    return replace(proposed, x=x, y=y)
+
+
+_BACK_DIAGONAL = ({Edge.RIGHT, Edge.TOP}, {Edge.LEFT, Edge.BOTTOM})
+"""Corners running ↗↙. The other two run ↖↘."""
+
+
+def _cursor_for(edges: set[Edge]) -> Qt.CursorShape:
+    """The resize affordance for a grabbed edge set.
+
+    A frameless window draws no grips, so the cursor is the *only* signal that an edge is
+    draggable. Corners get the diagonal cursors; an interior press gets the arrow, because
+    a move cursor over the whole panel would suggest the drag is the only thing on offer.
+    """
+    horizontal = edges & {Edge.LEFT, Edge.RIGHT}
+    vertical = edges & {Edge.TOP, Edge.BOTTOM}
+    if horizontal and vertical:
+        if edges in _BACK_DIAGONAL:
+            return Qt.CursorShape.SizeBDiagCursor
+        return Qt.CursorShape.SizeFDiagCursor
+    if horizontal:
+        return Qt.CursorShape.SizeHorCursor
+    if vertical:
+        return Qt.CursorShape.SizeVerCursor
+    return Qt.CursorShape.ArrowCursor
 
 
 @dataclass
@@ -426,12 +675,18 @@ class OverlayPanel(QWidget):
         geometry: OverlayGeometry | None = None,
         *,
         tau_visible_s: float = TAU_VISIBLE_S,
+        on_geometry_changed: Callable[[OverlayGeometry], None] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.geometry_settings = (geometry or OverlayGeometry()).clamped()
         self.timer = SnippetTimer(tau_visible_s=tau_visible_s)
         self.view: SnippetView | None = None
+        self.on_geometry_changed = on_geometry_changed
+        # Set before `apply_geometry`, which the constructor reaches through `_restyle`.
+        self._bullet_texts: tuple[str, ...] = ()
+        self._drag_from: QPoint | None = None
+        self._press_geometry: OverlayGeometry | None = None
+        self._grabbed_edges: set[Edge] = set()
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -439,9 +694,16 @@ class OverlayPanel(QWidget):
             | Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        # Without this the panel only sees a move event while a button is held, which is
+        # enough for dragging but leaves the resize cursor never appearing — so the edge
+        # affordance a frameless window depends on would be invisible.
+        self.setMouseTracking(True)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(PADDING_PX, PADDING_PX, PADDING_PX, PADDING_PX)
+
+        self.indicators = IndicatorBar(self)
+        layout.addWidget(self.indicators)
 
         self.headline = QLabel("")
         self.headline.setWordWrap(True)
@@ -456,6 +718,14 @@ class OverlayPanel(QWidget):
             layout.addWidget(label)
         layout.addStretch(1)
 
+        # FR22's default is top-centre, and only the widget knows which screen it is on.
+        # A caller that supplied geometry keeps it: that is FR26's persisted layout.
+        resolved = (geometry or OverlayGeometry()).clamped()
+        if geometry is None:
+            bounds = ScreenBounds.of(self)
+            if bounds is not None:
+                resolved = resolved.top_centred(bounds)
+        self.geometry_settings = resolved
         self.apply_geometry(self.geometry_settings)
         self._clock_timer: object | None = None
 
@@ -490,13 +760,16 @@ class OverlayPanel(QWidget):
         self.view = view
         self.timer.show(now)
         self.headline.setText(view.display_headline)
+        self._bullet_texts = view.bullets
         for index, label in enumerate(self.bullets):
             if index < len(view.bullets):
-                label.setText(view.bullets[index])
                 label.show()
             else:
                 label.setText("")
                 label.hide()
+        # Sizes then text: elision depends on the font that is about to be applied, so
+        # setting the bullets first would elide against the previous panel height.
+        self._rescale_text()
         self._restyle()
         if replacing:
             self.run_transition()
@@ -561,7 +834,156 @@ class OverlayPanel(QWidget):
         self.resize(self.geometry_settings.width, self.geometry_settings.height)
         self.move(self.geometry_settings.x, self.geometry_settings.y)
         self.setWindowOpacity(self.geometry_settings.opacity)
+        self._rescale_text()
         self._restyle()
+
+    def move_to(self, geometry: OverlayGeometry) -> None:
+        """Position-only update, for FR22's drag.
+
+        Skips the text rescale and the restyle. Both depend on size and brightness and a
+        drag changes neither, but `_apply_halo` builds a fresh `QGraphicsDropShadowEffect`
+        for four labels every time it runs — at pointer rate, on the surface NFR3
+        measures frame time against, with a video call already on the GPU.
+        """
+        self.geometry_settings = geometry.clamped()
+        self.move(self.geometry_settings.x, self.geometry_settings.y)
+
+    def reset_geometry(self) -> OverlayGeometry:
+        """FR55's recovery control: back to a top-centred default on the current screen.
+
+        Persists through the same callback a drag does, so the recovered position is what
+        the next launch loads — a reset that only survives until restart would leave the
+        user back on the off-screen coordinates it just rescued them from.
+        """
+        recovered = self.geometry_settings.reset(ScreenBounds.of(self))
+        self.apply_geometry(recovered)
+        self._persist()
+        return self.geometry_settings
+
+    # ---------- text scaling (FR23) ----------
+
+    @property
+    def text_width(self) -> int:
+        """The width text actually wraps in, which is the panel minus its padding."""
+        return max(1, self.geometry_settings.width - 2 * PADDING_PX)
+
+    def _rescale_text(self) -> None:
+        """Design §9b: height drives size, width drives wrapping.
+
+        Applied to fonts rather than to a stylesheet `font-size`, because elision has to
+        measure the font that will actually render — and a stylesheet is not resolved
+        until paint, which is after the point where the decision has to be made.
+        """
+        headline_font = self.headline.font()
+        headline_font.setPixelSize(headline_px(self.geometry_settings.height))
+        self.headline.setFont(headline_font)
+
+        size = bullet_px(self.geometry_settings.height)
+        for index, label in enumerate(self.bullets):
+            font = label.font()
+            font.setPixelSize(size)
+            label.setFont(font)
+            if index >= len(self._bullet_texts):
+                continue
+            label.setText(
+                elide_to_lines(self._bullet_texts[index], QFontMetrics(font), self.text_width)
+            )
+
+    # ---------- health (FR7, FR20, FR35) ----------
+
+    def update_health(self, health: Health) -> None:
+        """Push design §7's record at the indicator bar (T5.7).
+
+        The panel owns the indicators because FR14a's warning is specified as a bar across
+        *this* panel's top — the thing the user is looking at — and because an indicator
+        surface the user has to go and find is not the persistent one FR20 requires.
+        """
+        self.indicators.update_health(health)
+
+    # ---------- direct manipulation (FR22, FR23, FR27) ----------
+
+    @property
+    def locked(self) -> bool:
+        return self.geometry_settings.locked
+
+    def set_locked(self, locked: bool) -> None:
+        """FR27's toggle. Ends any manipulation in progress, so locking mid-drag stops the
+        panel where it is rather than leaving a grab that resumes on the next move."""
+        self.end_manipulation()
+        self.apply_geometry(replace(self.geometry_settings, locked=locked))
+        self._persist()
+
+    def allowed_edges(self, local: QPoint) -> set[Edge]:
+        """Resize edges available at `local`, after FR27's lock has taken its share."""
+        grabbed = edges_at(local, self.geometry_settings.width, self.geometry_settings.height)
+        if self.locked:
+            grabbed -= MOVING_EDGES
+        return grabbed
+
+    def begin_manipulation(self, local: QPoint, global_pos: QPoint) -> None:
+        """Start a drag or an edge resize. A no-op under the lock unless an edge that
+        does not move the panel was grabbed."""
+        edges = self.allowed_edges(local)
+        if not edges and self.locked:
+            return
+        self._grabbed_edges = edges
+        self._drag_from = global_pos
+        self._press_geometry = self.geometry_settings
+
+    @property
+    def manipulating(self) -> bool:
+        return self._drag_from is not None
+
+    def update_manipulation(self, global_pos: QPoint) -> None:
+        """Apply the movement since the press.
+
+        Deltas are measured from the *press* rather than accumulated between moves, so a
+        clamp at the size or a dropped move event cannot leave the panel offset from the
+        pointer for the rest of the gesture.
+        """
+        if self._drag_from is None or self._press_geometry is None:
+            return
+        dx = global_pos.x() - self._drag_from.x()
+        dy = global_pos.y() - self._drag_from.y()
+        start = self._press_geometry
+        if self._grabbed_edges:
+            self.apply_geometry(resized(start, self._grabbed_edges, dx, dy))
+        else:
+            self.move_to(replace(start, x=start.x + dx, y=start.y + dy))
+
+    def end_manipulation(self) -> None:
+        """Release, and persist what the user left behind (FR26)."""
+        changed = (
+            self._press_geometry is not None and self._press_geometry != self.geometry_settings
+        )
+        self._drag_from = None
+        self._press_geometry = None
+        self._grabbed_edges = set()
+        if changed:
+            self._persist()
+
+    def _persist(self) -> None:
+        if self.on_geometry_changed is not None:
+            self.on_geometry_changed(self.geometry_settings)
+
+    # ---------- Qt event plumbing ----------
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802 — Qt override
+        if event.button() is Qt.MouseButton.LeftButton:
+            self.begin_manipulation(event.position().toPoint(), event.globalPosition().toPoint())
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802 — Qt override
+        if self.manipulating:
+            self.update_manipulation(event.globalPosition().toPoint())
+        else:
+            self.setCursor(_cursor_for(self.allowed_edges(event.position().toPoint())))
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802 — Qt override
+        if event.button() is Qt.MouseButton.LeftButton:
+            self.end_manipulation()
+        super().mouseReleaseEvent(event)
 
     @property
     def palette_tokens(self) -> OverlayPalette:

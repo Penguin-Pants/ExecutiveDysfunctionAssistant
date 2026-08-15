@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 from interview_prep_recall.app import Application
 from interview_prep_recall.session.preflight import PreflightReport
 from interview_prep_recall.settings import AppliedSettings
+from interview_prep_recall.ui.diagnostics_view import DiagnosticsView
 from interview_prep_recall.ui.settings import SettingsDialog
 
 WINDOW_TITLE = "Interview Prep Recall"
@@ -43,6 +44,11 @@ BLOCKED_HEADING = "Not ready to start:"
 RESTART_NOTICE = "Some changes take effect the next time you start the app:"
 
 DialogFactory = Callable[[Application], SettingsDialog]
+DiagnosticsFactory = Callable[[Application], DiagnosticsView]
+
+
+def _default_diagnostics(application: Application) -> DiagnosticsView:
+    return DiagnosticsView(application.ring)
 
 
 def _default_dialog(application: Application) -> SettingsDialog:
@@ -64,6 +70,7 @@ class MainWindow(QMainWindow):
         report: PreflightReport | None = None,
         *,
         dialog_factory: DialogFactory = _default_dialog,
+        diagnostics_factory: DiagnosticsFactory = _default_diagnostics,
         refresh_preflight: Callable[[], PreflightReport] | None = None,
         parent: QWidget | None = None,
     ) -> None:
@@ -71,6 +78,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(WINDOW_TITLE)
         self.application = application
         self._dialog_factory = dialog_factory
+        self._diagnostics_factory = diagnostics_factory
         self._refresh_preflight = refresh_preflight
 
         central = QWidget()
@@ -84,6 +92,10 @@ class MainWindow(QMainWindow):
         self.settings_button = QPushButton("Settings…")
         self.settings_button.clicked.connect(self.open_settings)
         layout.addWidget(self.settings_button)
+
+        self.diagnostics_button = QPushButton("Diagnostics…")
+        self.diagnostics_button.clicked.connect(self.open_diagnostics)
+        layout.addWidget(self.diagnostics_button)
 
         self.setCentralWidget(central)
 
@@ -106,6 +118,19 @@ class MainWindow(QMainWindow):
         if result.needs_restart:
             self.notify_restart(result)
         return result
+
+    def open_diagnostics(self) -> DiagnosticsView:
+        """FR36's "viewable in-app". Returns the view so a caller can drive it.
+
+        Held on the instance: a `QDialog` that goes out of scope is collected and the
+        window vanishes, which is the same defect the overlay's transition animation had.
+        Modeless rather than modal — the ring is worth watching *while* something is
+        going wrong, and a modal dialog would block the window it is diagnosing.
+        """
+        view = self._diagnostics_factory(self.application)
+        self._diagnostics = view
+        view.show()
+        return view
 
     def refresh_status(self) -> None:
         if self._refresh_preflight is not None:

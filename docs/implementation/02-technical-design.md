@@ -906,12 +906,20 @@ clamp outside them:
 | Panel height | Headline | Bullets |
 |---|---|---|
 | 120 (min) | 14px | 13px |
-| 220 (default) | 16px | 15px |
+| 220 (default) | 16px | **14px** *(corrected — see below)* |
 | 600 (max) | 22px | 18px |
 
 ```
 size(h) = clamp(size_min, size_min + (size_max - size_min) * (h - 120) / (600 - 120), size_max)
 ```
+
+**The formula governs; the middle row of the table was wrong (D-45).** At h=220 it gives
+15.67 for the headline, which rounds to the 16px stated — and 14.04 for the bullets, which
+rounds to 14px, not the 15px the row originally carried. Only the two anchor rows are
+independent values; the middle one is derived, and it was derived incorrectly. T5.4
+implements the formula, so `bullet_px(220)` is 14. Nothing downstream moves: 14px clears
+the 13px floor rule stated immediately below, and the bullets stay one step under the
+headline at every height.
 
 Three rules make this checkable:
 

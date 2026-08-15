@@ -315,3 +315,43 @@ def test_a_window_without_a_refresh_hook_still_works(
 
     window = MainWindow(application, _report(blocked=False), dialog_factory=factory)
     assert window.open_settings() is not None
+
+
+# ---------- T5.8: the route into the diagnostics viewer ----------
+
+
+def test_the_window_opens_the_diagnostics_viewer(
+    qapp: QApplication, application: Application
+) -> None:
+    """FR36's "viewable in-app" needs somewhere to be viewed *from*. The buffer and the
+    view both existed and nothing reached either — the same gap T9.2b closed for settings.
+    """
+    application.ring.record("stt_connected", backend="local")
+
+    view = window_with(application).open_diagnostics()
+
+    assert [row[1] for row in view.rows] == ["stt_connected"]
+
+
+def test_the_viewer_is_held_so_it_does_not_vanish(
+    qapp: QApplication, application: Application
+) -> None:
+    """A modeless `QDialog` that goes out of scope is collected and the window disappears
+    — the defect the overlay's transition animation already had."""
+    window = window_with(application)
+
+    view = window.open_diagnostics()
+
+    assert window._diagnostics is view  # noqa: SLF001
+
+
+def test_the_viewer_reads_the_applications_ring(
+    qapp: QApplication, application: Application
+) -> None:
+    """Not a fresh buffer: a viewer wired to its own ring would show an empty table for
+    every session and look like a working feature."""
+    assert window_with(application).open_diagnostics().ring is application.ring
+
+
+def window_with(application: Application) -> MainWindow:
+    return MainWindow(application, _report(blocked=False))

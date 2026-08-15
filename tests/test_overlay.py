@@ -14,37 +14,56 @@ Two guarantees carry real weight here and both are checked rather than described
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 
 import pytest
 
 pytest.importorskip("PySide6", reason="Qt UI tests require the [ui] extra")
 
+from PySide6.QtCore import QPoint, Qt  # noqa: E402
+from PySide6.QtGui import QFontMetrics  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+from interview_prep_recall.session.health import Egress, Health, Status  # noqa: E402
 from interview_prep_recall.ui.overlay import (  # noqa: E402  # noqa: E402
+    BULLET_PX_RANGE,
     DARK_BAND_MAX,
     DEFAULT_BRIGHTNESS,
     DEGRADED_GLYPH,
+    ELLIPSIS,
     HALO_OPACITY_THRESHOLD,
+    HEADLINE_PX_RANGE,
     LIGHT_BAND_MIN,
+    MAX_BULLET_LINES,
     MAX_BULLETS,
     MAX_SIZE,
+    MIN_RENDERED_PX,
     MIN_SIZE,
     NO_MATCH_TEXT,
     TAU_VISIBLE_S,
+    TOP_MARGIN_PX,
+    Edge,
     OverlayGeometry,
     OverlayPanel,
     RenderError,
+    ScreenBounds,
     SnippetState,
     SnippetTimer,
     SnippetView,
     UnknownNoteError,
+    _cursor_for,
+    bullet_px,
     clamp_brightness,
     contrast_ratio,
+    edges_at,
+    elide_to_lines,
     from_stored_note,
+    headline_px,
+    line_count,
     load_geometry,
     no_match_view,
     palette_for,
+    resized,
     save_geometry,
 )
 
@@ -578,3 +597,421 @@ def test_reset_keeps_preferences_that_cannot_hide_the_panel() -> None:
     assert (recovered.width, recovered.height) == (880, 560)
     assert recovered.opacity == pytest.approx(0.55)
     assert recovered.brightness == 80
+
+
+# ---------- T5.4: drag, resize, lock, reset ----------
+
+
+def test_the_default_position_is_top_centre(qapp: QApplication) -> None:
+    """FR22. Asserted against the screen the panel reports rather than a fixed number,
+    because the offscreen platform's display size is not the product's."""
+    panel = OverlayPanel()
+    bounds = ScreenBounds.of(panel)
+    assert bounds is not None
+
+    geometry = panel.geometry_settings
+
+    assert geometry.x == bounds.x + (bounds.width - geometry.width) // 2
+    assert geometry.y == bounds.y + TOP_MARGIN_PX
+
+
+def test_persisted_geometry_beats_the_default_placement(qapp: QApplication) -> None:
+    """FR26 outranks FR22 on every run after the first: a panel the user moved must come
+    back where they left it, not be re-centred."""
+    panel = OverlayPanel(OverlayGeometry(x=17, y=23))
+
+    assert (panel.geometry_settings.x, panel.geometry_settings.y) == (17, 23)
+
+
+def test_first_run_loads_the_top_centre_default() -> None:
+    """Nothing persisted yet, so FR22's placement is what `load_geometry` hands back."""
+    bounds = ScreenBounds(x=0, y=0, width=1920, height=1080)
+
+    loaded = load_geometry(FakeSettings(), bounds)
+
+    assert loaded.x == (1920 - loaded.width) // 2
+    assert loaded.y == TOP_MARGIN_PX
+
+
+def test_a_persisted_position_survives_the_bounds_argument() -> None:
+    stored = FakeSettings()
+    save_geometry(stored, OverlayGeometry(x=-40, y=900))
+
+    loaded = load_geometry(stored, ScreenBounds(0, 0, 1920, 1080))
+
+    assert (loaded.x, loaded.y) == (-40, 900)
+
+
+def test_dragging_moves_the_panel(qapp: QApplication) -> None:
+    """FR22."""
+    panel = OverlayPanel(OverlayGeometry(x=100, y=100))
+
+    panel.begin_manipulation(QPoint(200, 60), QPoint(500, 500))
+    panel.update_manipulation(QPoint(530, 480))
+    panel.end_manipulation()
+
+    assert (panel.geometry_settings.x, panel.geometry_settings.y) == (130, 80)
+
+
+def test_a_drag_is_measured_from_the_press_not_between_moves(qapp: QApplication) -> None:
+    """A dropped move event must not leave the panel offset from the pointer."""
+    panel = OverlayPanel(OverlayGeometry(x=100, y=100))
+
+    panel.begin_manipulation(QPoint(200, 60), QPoint(500, 500))
+    panel.update_manipulation(QPoint(510, 500))
+    panel.update_manipulation(QPoint(560, 500))
+    panel.end_manipulation()
+
+    assert panel.geometry_settings.x == 160
+
+
+def test_the_lock_makes_dragging_a_no_op(qapp: QApplication) -> None:
+    """FR27."""
+    panel = OverlayPanel(OverlayGeometry(x=100, y=100, locked=True))
+
+    panel.begin_manipulation(QPoint(200, 60), QPoint(500, 500))
+    panel.update_manipulation(QPoint(900, 900))
+    panel.end_manipulation()
+
+    assert (panel.geometry_settings.x, panel.geometry_settings.y) == (100, 100)
+
+
+def test_lock_and_drag_are_independent_controls(qapp: QApplication) -> None:
+    """Unlocking restores dragging; the lock is a mode, not a one-way door."""
+    panel = OverlayPanel(OverlayGeometry(x=100, y=100, locked=True))
+    panel.set_locked(False)
+
+    panel.begin_manipulation(QPoint(200, 60), QPoint(0, 0))
+    panel.update_manipulation(QPoint(25, 0))
+    panel.end_manipulation()
+
+    assert panel.geometry_settings.x == 125
+
+
+def test_locking_mid_drag_stops_the_panel_where_it_is(qapp: QApplication) -> None:
+    panel = OverlayPanel(OverlayGeometry(x=100, y=100))
+    panel.begin_manipulation(QPoint(200, 60), QPoint(0, 0))
+    panel.update_manipulation(QPoint(30, 0))
+
+    panel.set_locked(True)
+    panel.update_manipulation(QPoint(400, 0))
+
+    assert panel.geometry_settings.x == 130
+
+
+def test_an_edge_press_resizes_rather_than_dragging(qapp: QApplication) -> None:
+    """FR23's edge drag. A frameless window has no grips, so the margin is the affordance."""
+    panel = OverlayPanel(OverlayGeometry(x=100, y=100, width=420, height=220))
+
+    panel.begin_manipulation(QPoint(419, 120), QPoint(0, 0))
+    panel.update_manipulation(QPoint(60, 0))
+    panel.end_manipulation()
+
+    assert panel.geometry_settings.width == 480
+    assert (panel.geometry_settings.x, panel.geometry_settings.y) == (100, 100)
+
+
+def test_resizing_from_the_left_edge_pins_the_right_one(qapp: QApplication) -> None:
+    start = OverlayGeometry(x=100, y=100, width=420, height=220)
+
+    resized_geometry = resized(start, {Edge.LEFT}, dx=-40, dy=0)
+
+    assert resized_geometry.width == 460
+    assert resized_geometry.x == 60
+    assert resized_geometry.x + resized_geometry.width == start.x + start.width
+
+
+def test_the_panel_stops_sliding_when_the_size_clamps(qapp: QApplication) -> None:
+    """The obvious implementation walks the panel sideways forever once the width has hit
+    its minimum. FR23's range is a limit on the size *and* on the movement it causes."""
+    start = OverlayGeometry(x=100, y=100, width=MIN_SIZE[0], height=220)
+
+    resized_geometry = resized(start, {Edge.LEFT}, dx=400, dy=0)
+
+    assert resized_geometry.width == MIN_SIZE[0]
+    assert resized_geometry.x == 100
+
+
+def test_resize_is_clamped_to_the_fr23_range(qapp: QApplication) -> None:
+    start = OverlayGeometry(x=0, y=0, width=420, height=220)
+
+    assert resized(start, {Edge.RIGHT, Edge.BOTTOM}, 5000, 5000).width == MAX_SIZE[0]
+    assert resized(start, {Edge.RIGHT, Edge.BOTTOM}, 5000, 5000).height == MAX_SIZE[1]
+    assert resized(start, {Edge.RIGHT, Edge.BOTTOM}, -5000, -5000).width == MIN_SIZE[0]
+
+
+def test_the_lock_withholds_only_the_edges_that_move_the_panel(qapp: QApplication) -> None:
+    """FR27 is about the panel wandering. Resizing from the right or bottom leaves it
+    exactly where the user put it, so the lock has no business blocking it."""
+    panel = OverlayPanel(OverlayGeometry(x=100, y=100, width=420, height=220, locked=True))
+
+    assert panel.allowed_edges(QPoint(1, 110)) == set()
+    assert panel.allowed_edges(QPoint(419, 110)) == {Edge.RIGHT}
+
+
+def test_a_press_outside_the_panel_grabs_nothing() -> None:
+    assert edges_at(QPoint(-5, 50), 420, 220) == set()
+    assert edges_at(QPoint(430, 50), 420, 220) == set()
+
+
+def test_an_interior_press_is_a_drag_not_a_resize() -> None:
+    assert edges_at(QPoint(210, 110), 420, 220) == set()
+
+
+def test_corners_grab_both_edges() -> None:
+    assert edges_at(QPoint(0, 0), 420, 220) == {Edge.LEFT, Edge.TOP}
+    assert edges_at(QPoint(419, 219), 420, 220) == {Edge.RIGHT, Edge.BOTTOM}
+
+
+def test_a_finished_drag_is_persisted(qapp: QApplication) -> None:
+    """FR26. A position that survives only until restart is not the requirement."""
+    saved: list[OverlayGeometry] = []
+    panel = OverlayPanel(OverlayGeometry(x=100, y=100), on_geometry_changed=saved.append)
+
+    panel.begin_manipulation(QPoint(200, 60), QPoint(0, 0))
+    panel.update_manipulation(QPoint(40, 0))
+    panel.end_manipulation()
+
+    assert saved and saved[-1].x == 140
+
+
+def test_a_drag_that_changed_nothing_is_not_persisted(qapp: QApplication) -> None:
+    saved: list[OverlayGeometry] = []
+    panel = OverlayPanel(OverlayGeometry(x=100, y=100), on_geometry_changed=saved.append)
+
+    panel.begin_manipulation(QPoint(200, 60), QPoint(0, 0))
+    panel.end_manipulation()
+
+    assert saved == []
+
+
+def test_reset_recovers_a_panel_dragged_off_screen(qapp: QApplication) -> None:
+    """FR55 end to end: persisted off-screen coordinates, restored by the control."""
+    saved: list[OverlayGeometry] = []
+    panel = OverlayPanel(
+        OverlayGeometry(x=-9000, y=-9000, locked=True), on_geometry_changed=saved.append
+    )
+    bounds = ScreenBounds.of(panel)
+    assert bounds is not None
+
+    recovered = panel.reset_geometry()
+
+    assert recovered.x == bounds.x + (bounds.width - recovered.width) // 2
+    assert recovered.y == bounds.y + TOP_MARGIN_PX
+    assert recovered.locked is False
+    assert saved[-1] == recovered, "FR55 must survive the restart it is rescuing the user from"
+
+
+def test_top_centring_uses_the_clamped_size() -> None:
+    """A persisted width outside FR23's range must not push the recovered panel off the
+    side of the screen it was just centred on."""
+    bounds = ScreenBounds(0, 0, 1000, 800)
+
+    centred = OverlayGeometry(width=5000).top_centred(bounds)
+
+    assert centred.width == MAX_SIZE[0]
+    assert centred.x == (1000 - MAX_SIZE[0]) // 2
+
+
+# ---------- T5.4: FR23's text scaling ----------
+
+
+def test_text_scales_with_panel_height() -> None:
+    """FR23: text scales rather than clipping, and design §9b's formula governs."""
+    assert headline_px(MIN_SIZE[1]) == HEADLINE_PX_RANGE[0]
+    assert headline_px(MAX_SIZE[1]) == HEADLINE_PX_RANGE[1]
+    assert bullet_px(MIN_SIZE[1]) == BULLET_PX_RANGE[0]
+    assert bullet_px(MAX_SIZE[1]) == BULLET_PX_RANGE[1]
+
+
+def test_scaling_is_monotonic_across_the_supported_range() -> None:
+    heights = list(range(MIN_SIZE[1], MAX_SIZE[1] + 1))
+    for smaller, larger in zip(heights, heights[1:], strict=False):
+        assert headline_px(smaller) <= headline_px(larger)
+        assert bullet_px(smaller) <= bullet_px(larger)
+
+
+@pytest.mark.parametrize("height", list(range(MIN_SIZE[1], MAX_SIZE[1] + 1, 7)))
+def test_nothing_renders_below_the_glanceable_floor(height: int) -> None:
+    """Design §9b's first checkable rule. Below 13px the overlay stops being glanceable,
+    which is the only thing it exists to be."""
+    assert bullet_px(height) >= MIN_RENDERED_PX
+    assert headline_px(height) >= MIN_RENDERED_PX
+
+
+def test_scaling_clamps_outside_the_supported_range() -> None:
+    assert headline_px(10) == HEADLINE_PX_RANGE[0]
+    assert headline_px(5000) == HEADLINE_PX_RANGE[1]
+
+
+def test_the_panel_applies_the_scaled_sizes(qapp: QApplication) -> None:
+    small = OverlayPanel(OverlayGeometry(width=320, height=MIN_SIZE[1]))
+    large = OverlayPanel(OverlayGeometry(width=320, height=MAX_SIZE[1]))
+
+    assert small.headline.font().pixelSize() == headline_px(MIN_SIZE[1])
+    assert large.headline.font().pixelSize() == headline_px(MAX_SIZE[1])
+    assert large.headline.font().pixelSize() > small.headline.font().pixelSize()
+
+
+def test_resizing_rescales_live_text(qapp: QApplication) -> None:
+    panel = OverlayPanel(OverlayGeometry(width=420, height=MIN_SIZE[1]))
+    before = panel.headline.font().pixelSize()
+
+    panel.apply_geometry(replace(panel.geometry_settings, height=MAX_SIZE[1]))
+
+    assert panel.headline.font().pixelSize() > before
+
+
+def test_a_long_bullet_elides_rather_than_growing_unboundedly(qapp: QApplication) -> None:
+    """Design §9b: two lines, then ellipsis — and only after scaling has hit the floor."""
+    long_source = "word " * 400
+    panel = OverlayPanel(OverlayGeometry(width=MIN_SIZE[0], height=MIN_SIZE[1]))
+
+    panel.show_snippet(
+        SnippetView(
+            headline="word word",
+            bullets=(long_source.strip(),),
+            state=SnippetState.CONFIRMED,
+            source_text=long_source,
+        ),
+        now=0.0,
+    )
+
+    rendered = panel.bullets[0].text()
+    assert rendered.endswith(ELLIPSIS)
+    assert len(rendered) < len(long_source)
+    metrics = QFontMetrics(panel.bullets[0].font())
+    assert line_count(rendered, metrics, panel.text_width) <= MAX_BULLET_LINES
+
+
+def test_a_short_bullet_is_rendered_verbatim(qapp: QApplication) -> None:
+    """FR11's substring rule is what elision must not quietly break, so a bullet that
+    fits is never touched."""
+    panel = OverlayPanel(OverlayGeometry(width=MAX_SIZE[0], height=MAX_SIZE[1]))
+
+    panel.show_snippet(
+        SnippetView(
+            headline="Led the migration off the monolith.",
+            bullets=("Cut p99 latency from 900ms to 120ms.",),
+            state=SnippetState.CONFIRMED,
+            source_text=SOURCE,
+        ),
+        now=0.0,
+    )
+
+    assert panel.bullets[0].text() == "Cut p99 latency from 900ms to 120ms."
+    assert panel.bullets[0].text() in SOURCE
+
+
+def test_elision_needs_at_least_one_line(qapp: QApplication) -> None:
+    panel = OverlayPanel()
+    metrics = QFontMetrics(panel.bullets[0].font())
+    with pytest.raises(ValueError, match="max_lines"):
+        elide_to_lines("anything", metrics, 200, max_lines=0)
+
+
+def test_widening_the_panel_restores_elided_text(qapp: QApplication) -> None:
+    """Width drives wrapping, height drives size — so a wider panel needs less elision at
+    the same font."""
+    text = "Cut p99 latency from 900 milliseconds to 120 milliseconds across the fleet."
+    source = f"{text} And more."
+    narrow = OverlayPanel(OverlayGeometry(width=MIN_SIZE[0], height=MIN_SIZE[1]))
+    wide = OverlayPanel(OverlayGeometry(width=MAX_SIZE[0], height=MIN_SIZE[1]))
+    view = SnippetView(
+        headline="Cut p99", bullets=(text,), state=SnippetState.CONFIRMED, source_text=source
+    )
+
+    narrow.show_snippet(view, now=0.0)
+    wide.show_snippet(view, now=0.0)
+
+    assert wide.bullets[0].text() == text
+    assert len(narrow.bullets[0].text()) <= len(wide.bullets[0].text())
+
+
+def test_the_cursor_signals_which_edge_was_grabbed() -> None:
+    """The only resize affordance a frameless window has."""
+    assert _cursor_for(set()) is Qt.CursorShape.ArrowCursor
+    assert _cursor_for({Edge.LEFT}) is Qt.CursorShape.SizeHorCursor
+    assert _cursor_for({Edge.BOTTOM}) is Qt.CursorShape.SizeVerCursor
+    assert _cursor_for({Edge.LEFT, Edge.TOP}) is Qt.CursorShape.SizeFDiagCursor
+    assert _cursor_for({Edge.RIGHT, Edge.TOP}) is Qt.CursorShape.SizeBDiagCursor
+    assert _cursor_for({Edge.LEFT, Edge.BOTTOM}) is Qt.CursorShape.SizeBDiagCursor
+
+
+# ---------- T5.7 at the panel boundary ----------
+
+
+def test_the_panel_carries_the_indicator_bar(qapp: QApplication) -> None:
+    """FR14a's warning is specified as a bar across *this* panel's top, and FR20 requires
+    a persistent indicator — neither works on a surface the user has to go and find."""
+    panel = OverlayPanel()
+
+    panel.update_health(Health(loopback=Status.OK, egress=Egress.LLM, capture_excluded=False))
+
+    assert panel.indicators.capture.capturing is True
+    assert panel.indicators.egress.llm.lit is True
+    assert panel.indicators.exclusion.isVisibleTo(panel) is True
+
+
+def test_elision_only_ever_cuts_from_the_end(qapp: QApplication) -> None:
+    """FR11 across the one place a rendered string is not byte-identical to the note.
+
+    Truncate-and-append is inside the guarantee; substituting or reordering would not be,
+    and a smarter middle-elide added later would break it silently. So the property is
+    asserted rather than described.
+    """
+    long_source = "Cut p99 latency from 900ms to 120ms across every service in the fleet. " * 12
+    panel = OverlayPanel(OverlayGeometry(width=MIN_SIZE[0], height=MIN_SIZE[1]))
+
+    panel.show_snippet(
+        SnippetView(
+            headline="Cut p99 latency",
+            bullets=(long_source.strip(),),
+            state=SnippetState.CONFIRMED,
+            source_text=long_source,
+        ),
+        now=0.0,
+    )
+
+    rendered = panel.bullets[0].text()
+    assert rendered.endswith(ELLIPSIS)
+    assert long_source.startswith(rendered.removesuffix(ELLIPSIS))
+
+
+def test_a_drag_does_not_rebuild_the_halo_effects(qapp: QApplication) -> None:
+    """A full restyle per mouse-move rebuilds a drop-shadow effect on four labels at
+    pointer rate, on the surface NFR3 measures frame time against. A drag changes neither
+    size nor brightness, so it must not trigger one."""
+    panel = OverlayPanel(OverlayGeometry(x=100, y=100, opacity=0.5))
+    assert panel.halo_engaged is True
+    before = panel.headline.graphicsEffect()
+
+    panel.begin_manipulation(QPoint(200, 60), QPoint(0, 0))
+    panel.update_manipulation(QPoint(40, 20))
+    panel.end_manipulation()
+
+    assert panel.geometry_settings.x == 140
+    assert panel.headline.graphicsEffect() is before
+
+
+def test_a_resize_still_restyles(qapp: QApplication) -> None:
+    """The lighter drag path must not cost the rescale a resize genuinely needs."""
+    panel = OverlayPanel(OverlayGeometry(x=0, y=0, width=420, height=MIN_SIZE[1]))
+    before = panel.headline.font().pixelSize()
+
+    panel.begin_manipulation(QPoint(210, MIN_SIZE[1] - 1), QPoint(0, 0))
+    panel.update_manipulation(QPoint(0, 300))
+    panel.end_manipulation()
+
+    assert panel.geometry_settings.height > MIN_SIZE[1]
+    assert panel.headline.font().pixelSize() > before
+
+
+def test_the_indicator_groups_do_not_repaint_the_state_rail(qapp: QApplication) -> None:
+    """The panel's `QWidget { border-left: … }` applies to every widget under it, so a
+    container without its own border would draw a second copy of the FR51 rail."""
+    panel = OverlayPanel()
+    panel.update_health(Health(loopback=Status.OK))
+
+    for container in (panel.indicators, panel.indicators.egress, panel.indicators.health):
+        assert "border: none" in container.styleSheet()

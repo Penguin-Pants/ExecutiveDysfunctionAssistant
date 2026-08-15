@@ -14,7 +14,7 @@ TS§ = [test strategy](./04-test-strategy.md) section
 | FR4 | PRD | D§4 | T3.7 | Unit |
 | FR5 | PRD | D§1 | T1.1 | Manual × 3 apps |
 | FR6 | PRD (superseded by D-U2) | D§1, D§8 | T1.2 | Soak, TS§4 |
-| FR7 | PRD | D§6 | T6.1 | Unit (no thread in IDLE) |
+| FR7 | PRD | D§6, D§9b | T6.1, T5.7 ✅ | Unit (no thread in IDLE) + chip state |
 | FR8 | PRD | D§1 | T1.3, T2.2 | Unit |
 | FR9 | PRD | D§5 | T4.1 ✅, T4.2 ✅ | Integration |
 | FR10 | PRD | D§5 | T4.2 | Unit (request shape) |
@@ -22,15 +22,15 @@ TS§ = [test strategy](./04-test-strategy.md) section
 | FR12 | PRD (v1 per D-U1) | D§1, D§5 (τ_track) | T7.1, T7.4 | Integration |
 | FR13 | PRD | D§9b | T5.5 | Unit |
 | FR14 | PRD | D§1 | T5.2 | **Manual 6-way matrix**, TS§3 |
-| FR14a | Review A15 | D§7, D§9 | T5.2 | Unit (stubbed failure) |
+| FR14a | Review A15 | D§7, D§9 | T5.2, T5.7 ✅ | Unit (stubbed failure). T5.7 renders the warning bar from `capture_excluded`; T5.2 supplies the failure it renders |
 | FR15 | PRD | D§6 | T6.2 | Audio-zeroing + reference-sweep, TS§3 |
 | FR16 | PRD (rewritten, review A3) | D§4 | T6.4, T9.4 | **ProcMon allowlist**, TS§3 |
 | FR17 | PRD | **D§2** | T2.1 | Conformance suite |
 | FR18 | PRD | D§2 | T2.2, T8.1–2 | Config test |
 | FR19 | PRD | D§4 | **T0.5**, T8.3 | Grep test |
-| FR20 | PRD | D§7 | T5.7, T8.5 | Unit per egress path |
+| FR20 | PRD | D§7, D§9b | T5.7 ✅, T8.5 ✅ | Unit per egress path |
 | FR21 | PRD | D§9 | T8.4 | Fault injection |
-| FR22–27 | PRD | **D§9b** | T5.4, T5.5, T5.6 | Unit |
+| FR22–27 | PRD | **D§9b** | T5.4 ✅, T5.4a ✅, T5.5 ✅, T5.6 ✅ | Unit |
 | FR65 | D-U7a | **D§9b** | T5.4 | **Sweep the full control; every reachable setting clears 4.5:1** |
 | FR28 | Review A1 | D§4 | T3.2 | **`taskkill` × 10**, TS§3 |
 | FR29 | Review A1 | D§4 | T3.2, **T3.9** | Unit + restore UI |
@@ -39,8 +39,8 @@ TS§ = [test strategy](./04-test-strategy.md) section
 | FR32 | Review A6 (corrected) | **D§5** | T4.3 ✅ | **Out-of-order test**, TS§3 |
 | FR33 | Review A7 | D§8 | T6.6 | Saturation + soak, TS§3 |
 | FR34 | Review A10 | D§4 | T3.6 | Unit |
-| FR35 | Review A11 | **D§7** | T5.7 | Unit per state |
-| FR36 | Review A12 | D§1 | T0.3, **T5.8** | Content-leak grep, TS§3 |
+| FR35 | Review A11 | **D§7** | T5.7 ✅ | Pairwise-distinctness over every D§7 state |
+| FR36 | Review A12 | D§1 | T0.3 ✅, **T5.8** ✅ | Content-leak grep, TS§3 |
 | FR37 | Review A13 | D§9 | T6.7, T9.2, T9.2b | Integration |
 | FR38 | Review A14 | **D§6 (classification table)** | T6.5, T9.6 | Unit per precondition |
 | FR39a | Review A16 | D§9 | T1.4 | Manual device switch |
@@ -60,7 +60,7 @@ TS§ = [test strategy](./04-test-strategy.md) section
 | FR52 | US-D3 | D§5 | T9.2, T9.2a | Unit + Qt (offscreen) |
 | FR53 | D-10 | D§1 | T4.6 ✅ | Unit |
 | FR54 | New (FR13 gap) | D§5 | T5.5 | Unit |
-| FR55 | Review A22 | D§1 | T5.4 | Off-screen recovery |
+| FR55 | Review A22 | D§1 | T5.4 ✅ | Off-screen recovery |
 | FR56 | US-G2 | D§1 | T7.1 | **Loopback-must-not-mark**, with a positive control |
 | FR57 | D-8 | D§1, **D§5a** | T7.2 (blocked), **T7.3 done** | Both directions of arrival; interviewer span proven still to match |
 | FR58 | Review A2 | **D§6** | T6.3 | SHA before/after |

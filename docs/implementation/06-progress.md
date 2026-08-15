@@ -17,7 +17,7 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | **M2 — STT interface & local backend** | 🟢 T2.1–T2.3 complete | Interface, local backend, assembler. T2.4 is the **AS-1 latency gate** and genuinely needs the target laptop. T2.2's model adapter is unverified (**AS-9**) |
 | **M3 — Notes store & indexing** | 🟢 Logic complete | T3.1–T3.6 done. T3.7–T3.9 are Qt UI, deferred to Windows |
 | **M4 — Matching pipeline** | 🟢 T4.1–T4.6 complete | T4.7 **blocked**: needs the user's labelled fixtures |
-| **M5 — Overlay UI** | 🟡 Core complete | T5.1, T5.3, T5.4a, T5.5, T5.6 done and tested offscreen. Remaining: T5.2 (`SetWindowDisplayAffinity`, Windows), T5.4's drag/resize/lock, T5.7 indicators, T5.8 diagnostics viewer, T5.9 latency harness (needs the laptop) |
+| **M5 — Overlay UI** | 🟢 Everything buildable here is done | T5.1, T5.3, T5.4, T5.4a, T5.5, T5.6, T5.7, T5.8 complete and tested offscreen. Remaining: **T5.2** (`SetWindowDisplayAffinity` — Windows) and **T5.9** (end-to-end latency, needs the D-U6 laptop). Nothing else in M5 is buildable in this container |
 | **M6 — Session lifecycle** | 🟢 Logic complete · panic on hold (D-U11) | T6.1–T6.3, T6.5 classification, T6.6 backpressure, T6.7 done. T6.4 and the OS trigger paths need Windows |
 | **M7 — Progress tracker** | 🟢 T7.1 + T7.3 complete | Marking and text-domain echo suppression done. T7.2 needs paired audio fixtures; T7.4 is Qt |
 | **M8 — Cloud STT backends** | 🟢 T8.1–T8.5 complete | Deepgram, ElevenLabs, fallback, egress. Protocols unverified against a live endpoint (**AS-8**) |
@@ -25,10 +25,14 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | **M10 — Typed context sources** | 🟢 T10.1–T10.6 + migration complete | Five kinds, per-kind caps and thresholds, schema v1→v2 migration. T10.7 is Qt |
 | **M11 — Post-interview report** | 🟢 T11.1, T11.3–T11.9 complete | Record, evidence binding, encrypted store, retention, generation. T11.2's DPAPI binding and T11.10 need Windows |
 
-**Next action: nothing substantial in M9 is buildable here.** T9.3 needs audio hardware, T9.6a
-needs FR43's active-note-set selection *and* the Windows-only embedder and cipher, T9.4 cannot
-cross-compile, T9.5 needs live vendor docs. The remaining Qt work is in **M5's overlay widget**
-and **T7.4's checklist rendering** — both buildable offscreen, both previously mislabelled.
+**Next action: T7.4's checklist rendering (FR12), then T10.7's per-kind marking.** M5 is now
+closed except for its two genuinely hardware-bound tasks, so the remaining buildable Qt work is
+in M7 and M10. T7.4 is specified in design §9b's tracker token row — docked below the bullets,
+max 5 rows then scroll, never displacing the snippet — and the overlay it docks into now exists.
+
+The previous version of this paragraph named M5's overlay widget and T7.4 together. M5's half is
+done; T7.4's is not, and it was not touched here because it is a different milestone and this
+phase was M5.
 
 That sentence has been wrong five times, so treat it as a claim to re-test rather than a fact.
 What is different this time is that T9.3's blocker was *verified* rather than assumed:
@@ -54,8 +58,9 @@ behind that one word for five milestones.
 
 Remaining, re-sorted after the Qt discovery:
 
-- **Buildable and testable here (Qt, offscreen):** T7.4's checklist rendering, T10.7's per-kind
-  marking, and the *widget* half of M5's overlay.
+- **Buildable and testable here (Qt, offscreen):** T7.4's checklist rendering and T10.7's per-kind
+  marking. *(M5's overlay widget was on this list and is now done — T5.4, T5.7 and T5.8 landed on
+  2026-08-15.)*
 - **Genuinely needs Windows:** M1 (WASAPI, AS-2 gate), T2.4 (AS-1, needs the D-U6 laptop's CPU),
   T5.2's `SetWindowDisplayAffinity`, T6.4's ProcMon trace, T9.1a's device-open enforcement,
   T9.4's PyInstaller build, T11.2's DPAPI binding, T11.10.
@@ -145,6 +150,105 @@ conservative choice, just a broken one.
 ---
 
 ## Log
+
+### M5 — T5.4, T5.7, T5.8 · complete · 2026-08-15
+
+`ui/overlay.py` (direct manipulation, FR22's default placement, FR23's text scaling),
+`ui/indicators.py` (built out from a four-line stub), the new `ui/diagnostics_view.py`, and a
+route to it from `ui/main_window.py`. Tests: `tests/test_overlay.py` +49, new
+`tests/test_indicators.py` (15), new `tests/test_diagnostics_view.py` (10),
+`tests/test_main_window.py` +3. **868 passing**, ruff and `mypy` clean.
+
+**M5's Qt half is finished.** What is left is T5.2's `SetWindowDisplayAffinity` and T5.9's
+latency harness, and both were re-tested against the standing caution above rather than
+inherited: T5.2 is one `ctypes` call into `user32` that does not exist off Windows, and T5.9
+measures p50/p95 on the D-U6 laptop's CPU, which is a machine and not a toolkit. Neither is a
+"needs Windows" label standing in for unexamined code.
+
+#### What each task actually closed
+
+**T5.4 (FR22, FR23, FR27, FR55).** Drag, edge-resize and lock, plus the two things the task row
+listed and the code did not have: FR22's *top-centre* default (the geometry default was 100,100)
+and FR23's text scaling, which §9b specifies and nothing implemented — a fixed-font panel would
+have satisfied the size range and still failed the requirement.
+
+The manipulation logic is split from the Qt events: `begin_manipulation` / `update_manipulation`
+/ `end_manipulation` take plain points, and `mousePressEvent` and friends only translate. A
+frameless window has no title bar and no system grips, so this code *is* the window manager for
+the panel; testing it through synthesised OS input would have left its clamping untested, which
+is the half that can lose the panel off-screen.
+
+Three findings came out of building it, all recorded as decisions:
+
+* **D-47** — clamping the size and moving the origin independently lets a left-edge drag walk the
+  panel sideways forever once the width is at its minimum. It is a *new* way to reach the state
+  FR55 exists to recover from, so the origin is now recomputed from the clamped size.
+* **D-46** — the lock withholds dragging and the left/top edges only. FR27 is about the panel
+  wandering; a right-edge drag moves nothing.
+* **D-45** — design §9b states text scaling as a formula *and* an anchor table, and they disagree
+  by 1px on the bullets at the default height. The formula governs, the table's derived middle
+  row was corrected in §9b, and `bullet_px(220)` is 14.
+
+**T5.7 (FR7, FR14a, FR20, FR35).** `indicators.py` was a four-line stub. FR35's requirement is
+not that any state renders but that **every state in design §7 renders distinctly**, which is a
+property of the *set* — so the test drives all eleven states and asserts the renderings are
+pairwise different. A per-state assertion would pass with two states painted identically, which
+is the failure the requirement names.
+
+OB-1's "no match vs broken" distinction holds structurally rather than by colour choice: nothing
+matching is a **content** state on the panel, `Health.indicators()` never returns it, and no
+health state can produce it. They are two signals, not two renderings of one.
+
+FR20 is one dot per path, not a shared "something is leaving" dot — a user who has switched one
+path off (FR37) has to see that one went dark and the other did not. FR14a's bar takes
+`bool | None` and shows only on a known failure: before the check has run there is nothing
+truthful to say, and a bar defaulting to "you are hidden" is the silent assumption of success
+FR14a exists to forbid. **T5.2 still owns producing that failure**; T5.7 only renders it.
+
+**T5.8 (FR36).** T0.3 built the buffer and its no-content guarantee; FR36 also required it to be
+viewable in-app and exportable, and neither existed. New module (**D-49**), reached from the main
+window — the same gap T9.2b closed for settings, where the piece existed and nothing constructed
+it. The viewer re-validates nothing: the guarantee lives at `record()`, and a second filter here
+would let unsafe events into the buffer and hide them from one reader.
+
+#### Found in self-review, fixed before the push
+
+* **The panel's style sheet was about to repaint the FR51 rail three more times.** `OverlayPanel`
+  styles itself with a bare `QWidget { … border-left: 3px solid … }`, and a Qt style sheet on a
+  parent applies to every widget beneath it. The panel's own labels already carried
+  `border: none` for this reason; the three containers that arrived with T5.7 did not, so each
+  indicator group would have drawn its own copy of the state rail. Every container now states its
+  own background and border, and a test holds it.
+* **A drag was doing a full restyle per mouse-move** (**D-48**), rebuilding a
+  `QGraphicsDropShadowEffect` on four labels at pointer rate on the surface NFR3 measures. Drags
+  now take a position-only path; resizes still restyle, and both are tested.
+* **Elision is the one place a rendered string is not byte-identical to the note** (**D-50**).
+  FR23 permits it and FR11 forbids anything the user did not write, and the two only coexist
+  because the operation is truncate-and-append: what remains is a prefix, and the ellipsis is
+  fixed product copy. That is now asserted, not described — a middle-elide added later would look
+  like a cosmetic improvement and would quietly end the guarantee.
+
+#### Deferred, with reasons
+
+* **The overlay is not yet wired into `Application` or `MainWindow`.** `OverlayPanel` takes an
+  `on_geometry_changed` callback and a `Health`, and nothing in production supplies either — the
+  session cannot start yet (capture is M1), so there is no producer to connect. This is the
+  T9.2b-shaped gap the composition root exists to close, and it belongs to whichever task first
+  has a running session. **Recorded as a follow-up, not as done.**
+* **`QSettings` is not yet the store behind `save_geometry` / `load_geometry` in production.**
+  Same reason: T5.6's round-trip is tested against the double, and the real settings object gets
+  attached when the app owns an overlay instance.
+* **T5.9's harness is not stubbed.** Writing a latency harness that cannot run measures nothing
+  and would report a number from this container's CPU as if it were the D-U6 laptop's.
+
+#### The environment note, re-tested
+
+Qt again ran headless here without incident, including `QFontMetrics` text measurement, graphics
+effects and `QTableWidget`. Worth stating because font metrics are the one part of this that
+plausibly *could* have differed under `offscreen` — they do not; the platform plugin still
+resolves a real font. The elision tests assert relative properties (fewer characters, at most two
+lines, a prefix of the source) rather than pixel counts, so they hold on CI's Windows runner where
+the font stack is different.
 
 ### T9.6 — Application entry point · complete · 2026-08-14
 
