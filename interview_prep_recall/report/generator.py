@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Protocol
 
 from interview_prep_recall.diagnostics.ring import DiagnosticRing
@@ -115,8 +116,59 @@ the schema — is what keeps it honest.
 """
 
 
+class ContextProvenance(Enum):
+    """Whose notes this report was graded against (D-58, T11.10c).
+
+    The distinction is the whole point: a report is a judgment about how well the user
+    covered *their* prep, JD and resume, and grading last week's interview against this
+    week's notes produces findings that are wrong in a way nothing on the page reveals.
+    """
+
+    SESSION = "session"
+    """The context the interview was actually held against — live, or restored from the
+    session's snapshot."""
+
+    SUBSTITUTED = "substituted"
+    """Today's context set, used because the session carries no readable snapshot. Every
+    surface that renders the report **must say so**; that is the entire reason this enum
+    exists rather than a bare bool nobody would render."""
+
+
+SUBSTITUTED_CONTEXT_NOTICE = (
+    "This report was graded against your CURRENT notes, not the ones loaded during the "
+    "interview — this session predates context snapshots, or its snapshot could not be "
+    "read. Coverage of prep points is still the tracker's verdict from the day, but the "
+    "job-description and resume sections may not reflect what you actually prepared."
+)
+"""Stated in the report itself, not only in a log.
+
+Half-true is the dangerous state here: FR78a's coverage still comes from the session, so
+the report is not wholly wrong — which makes an unqualified one *more* convincing, not
+less."""
+
+
 class ReportUnavailableError(Exception):
     """Generation refused, with a reason the UI shows verbatim (FR80, FR81)."""
+
+
+@dataclass(frozen=True)
+class PreparedReport:
+    """A report's payload, built and priced but not yet sent (T11.10b).
+
+    Exists so the confirmation and the network call can happen on different threads
+    without the size shown drifting from the size sent — both come from this object.
+    """
+
+    prompt: str
+    record: SessionRecord
+    context_set: ContextSet
+    missed_note_ids: frozenset[str]
+    context_provenance: ContextProvenance
+
+    @property
+    def size_bytes(self) -> int:
+        """What FR81 announces before anything leaves the device."""
+        return len(self.prompt.encode("utf-8"))
 
 
 class MessagesClient(Protocol):
@@ -130,6 +182,7 @@ class Report:
     truncated: bool
     absent_sources: tuple[SourceKind, ...]
     discarded: int = 0
+    context_provenance: ContextProvenance = ContextProvenance.SESSION
     """Findings the model produced that did not survive — evidence rejections **plus**
     items too malformed to become findings at all.
 
@@ -154,6 +207,7 @@ class Report:
             "rejected_findings": self.discarded,
             "truncated": self.truncated,
             "absent_sources": [k.value for k in self.absent_sources],
+            "context_provenance": self.context_provenance.value,
         }
 
 
@@ -183,12 +237,48 @@ class ReportGenerator:
         *,
         missed_note_ids: frozenset[str],
         confirm: Callable[[int], bool],
+        context_provenance: ContextProvenance = ContextProvenance.SESSION,
     ) -> Report:
         """Build the report. `confirm` is asked **every** run, with the payload size.
 
         Not a remembered preference: the thing being confirmed is that this specific
         interview — including the other person's words — leaves the device now. A
         setting checked once cannot carry that.
+
+        **`prepare` + `send` for a UI caller** (T11.10b). This method does both halves in
+        one blocking call, which is right for a script or a test and wrong for a GUI: the
+        model call is seconds long, and running it where `confirm` has to be asked means
+        running it on the thread that draws. Callers with an event loop use the two halves
+        directly and keep the confirmation on their own thread.
+        """
+        prepared = self.prepare(
+            record,
+            context_set,
+            missed_note_ids=missed_note_ids,
+            context_provenance=context_provenance,
+        )
+        if not confirm(prepared.size_bytes):
+            self.decline(prepared)
+            raise ReportUnavailableError("Report generation was declined. Nothing was sent.")
+        return self.send(prepared)
+
+    def prepare(
+        self,
+        record: SessionRecord,
+        context_set: ContextSet,
+        *,
+        missed_note_ids: frozenset[str],
+        context_provenance: ContextProvenance = ContextProvenance.SESSION,
+    ) -> PreparedReport:
+        """Everything before the network: the refusals, and the payload to be confirmed.
+
+        **Cheap and side-effect-free**, so a GUI can run it on the drawing thread. It
+        touches no socket and lights no indicator; the only thing it produces is the
+        prompt and its size, which is exactly what FR81's confirmation is *about*.
+
+        Splitting here rather than at the confirmation is what keeps FR81 honest under
+        threading: the size shown is the size sent, because both come from this one
+        object.
         """
         if self.consent.required:
             raise ReportUnavailableError(
@@ -202,10 +292,32 @@ class ReportGenerator:
         if len(record) == 0:
             raise ReportUnavailableError("Nothing was recorded in this session.")
 
-        prompt = self._build_prompt(record, context_set, missed_note_ids)
-        if not confirm(len(prompt.encode("utf-8"))):
-            self.ring.record("report_declined", count=len(record))
-            raise ReportUnavailableError("Report generation was declined. Nothing was sent.")
+        return PreparedReport(
+            prompt=self._build_prompt(record, context_set, missed_note_ids),
+            record=record,
+            context_set=context_set,
+            missed_note_ids=missed_note_ids,
+            context_provenance=context_provenance,
+        )
+
+    def decline(self, prepared: PreparedReport) -> None:
+        """FR81's refusal, recorded. Nothing is sent and nothing is stored."""
+        self.ring.record("report_declined", count=len(prepared.record))
+
+    def send(self, prepared: PreparedReport) -> Report:
+        """The network half. **Safe to call from a worker thread, and meant to be.**
+
+        Touches no Qt object and returns a plain value, so a UI caller marshals the
+        result back rather than sharing state. The egress indicator is a plain flag on
+        `EgressMonitor`, and lighting it here — off the drawing thread — is what finally
+        makes FR81a *visible*: an indicator set on a blocked event loop is lit in memory
+        and dark on screen for the whole upload it is supposed to announce.
+        """
+        record = prepared.record
+        prompt = prepared.prompt
+        context_set = prepared.context_set
+        missed_note_ids = prepared.missed_note_ids
+        context_provenance = prepared.context_provenance
 
         # Lit before the call and cleared in `finally`, so a raised exception cannot
         # leave the indicator claiming an upload that already failed (FR81a).
@@ -237,11 +349,12 @@ class ReportGenerator:
 
         absent = self._absent_sources(context_set)
         return Report(
-            sections=self._sections(findings, absent, record.truncated),
+            sections=self._sections(findings, absent, record.truncated, context_provenance),
             findings=findings,
             truncated=record.truncated,
             absent_sources=absent,
             discarded=discarded,
+            context_provenance=context_provenance,
         )
 
     # ---------- prompt ----------
@@ -290,6 +403,7 @@ class ReportGenerator:
         findings: VerifiedFindings,
         absent: tuple[SourceKind, ...],
         truncated: bool,
+        context_provenance: ContextProvenance = ContextProvenance.SESSION,
     ) -> dict[ReportSection, str]:
         """FR77: a section whose source was absent **says so** and is not omitted.
 
@@ -314,6 +428,12 @@ class ReportGenerator:
                 "\n\n(This session hit the recording cap; the later part of the "
                 "conversation is not covered by this report.)"
             )
+        if context_provenance is ContextProvenance.SUBSTITUTED:
+            # D-58, and it goes on the two sections the substitution actually distorts —
+            # JD fit and resume use are graded against the notes, while prep coverage
+            # rests on the tracker's stored verdict and survives intact.
+            for section in (ReportSection.ROLE_FIT, ReportSection.RESUME_USE):
+                sections[section] += f"\n\n({SUBSTITUTED_CONTEXT_NOTICE})"
         return sections
 
 

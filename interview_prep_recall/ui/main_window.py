@@ -28,7 +28,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import asdict
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
 )
 
 from interview_prep_recall.app import Application
+from interview_prep_recall.session.manager import SessionState
 from interview_prep_recall.session.preflight import PreflightReport
 from interview_prep_recall.settings import AppliedSettings
 from interview_prep_recall.ui.diagnostics_view import DiagnosticsView
@@ -64,6 +65,28 @@ RESET_OVERLAY_TEXT = "Reset overlay position"
 LOCK_OVERLAY_TEXT = "Lock overlay position"
 PREVIEW_OVERLAY_TEXT = "Show overlay"
 REPORTS_TEXT = "Interview reports…"
+
+PANIC_TEXT = "Panic — stop listening"
+"""FR60: **single action, no confirmation.** The control is no longer destructive
+(FR64a/D-U11), so there is nothing to confirm — and a confirmation on the control a user
+reaches for when someone walks into the room is a control that does not work."""
+
+RESUME_TEXT = "Resume listening"
+
+PANIC_SIGNPOST = (
+    "Panic pauses capture and nothing else — your transcript, notes and this session all "
+    "survive, and Resume continues where you left off. Nothing here deletes anything. "
+    "To delete stored interviews, use “Delete all sessions” in Interview reports."
+)
+"""FR87, at the surface it names.
+
+The requirement exists because panic used to destroy things and no longer does (D-U11),
+which leaves a user who presses it for privacy reasons with a false impression unless the
+surface says otherwise — and then leaves them with no route to the thing they actually
+wanted. Both halves are here: what panic does not do, and where the deliberate route is.
+"""
+
+PANIC_UNAVAILABLE = "Nothing is being captured right now."
 
 DialogFactory = Callable[[Application], SettingsDialog]
 DiagnosticsFactory = Callable[[Application, QWidget], DiagnosticsView]
@@ -101,6 +124,10 @@ class MainWindow(QMainWindow):
     codebase gets, for the reason `app.py` states: the defects live in the connections,
     and a dependency with a working default never has its connection tested.
     """
+
+    session_state_changed = Signal()
+    """A session transition reached the window. Emitted, never called directly: `_to`
+    runs on whichever thread drove the transition, and this slot touches widgets."""
 
     def __init__(
         self,
@@ -143,6 +170,37 @@ class MainWindow(QMainWindow):
         self.reports_button.clicked.connect(self.open_reports)
         layout.addWidget(self.reports_button)
 
+        # ---- the panic surface (T6.3b — FR60, FR64a, FR87) ----
+        self.panic_button = QPushButton(PANIC_TEXT)
+        self.panic_button.clicked.connect(self.panic)
+        layout.addWidget(self.panic_button)
+
+        self.resume_button = QPushButton(RESUME_TEXT)
+        self.resume_button.clicked.connect(self.resume)
+        layout.addWidget(self.resume_button)
+
+        self.panic_signpost = QLabel(PANIC_SIGNPOST)
+        self.panic_signpost.setWordWrap(True)
+        self.panic_signpost.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(self.panic_signpost)
+
+        self.panic_status = QLabel("")
+        self.panic_status.setWordWrap(True)
+        self.panic_status.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(self.panic_status)
+
+        # FR60's control has to be live *while a session runs*, and a session starts
+        # long after this window is built. Without this subscription the initial IDLE
+        # refresh disabled the panic button for the rest of the process — the emergency
+        # control dead in exactly the case it exists for. The tests missed it by starting
+        # the session first. Found by review on PR #25.
+        #
+        # Through a signal: `_to` runs on whichever thread drove the transition.
+        emit_state_change = self.session_state_changed.emit
+        application.session.on_state_change = lambda _old, _new: emit_state_change()
+        self.destroyed.connect(lambda: setattr(application.session, "on_state_change", None))
+        self.refresh_panic()
+
         # The overlay is built here, from the persisted geometry, so FR26's stored layout
         # is what the chrome controls below actually operate on.
         #
@@ -176,6 +234,21 @@ class MainWindow(QMainWindow):
         # for the collector to decide the teardown order of — the hazard the comment above
         # records.
         application.on_tracker_update = self.overlay.tracker_updated.emit
+        # FR20/FR35, and the wire that did not exist: the monitor recorded every state
+        # the indicators were built to render and nothing carried one to the other, so
+        # the egress lamp was correct in memory and dark on screen. The panel's own
+        # `emit`, for the reason the line above uses one — a bound widget method here
+        # would be called from the watchdog and report threads. Found by review on PR #25.
+        application.monitor.on_change = self.overlay.health_updated.emit
+        # **Cleared when this window is destroyed.** The application outlives the window,
+        # so a hook holding a bound `emit` of a deleted widget is a dangling C++ pointer
+        # the next health update walks into — an interpreter segfault, and the third time
+        # this project has hit that shape (D-53, D-54). The lambda closes over
+        # `application` and never over `self`, so it is not a cycle either.
+        self.destroyed.connect(lambda: setattr(application.monitor, "on_change", None))
+        # Pushed once so the strip shows the current state rather than a default nobody
+        # chose, on a window that may be built mid-session.
+        self.overlay.update_health(application.monitor.health)
         # Pushed once now so the panel is not blank until the first utterance: the
         # checklist is what the user reads before they have said anything.
         self.refresh_checklist()
@@ -194,6 +267,7 @@ class MainWindow(QMainWindow):
         self.reset_overlay_button.clicked.connect(self.reset_overlay)
         layout.addWidget(self.reset_overlay_button)
 
+        self.session_state_changed.connect(self.refresh_panic)
         self.setCentralWidget(central)
 
     # ---------- overlay chrome (T5.4 — FR26, FR27, FR55) ----------
@@ -247,6 +321,57 @@ class MainWindow(QMainWindow):
         if result.needs_restart:
             self.notify_restart(result)
         return result
+
+    # ---------- the panic surface (T6.3b — FR60, FR64a, FR87) ----------
+
+    def panic(self) -> bool:
+        """FR60's single action. One press, no confirmation, no second thought.
+
+        **Guarded by state rather than by a dialog.** `panic_clear` raises from IDLE, and
+        an exception escaping the one control a user presses under pressure is the worst
+        possible response to a press that was merely early. Returns whether anything was
+        stopped.
+        """
+        session = self.application.session
+        if session.state not in (SessionState.RUNNING, SessionState.PAUSED):
+            self.panic_status.setText(PANIC_UNAVAILABLE)
+            self.refresh_panic()
+            return False
+        session.panic_clear()
+        self.refresh_panic()
+        return True
+
+    def resume(self) -> bool:
+        """FR64a's other half. A pause the user can undo is only a pause if they can."""
+        session = self.application.session
+        if session.state is not SessionState.PAUSED:
+            self.refresh_panic()
+            return False
+        session.resume()
+        self.refresh_panic()
+        return True
+
+    def refresh_panic(self) -> None:
+        """State, in words, next to the control that changed it.
+
+        The paused state has to be *visible*: a user who pressed panic and sees nothing
+        change has no way to tell the press registered, and the failure mode is pressing
+        it again — or worse, assuming it worked when it did not.
+        """
+        session = self.application.session
+        paused = session.state is SessionState.PAUSED
+        self.panic_button.setEnabled(session.state is SessionState.RUNNING or paused)
+        self.resume_button.setEnabled(paused)
+        if paused:
+            cause = session.pause_cause
+            self.panic_status.setText(
+                f"Paused ({cause.name.lower() if cause else 'unknown'}). "
+                "Nothing is being captured. Everything from this session is still here."
+            )
+        elif session.state is SessionState.RUNNING:
+            self.panic_status.setText("Listening.")
+        else:
+            self.panic_status.setText(PANIC_UNAVAILABLE)
 
     def open_reports(self) -> ReportView:
         """M11's surface, reached from here (T11.10).

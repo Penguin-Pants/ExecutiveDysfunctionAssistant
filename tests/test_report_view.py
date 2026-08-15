@@ -27,6 +27,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 from interview_prep_recall.app import Application  # noqa: E402
 from interview_prep_recall.notes.model import ContextSet, Note, SourceKind  # noqa: E402
 from interview_prep_recall.report.evidence import ReportSection  # noqa: E402
+from interview_prep_recall.report.generator import SUBSTITUTED_CONTEXT_NOTICE  # noqa: E402
 from interview_prep_recall.report.separation import imported_modules  # noqa: E402
 from interview_prep_recall.stt.assembler import Utterance  # noqa: E402
 from interview_prep_recall.ui.report_view import (  # noqa: E402
@@ -102,11 +103,29 @@ def _session(app: Application, *, role: str = "Staff Engineer") -> str:
     return session_id
 
 
+def _legacy_session(app: Application, *, role: str = "Role") -> str:
+    """A session stored **before D-58**: no context snapshot in the transcript.
+
+    Written through the store directly, which is what the pre-snapshot `save` call did.
+    The purge still runs afterwards so the rest of the flow matches a real session.
+    """
+    app.session.request_start()
+    app.session.preflight_result(blocked=False)
+    app.consume(_utterance("tell me about a migration"), now=1.0)
+    session_id = app.sessions.save(app.record, role=role, missed_note_ids=frozenset())
+    app.session.end_session()
+    return session_id
+
+
 def _view(app: Application, **kwargs) -> ReportView:  # type: ignore[no-untyped-def]
     kwargs.setdefault("confirm", lambda _size: True)
     kwargs.setdefault("acknowledge", lambda _text: True)
     kwargs.setdefault("confirm_delete", lambda _message: True)
     kwargs.setdefault("choose_path", lambda _suggested: None)
+    # T11.10b: the model call is dispatched to a worker in production. Tests run it
+    # inline so assertions can follow `generate()` — the signal hop is a direct call
+    # within one thread, so this exercises the same slot the queued connection reaches.
+    kwargs.setdefault("dispatch", lambda work: work())
     return ReportView(app, **kwargs)
 
 
@@ -163,9 +182,9 @@ def test_the_reader_renders_every_section_and_both_evidence_kinds(
     _session(app)
 
     view = _view(app)
-    document = view.generate()
+    view.generate()
 
-    assert document is not None
+    assert view.document is not None
     body = view.body.toPlainText()
     for title in SECTION_TITLES.values():
         assert title.upper() in body
@@ -253,9 +272,9 @@ def test_declining_the_confirmation_sends_nothing(
     _session(app)
 
     view = _view(app, confirm=lambda _size: False)
-    document = view.generate()
+    view.generate()
 
-    assert document is None
+    assert view.document is None
     assert not [r for r in client.requests if any(t["name"] == "submit_report" for t in r["tools"])]
     assert "declined" in view.status.text().lower()
 
@@ -291,7 +310,8 @@ def test_the_disclosure_blocks_until_acknowledged(
 
     view = _view(app, acknowledge=lambda _text: False)
 
-    assert view.generate() is None
+    view.generate()
+    assert view.document is None
     assert not [r for r in client.requests if any(t["name"] == "submit_report" for t in r["tools"])]
     assert app.consent.required, "declining must not record an acknowledgement"
 
@@ -533,7 +553,8 @@ def test_a_finding_is_rendered_once_not_twice(qapp: QApplication, app_data) -> N
     _session(app)
 
     view = _view(app)
-    document = view.generate()
+    view.generate()
+    document = view.document
     assert document is not None
 
     finding_text = "You answered the opening question directly."
@@ -588,9 +609,9 @@ def test_a_failing_model_call_is_reported_not_raised(qapp: QApplication, app_dat
     _session(app)
 
     view = _view(app)
-    document = view.generate()
+    view.generate()
 
-    assert document is None
+    assert view.document is None
     assert "ConnectionError" in view.status.text()
     assert "no route to host" in view.status.text()
     assert view.generate_button.isEnabled(), "the control must come back"
@@ -605,3 +626,240 @@ def test_a_failed_generation_is_recorded_structurally(qapp: QApplication, app_da
     _view(app).generate()
 
     assert any(event.event == "report_failed" for event in app.ring.snapshot())
+
+
+# ---------- D-58 / T11.10c: the substitution is visible where it is read ----------
+
+
+def test_a_substituted_report_says_so_at_the_top_of_the_reader(
+    qapp: QApplication,
+    app_data,  # type: ignore[no-untyped-def]
+) -> None:
+    """The generator marks the two sections the substitution distorts; the reader also
+    says it up front, because a reader who skims to the summaries would otherwise never
+    meet the notice."""
+    app = _app(app_data)
+    app.consent.acknowledge()
+    _legacy_session(app)
+
+    view = _view(app)
+    view.generate()
+
+    assert SUBSTITUTED_CONTEXT_NOTICE in view.body.toPlainText()
+
+
+def test_the_export_carries_the_substitution_notice(
+    qapp: QApplication,
+    app_data,
+    tmp_path: Path,  # type: ignore[no-untyped-def]
+) -> None:
+    """The exported file outlives the dialog, and this is the caveat a reader most needs
+    attached to the document rather than to the app that produced it."""
+    app = _app(app_data)
+    app.consent.acknowledge()
+    _legacy_session(app)
+    destination = tmp_path / "report.md"
+
+    view = _view(app, choose_path=lambda _suggested: destination)
+    view.generate()
+    view.export()
+
+    assert SUBSTITUTED_CONTEXT_NOTICE in destination.read_text(encoding="utf-8")
+
+
+def test_a_snapshotted_report_carries_no_such_notice(
+    qapp: QApplication,
+    app_data,  # type: ignore[no-untyped-def]
+) -> None:
+    """The ordinary case must stay clean, or the notice becomes furniture."""
+    app = _app(app_data)
+    app.consent.acknowledge()
+    _session(app)
+
+    view = _view(app)
+    view.generate()
+
+    assert SUBSTITUTED_CONTEXT_NOTICE not in view.body.toPlainText()
+
+
+# ---------- T11.10b: the model call does not run on the GUI thread ----------
+
+
+def test_the_confirmation_is_asked_before_anything_is_dispatched(
+    qapp: QApplication,
+    app_data,  # type: ignore[no-untyped-def]
+) -> None:
+    """FR81 must be asked on the thread that owns dialogs, and the worker must not start
+    before the answer. A modal opened from a worker is undefined behaviour in Qt — the
+    defect PR #22 found in the tracker feed."""
+    app = _app(app_data)
+    app.consent.acknowledge()
+    _session(app)
+    order: list[str] = []
+
+    view = _view(
+        app,
+        confirm=lambda _size: (order.append("confirm"), True)[1],
+        dispatch=lambda work: (order.append("dispatch"), work())[1],
+    )
+    view.generate()
+
+    assert order == ["confirm", "dispatch"]
+
+
+def test_declining_dispatches_nothing(qapp: QApplication, app_data) -> None:  # type: ignore[no-untyped-def]
+    """The decline path must not reach the worker, let alone the socket."""
+    client = ScriptedClient()
+    app = _app(app_data, client)
+    app.consent.acknowledge()
+    _session(app)
+    dispatched: list[str] = []
+
+    view = _view(
+        app,
+        confirm=lambda _size: False,
+        dispatch=lambda work: dispatched.append("ran"),
+    )
+    view.generate()
+
+    assert dispatched == []
+    assert not [r for r in client.requests if any(t["name"] == "submit_report" for t in r["tools"])]
+
+
+def test_a_refusal_dispatches_nothing(qapp: QApplication, app_data) -> None:  # type: ignore[no-untyped-def]
+    """FR80/FR85's refusals are raised while preparing, which is before the worker."""
+    app = _app(app_data)  # consent deliberately not acknowledged
+    _session(app)
+    dispatched: list[str] = []
+
+    view = _view(
+        app,
+        acknowledge=lambda _text: False,
+        dispatch=lambda work: dispatched.append("ran"),
+    )
+    view.generate()
+
+    assert dispatched == []
+
+
+def test_the_controls_are_disabled_while_generating_and_restored_after(
+    qapp: QApplication,
+    app_data,  # type: ignore[no-untyped-def]
+) -> None:
+    """A control that is working says so. Without this the second click starts a second
+    upload of the same interview — FR81 confirmed both, but the user meant one."""
+    app = _app(app_data)
+    app.consent.acknowledge()
+    _session(app)
+    during: list[bool] = []
+
+    def dispatch(work):  # type: ignore[no-untyped-def]
+        during.append(view.generate_button.isEnabled())
+        work()
+
+    view = _view(app, dispatch=dispatch)
+    view.generate()
+
+    assert during == [False], "disabled for the duration"
+    assert view.generate_button.isEnabled(), "restored afterwards"
+
+
+def test_a_second_click_while_running_starts_nothing(qapp: QApplication, app_data) -> None:  # type: ignore[no-untyped-def]
+    """The re-entrancy guard, asserted directly rather than trusted to the disabled
+    button — a slot is still reachable from a shortcut or a test."""
+    app = _app(app_data)
+    app.consent.acknowledge()
+    _session(app)
+    runs: list[str] = []
+
+    def dispatch(work):  # type: ignore[no-untyped-def]
+        runs.append("ran")
+        view.generate()  # re-entered while the first is still running
+        work()
+
+    view = _view(app, dispatch=dispatch)
+    view.generate()
+
+    assert runs == ["ran"]
+
+
+def test_the_default_dispatch_really_leaves_the_gui_thread(
+    qapp: QApplication,
+    app_data,  # type: ignore[no-untyped-def]
+) -> None:
+    """The claim this task exists to make true, tested against the production path
+    rather than the injected one — the inline dispatcher every other test uses would
+    pass whether or not a thread was ever created."""
+    import threading
+    import time
+
+    app = _app(app_data)
+    app.consent.acknowledge()
+    _session(app)
+    calling_thread = threading.current_thread().name
+    seen: list[str] = []
+
+    class ThreadRecordingClient(ScriptedClient):
+        def create(self, **kwargs):  # type: ignore[no-untyped-def]
+            seen.append(threading.current_thread().name)
+            return super().create(**kwargs)
+
+    app.reports.client = ThreadRecordingClient()
+
+    view = ReportView(app, confirm=lambda _size: True, acknowledge=lambda _text: True)
+    view.generate()
+
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline and view.status.text().startswith("Generating"):
+        qapp.processEvents()
+        time.sleep(0.01)
+
+    assert seen and seen[0] != calling_thread, "the model call ran off the GUI thread"
+    assert view.status.text() == "Report generated."
+
+
+def test_an_absence_citation_uses_the_headline_the_finding_came_from(
+    qapp: QApplication,
+    app_data,  # type: ignore[no-untyped-def]
+) -> None:
+    """Note ids are stable across edits (FR41), so resolving through today's set finds
+    the right note and renders the wrong words — the same substitution D-58 removed from
+    generation, one layer down and harder to spot because the citation still resolves.
+    Found by review on PR #25."""
+    app = _app(app_data)
+    note_id = app.context_set.notes[0].id
+    app.reports.client = ScriptedClient(_findings_payload(note_id))
+    app.consent.acknowledge()
+    session_id = _session(app)
+    app.generate_report(session_id=session_id, confirm=lambda _: True)
+
+    edited = "Completely rewritten after the interview"
+    app.context_set.get(note_id).headline = edited  # type: ignore[union-attr]
+
+    view = _view(app)
+    body = view.body.toPlainText()
+
+    assert f"expected from: {PREP_HEADLINE}" in body
+    assert edited not in body
+
+
+def test_delete_all_is_blocked_while_a_report_is_generating(
+    qapp: QApplication,
+    app_data,  # type: ignore[no-untyped-def]
+) -> None:
+    """Delete-all removes the transcript the worker is still generating against, and the
+    view would then announce success for an interview the user had just deleted."""
+    app = _app(app_data)
+    app.consent.acknowledge()
+    _session(app)
+    during: list[bool] = []
+
+    def dispatch(work):  # type: ignore[no-untyped-def]
+        during.append(view.delete_all_button.isEnabled())
+        work()
+
+    view = _view(app, dispatch=dispatch)
+    view.generate()
+
+    assert during == [False]
+    assert view.delete_all_button.isEnabled(), "restored afterwards"

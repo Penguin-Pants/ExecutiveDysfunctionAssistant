@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from interview_prep_recall.diagnostics.ring import DiagnosticRing
-from interview_prep_recall.notes.model import new_id, validate_id
+from interview_prep_recall.notes.model import ContextSet, new_id, validate_id
 from interview_prep_recall.report.record import RecordedUtterance, SessionRecord
 
 RETENTION_DAYS_DEFAULT = 30
@@ -100,6 +100,14 @@ class StoredSession:
     report: dict[str, Any] | None
     missed_note_ids: frozenset[str] = frozenset()
 
+    context_set: ContextSet | None = None
+    """The context this interview was held against (D-58).
+
+    `None` for a session stored before snapshots existed, and for one whose snapshot no
+    longer parses. Both are handled the same way and **neither is silent**: the caller
+    substitutes today's set and the report says it did — see `ContextProvenance`.
+    """
+
 
 def _now() -> datetime:
     return datetime.now(UTC)
@@ -141,6 +149,7 @@ class SessionStore:
         role: str,
         session_id: str | None = None,
         missed_note_ids: frozenset[str] = frozenset(),
+        context_set: ContextSet | None = None,
     ) -> str:
         """Persist a transcript. Returns the session id.
 
@@ -149,6 +158,16 @@ class SessionStore:
         only valid basis for an absence finding — so a report regenerated next week has
         to read it from here or it cannot produce those findings at all, which is half of
         what D-U8 bought.
+
+        `context_set` is the **snapshot of what the interview was held against** (D-58,
+        T11.10c). The transcript already travelled with the tracker's verdict for exactly
+        this reason and the rest of the context did not, so a report regenerated a week
+        later graded the JD-fit and resume sections against whatever notes happened to be
+        loaded that day — silently, and confidently, in a document about the user.
+
+        Stored **inside the same encrypted envelope** (FR82) and deleted with the session
+        (FR84), so it inherits both guarantees rather than needing its own. The size
+        objection does not survive contact with D-3: the corpus is a few thousand words.
         """
         sid = session_id or new_id()
         validate_id(sid, label="session id")
@@ -157,6 +176,7 @@ class SessionStore:
             "stored_at": _now().isoformat(timespec="seconds").replace("+00:00", "Z"),
             "role": role,
             "missed_note_ids": sorted(missed_note_ids),
+            "context_set": None if context_set is None else context_set.to_dict(),
             "utterances": [
                 {
                     "index": u.index,
@@ -173,9 +193,22 @@ class SessionStore:
         self.ring.record("session_stored", session=sid, count=len(record))
         return sid
 
-    def attach_report(self, session_id: str, report: dict[str, Any]) -> None:
+    def attach_report(self, session_id: str, report: dict[str, Any]) -> bool:
+        """Store a report against its session. Returns False if the session is gone.
+
+        **Checked rather than assumed.** Generation can outlive its session: the upload
+        takes seconds and delete-all takes one click, so a report can arrive for a
+        transcript that no longer exists. Writing it anyway leaves an orphan `.report`
+        with no transcript to resolve its evidence against — a file the user deleted the
+        session to be rid of. The UI gates the control as well; this is the half that
+        holds for any caller. Found by review on PR #25.
+        """
+        if not self.transcript_path(session_id).exists():
+            self.ring.record("report_orphaned", session=session_id)
+            return False
         self._write_encrypted(self.report_path(session_id), report)
         self._reindex()
+        return True
 
     def _write_encrypted(self, path: Path, payload: dict[str, Any]) -> None:
         blob = self.cipher.encrypt(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
@@ -199,6 +232,7 @@ class SessionStore:
         report_path = self.report_path(session_id)
         report = self._read_encrypted(report_path) if report_path.exists() else None
         return StoredSession(
+            context_set=_parse_context_set(data.get("context_set"), sid=data["id"], ring=self.ring),
             id=data["id"],
             stored_at=data["stored_at"],
             role=data.get("role", ""),
@@ -327,6 +361,34 @@ class SessionStore:
             for s in self.list_sessions()
         ]
         self._write_encrypted(self.index_path, {"sessions": rows})
+
+
+def _parse_context_set(raw: Any, *, sid: str, ring: DiagnosticRing) -> ContextSet | None:
+    """Rebuild the snapshot, or None if there is not a usable one.
+
+    **A bad snapshot must not make the transcript unreadable.** The words of the
+    interview are the irreplaceable half; the snapshot is a grading aid, and refusing the
+    whole session over it would trade the thing that cannot be recovered for the thing
+    that can. Same reasoning as `list_sessions`, where one unreadable session must not
+    hide the rest.
+
+    Recorded when it happens, because the consequence — today's notes substituted for the
+    interview's own — is exactly what D-58 exists to stop being invisible.
+
+    **Every exception, not a named tuple of them.** The first version caught
+    `KeyError | ValueError | TypeError`, and a `notes` list containing a `null` raises
+    `AttributeError` from the sort key — which escaped, failed `load()`, and made the
+    transcript unreadable: the exact outcome the paragraph above promises cannot happen.
+    A guarantee stated in a docstring and enumerated in an `except` clause is only as
+    good as the enumeration. Found by review on PR #25.
+    """
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return ContextSet.from_dict(raw)
+    except Exception as error:  # noqa: BLE001 — see below
+        ring.record("session_context_unreadable", session=sid, code=type(error).__name__)
+        return None
 
 
 def _parse(stamp: str) -> datetime | None:

@@ -44,7 +44,9 @@ from interview_prep_recall.notes.index import Embedder, EmbeddingIndex
 from interview_prep_recall.notes.model import ContextSet
 from interview_prep_recall.report.consent import ReportConsent
 from interview_prep_recall.report.generator import (
+    ContextProvenance,
     MessagesClient,
+    PreparedReport,
     Report,
     ReportGenerator,
     ReportUnavailableError,
@@ -407,10 +409,89 @@ class Application:
         session_id: str | None = None
         if len(self.record):
             session_id = self.sessions.save(
-                self.record, role=role, missed_note_ids=self.missed_note_ids()
+                self.record,
+                role=role,
+                missed_note_ids=self.missed_note_ids(),
+                # D-58: the context travels with the transcript, like the tracker's
+                # verdict already did. Without it a report generated next week grades
+                # this interview against next week's notes.
+                context_set=self.context_set,
             )
         self.session.end_session()
         return session_id
+
+    def prepare_report(
+        self,
+        *,
+        session_id: str | None = None,
+        role: str = "",
+    ) -> tuple[str, PreparedReport]:
+        """The blocking-free half of generation (T11.10b). Returns (session id, payload).
+
+        Split out for a caller with an event loop: this resolves the session, applies
+        FR80/FR85's refusals and builds the prompt — none of which touches the network —
+        so the seconds-long part can go to a worker while the FR81 confirmation stays on
+        the thread that owns the dialogs.
+
+        Storing the record here rather than after confirmation is deliberate and
+        unchanged from `generate_report`: the interview survives a declined, offline or
+        rate-limited generation instead of being lost exactly when the model was
+        unavailable.
+        """
+        record, context_set, missed, provenance, session_id = self._resolve_report_inputs(
+            session_id=session_id, role=role
+        )
+        prepared = self.reports.prepare(
+            record,
+            context_set,
+            missed_note_ids=missed,
+            context_provenance=provenance,
+        )
+        return session_id, prepared
+
+    def send_report(self, session_id: str, prepared: PreparedReport) -> Report:
+        """The network half. **Safe to call from a worker thread** (T11.10b).
+
+        Attaching the result to its session is a file write, not a Qt call, and it
+        belongs with the response rather than back on the GUI thread — a report that
+        rendered and was never stored would be regenerated at full cost on the next look.
+        """
+        report = self.reports.send(prepared)
+        if not self.sessions.attach_report(session_id, report.to_dict()):
+            raise ReportUnavailableError(
+                "That session was deleted while its report was being generated. Nothing was stored."
+            )
+        return report
+
+    def _resolve_report_inputs(
+        self, *, session_id: str | None, role: str
+    ) -> tuple[SessionRecord, ContextSet, frozenset[str], ContextProvenance, str]:
+        """Which transcript, which notes, whose coverage verdict — and where they came from."""
+        if session_id is None:
+            if not len(self.record):
+                raise ReportUnavailableError("Nothing was recorded in this session.")
+            missed = self.missed_note_ids()
+            session_id = self.sessions.save(
+                self.record, role=role, missed_note_ids=missed, context_set=self.context_set
+            )
+            # The live set *is* the one this interview was held against.
+            return self.record, self.context_set, missed, ContextProvenance.SESSION, session_id
+
+        stored = self.sessions.load(session_id)
+        record = SessionRecord.rehydrate(stored.utterances)
+        # D-58. Prefer the snapshot; fall back to today's set only when there is none —
+        # a session stored before snapshots existed, or one whose snapshot no longer
+        # parses — and **mark the report** so the substitution is visible on the page
+        # rather than inferred by the reader.
+        context_set = stored.context_set if stored.context_set is not None else self.context_set
+        provenance = (
+            ContextProvenance.SESSION
+            if stored.context_set is not None
+            else ContextProvenance.SUBSTITUTED
+        )
+        if provenance is ContextProvenance.SUBSTITUTED:
+            self.ring.record("report_context_substituted", session=session_id)
+        return record, context_set, stored.missed_note_ids, provenance, session_id
 
     def generate_report(
         self,
@@ -430,19 +511,15 @@ class Application:
         declined, offline or rate-limited generation instead of being lost exactly when
         the model was unavailable.
         """
-        if session_id is None:
-            if not len(self.record):
-                raise ReportUnavailableError("Nothing was recorded in this session.")
-            missed = self.missed_note_ids()
-            session_id = self.sessions.save(self.record, role=role, missed_note_ids=missed)
-            record = self.record
-        else:
-            stored = self.sessions.load(session_id)
-            record = SessionRecord.rehydrate(stored.utterances)
-            missed = stored.missed_note_ids
-
+        record, context_set, missed, provenance, session_id = self._resolve_report_inputs(
+            session_id=session_id, role=role
+        )
         report = self.reports.generate(
-            record, self.context_set, missed_note_ids=missed, confirm=confirm
+            record,
+            context_set,
+            missed_note_ids=missed,
+            confirm=confirm,
+            context_provenance=provenance,
         )
         self.sessions.attach_report(session_id, report.to_dict())
         return session_id, report
