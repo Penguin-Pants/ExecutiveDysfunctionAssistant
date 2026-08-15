@@ -44,6 +44,7 @@ from interview_prep_recall.notes.index import Embedder, EmbeddingIndex
 from interview_prep_recall.notes.model import ContextSet
 from interview_prep_recall.report.consent import ReportConsent
 from interview_prep_recall.report.generator import (
+    ContextProvenance,
     MessagesClient,
     Report,
     ReportGenerator,
@@ -407,7 +408,13 @@ class Application:
         session_id: str | None = None
         if len(self.record):
             session_id = self.sessions.save(
-                self.record, role=role, missed_note_ids=self.missed_note_ids()
+                self.record,
+                role=role,
+                missed_note_ids=self.missed_note_ids(),
+                # D-58: the context travels with the transcript, like the tracker's
+                # verdict already did. Without it a report generated next week grades
+                # this interview against next week's notes.
+                context_set=self.context_set,
             )
         self.session.end_session()
         return session_id
@@ -434,15 +441,36 @@ class Application:
             if not len(self.record):
                 raise ReportUnavailableError("Nothing was recorded in this session.")
             missed = self.missed_note_ids()
-            session_id = self.sessions.save(self.record, role=role, missed_note_ids=missed)
+            session_id = self.sessions.save(
+                self.record, role=role, missed_note_ids=missed, context_set=self.context_set
+            )
             record = self.record
+            # The live set *is* the one this interview was held against.
+            context_set = self.context_set
+            provenance = ContextProvenance.SESSION
         else:
             stored = self.sessions.load(session_id)
             record = SessionRecord.rehydrate(stored.utterances)
             missed = stored.missed_note_ids
+            # D-58. Prefer the snapshot; fall back to today's set only when there is
+            # none — a session stored before snapshots existed, or one whose snapshot no
+            # longer parses — and **mark the report** so the substitution is visible on
+            # the page rather than inferred by the reader.
+            context_set = stored.context_set if stored.context_set is not None else self.context_set
+            provenance = (
+                ContextProvenance.SESSION
+                if stored.context_set is not None
+                else ContextProvenance.SUBSTITUTED
+            )
+            if provenance is ContextProvenance.SUBSTITUTED:
+                self.ring.record("report_context_substituted", session=session_id)
 
         report = self.reports.generate(
-            record, self.context_set, missed_note_ids=missed, confirm=confirm
+            record,
+            context_set,
+            missed_note_ids=missed,
+            confirm=confirm,
+            context_provenance=provenance,
         )
         self.sessions.attach_report(session_id, report.to_dict())
         return session_id, report

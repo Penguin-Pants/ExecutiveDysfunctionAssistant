@@ -7,6 +7,7 @@ correct pieces were not joined, and no component-level test could have seen that
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -19,7 +20,12 @@ from interview_prep_recall.app import (
     ReportLocalOnlyAdapter,
 )
 from interview_prep_recall.notes.model import ContextSet, Note, SourceKind
-from interview_prep_recall.report.generator import ReportUnavailableError
+from interview_prep_recall.report.evidence import ReportSection
+from interview_prep_recall.report.generator import (
+    SUBSTITUTED_CONTEXT_NOTICE,
+    ContextProvenance,
+    ReportUnavailableError,
+)
 from interview_prep_recall.session.health import Egress
 from interview_prep_recall.stt.assembler import Utterance
 
@@ -618,3 +624,109 @@ def test_a_failed_save_leaves_settings_untouched_everywhere(tmp_path: Path) -> N
 
     assert app.config is before
     assert app.prefilter.tau_floor == pytest.approx(before.tau_floor)
+
+
+# ---------- D-58 / T11.10c: a report is graded against the interview's own context ----------
+
+
+def test_a_stored_session_carries_the_context_it_was_held_against(app_data) -> None:  # type: ignore[no-untyped-def]
+    """The defect this closes: the transcript travelled with the tracker's verdict and
+    nothing else, so JD-fit and resume findings were graded against whatever notes
+    happened to be loaded on the day someone asked for the report."""
+    app = _app(app_data)
+    app.session.request_start()
+    app.session.preflight_result(blocked=False)
+    app.consume(_utterance("a question", stream="interviewer"), now=1.0)
+
+    session_id = app.end_session(role="Role")
+    assert session_id is not None
+
+    stored = app.sessions.load(session_id)
+    assert stored.context_set is not None
+    assert [n.headline for n in stored.context_set.notes] == [
+        n.headline for n in app.context_set.notes
+    ]
+
+
+def test_regeneration_uses_the_snapshot_not_todays_notes(app_data) -> None:  # type: ignore[no-untyped-def]
+    """The whole point. The user edits their notes between the interview and the report;
+    the report must still be about the interview they had."""
+    client = ScriptedClient()
+    app = _app(app_data, client)
+    app.consent.acknowledge()
+    app.session.request_start()
+    app.session.preflight_result(blocked=False)
+    app.consume(_utterance("a question", stream="interviewer"), now=1.0)
+    session_id = app.end_session(role="Role")
+    assert session_id is not None
+
+    app.context_set = ContextSet(
+        name="Different employer",
+        notes=[Note(headline="Something else entirely", kind=SourceKind.ROLE)],
+    )
+    _returned, report = app.generate_report(session_id=session_id, confirm=lambda _: True)
+
+    prompt = _report_requests(client)[-1]["messages"][0]["content"]
+    assert "Tell me about a migration" in prompt, "the interview's own notes"
+    assert "Something else entirely" not in prompt, "today's notes must not leak in"
+    assert report.context_provenance is ContextProvenance.SESSION
+
+
+def test_a_session_with_no_snapshot_substitutes_and_says_so(app_data) -> None:  # type: ignore[no-untyped-def]
+    """Sessions stored before D-58 have no snapshot. Substituting is the only thing left
+    to do, and the report states it — the failure mode is a report that reads as
+    authoritative while two of its sections were graded against the wrong notes."""
+    client = ScriptedClient()
+    app = _app(app_data, client)
+    app.consent.acknowledge()
+    app.session.request_start()
+    app.session.preflight_result(blocked=False)
+    app.consume(_utterance("a question", stream="interviewer"), now=1.0)
+    # A pre-D-58 session: saved through the store directly, with no context set.
+    session_id = app.sessions.save(app.record, role="Role", missed_note_ids=frozenset())
+
+    _returned, report = app.generate_report(session_id=session_id, confirm=lambda _: True)
+
+    assert report.context_provenance is ContextProvenance.SUBSTITUTED
+    assert SUBSTITUTED_CONTEXT_NOTICE in report.sections[ReportSection.ROLE_FIT]
+    assert SUBSTITUTED_CONTEXT_NOTICE in report.sections[ReportSection.RESUME_USE]
+
+
+def test_the_prep_coverage_section_is_not_marked_substituted(app_data) -> None:  # type: ignore[no-untyped-def]
+    """Only the sections the substitution actually distorts. Prep coverage rests on the
+    tracker's stored verdict (FR78a), which travels with the transcript and survives
+    intact — marking it too would overstate the damage and train the user to ignore the
+    notice where it is true."""
+    app = _app(app_data)
+    app.consent.acknowledge()
+    app.session.request_start()
+    app.session.preflight_result(blocked=False)
+    app.consume(_utterance("a question", stream="interviewer"), now=1.0)
+    session_id = app.sessions.save(app.record, role="Role", missed_note_ids=frozenset())
+
+    _returned, report = app.generate_report(session_id=session_id, confirm=lambda _: True)
+
+    assert SUBSTITUTED_CONTEXT_NOTICE not in report.sections[ReportSection.PREP_COVERAGE]
+
+
+def test_an_unreadable_snapshot_does_not_cost_the_transcript(app_data) -> None:  # type: ignore[no-untyped-def]
+    """The words of the interview are the irreplaceable half; the snapshot is a grading
+    aid. Refusing the session over a corrupt snapshot would trade the thing that cannot
+    be recovered for the thing that can."""
+    app = _app(app_data)
+    app.session.request_start()
+    app.session.preflight_result(blocked=False)
+    app.consume(_utterance("a question", stream="interviewer"), now=1.0)
+    session_id = app.end_session(role="Role")
+    assert session_id is not None
+
+    path = app.sessions.transcript_path(session_id)
+    payload = json.loads(app.sessions.cipher.decrypt(path.read_bytes()).decode("utf-8"))
+    payload["context_set"] = {"notes": "not a list"}
+    path.write_bytes(app.sessions.cipher.encrypt(json.dumps(payload).encode("utf-8")))
+
+    stored = app.sessions.load(session_id)
+
+    assert stored.context_set is None
+    assert [u.text for u in stored.utterances] == ["a question"]
+    assert any(e.event == "session_context_unreadable" for e in app.ring.snapshot())

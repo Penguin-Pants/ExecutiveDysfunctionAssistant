@@ -27,6 +27,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 from interview_prep_recall.app import Application  # noqa: E402
 from interview_prep_recall.notes.model import ContextSet, Note, SourceKind  # noqa: E402
 from interview_prep_recall.report.evidence import ReportSection  # noqa: E402
+from interview_prep_recall.report.generator import SUBSTITUTED_CONTEXT_NOTICE  # noqa: E402
 from interview_prep_recall.report.separation import imported_modules  # noqa: E402
 from interview_prep_recall.stt.assembler import Utterance  # noqa: E402
 from interview_prep_recall.ui.report_view import (  # noqa: E402
@@ -99,6 +100,20 @@ def _session(app: Application, *, role: str = "Staff Engineer") -> str:
     app.consume(_utterance("tell me about a migration"), now=1.0)
     session_id = app.end_session(role=role)
     assert session_id is not None
+    return session_id
+
+
+def _legacy_session(app: Application, *, role: str = "Role") -> str:
+    """A session stored **before D-58**: no context snapshot in the transcript.
+
+    Written through the store directly, which is what the pre-snapshot `save` call did.
+    The purge still runs afterwards so the rest of the flow matches a real session.
+    """
+    app.session.request_start()
+    app.session.preflight_result(blocked=False)
+    app.consume(_utterance("tell me about a migration"), now=1.0)
+    session_id = app.sessions.save(app.record, role=role, missed_note_ids=frozenset())
+    app.session.end_session()
     return session_id
 
 
@@ -605,3 +620,57 @@ def test_a_failed_generation_is_recorded_structurally(qapp: QApplication, app_da
     _view(app).generate()
 
     assert any(event.event == "report_failed" for event in app.ring.snapshot())
+
+
+# ---------- D-58 / T11.10c: the substitution is visible where it is read ----------
+
+
+def test_a_substituted_report_says_so_at_the_top_of_the_reader(
+    qapp: QApplication,
+    app_data,  # type: ignore[no-untyped-def]
+) -> None:
+    """The generator marks the two sections the substitution distorts; the reader also
+    says it up front, because a reader who skims to the summaries would otherwise never
+    meet the notice."""
+    app = _app(app_data)
+    app.consent.acknowledge()
+    _legacy_session(app)
+
+    view = _view(app)
+    view.generate()
+
+    assert SUBSTITUTED_CONTEXT_NOTICE in view.body.toPlainText()
+
+
+def test_the_export_carries_the_substitution_notice(
+    qapp: QApplication,
+    app_data,
+    tmp_path: Path,  # type: ignore[no-untyped-def]
+) -> None:
+    """The exported file outlives the dialog, and this is the caveat a reader most needs
+    attached to the document rather than to the app that produced it."""
+    app = _app(app_data)
+    app.consent.acknowledge()
+    _legacy_session(app)
+    destination = tmp_path / "report.md"
+
+    view = _view(app, choose_path=lambda _suggested: destination)
+    view.generate()
+    view.export()
+
+    assert SUBSTITUTED_CONTEXT_NOTICE in destination.read_text(encoding="utf-8")
+
+
+def test_a_snapshotted_report_carries_no_such_notice(
+    qapp: QApplication,
+    app_data,  # type: ignore[no-untyped-def]
+) -> None:
+    """The ordinary case must stay clean, or the notice becomes furniture."""
+    app = _app(app_data)
+    app.consent.acknowledge()
+    _session(app)
+
+    view = _view(app)
+    view.generate()
+
+    assert SUBSTITUTED_CONTEXT_NOTICE not in view.body.toPlainText()

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Protocol
 
 from interview_prep_recall.diagnostics.ring import DiagnosticRing
@@ -115,6 +116,37 @@ the schema — is what keeps it honest.
 """
 
 
+class ContextProvenance(Enum):
+    """Whose notes this report was graded against (D-58, T11.10c).
+
+    The distinction is the whole point: a report is a judgment about how well the user
+    covered *their* prep, JD and resume, and grading last week's interview against this
+    week's notes produces findings that are wrong in a way nothing on the page reveals.
+    """
+
+    SESSION = "session"
+    """The context the interview was actually held against — live, or restored from the
+    session's snapshot."""
+
+    SUBSTITUTED = "substituted"
+    """Today's context set, used because the session carries no readable snapshot. Every
+    surface that renders the report **must say so**; that is the entire reason this enum
+    exists rather than a bare bool nobody would render."""
+
+
+SUBSTITUTED_CONTEXT_NOTICE = (
+    "This report was graded against your CURRENT notes, not the ones loaded during the "
+    "interview — this session predates context snapshots, or its snapshot could not be "
+    "read. Coverage of prep points is still the tracker's verdict from the day, but the "
+    "job-description and resume sections may not reflect what you actually prepared."
+)
+"""Stated in the report itself, not only in a log.
+
+Half-true is the dangerous state here: FR78a's coverage still comes from the session, so
+the report is not wholly wrong — which makes an unqualified one *more* convincing, not
+less."""
+
+
 class ReportUnavailableError(Exception):
     """Generation refused, with a reason the UI shows verbatim (FR80, FR81)."""
 
@@ -130,6 +162,7 @@ class Report:
     truncated: bool
     absent_sources: tuple[SourceKind, ...]
     discarded: int = 0
+    context_provenance: ContextProvenance = ContextProvenance.SESSION
     """Findings the model produced that did not survive — evidence rejections **plus**
     items too malformed to become findings at all.
 
@@ -154,6 +187,7 @@ class Report:
             "rejected_findings": self.discarded,
             "truncated": self.truncated,
             "absent_sources": [k.value for k in self.absent_sources],
+            "context_provenance": self.context_provenance.value,
         }
 
 
@@ -183,6 +217,7 @@ class ReportGenerator:
         *,
         missed_note_ids: frozenset[str],
         confirm: Callable[[int], bool],
+        context_provenance: ContextProvenance = ContextProvenance.SESSION,
     ) -> Report:
         """Build the report. `confirm` is asked **every** run, with the payload size.
 
@@ -237,11 +272,12 @@ class ReportGenerator:
 
         absent = self._absent_sources(context_set)
         return Report(
-            sections=self._sections(findings, absent, record.truncated),
+            sections=self._sections(findings, absent, record.truncated, context_provenance),
             findings=findings,
             truncated=record.truncated,
             absent_sources=absent,
             discarded=discarded,
+            context_provenance=context_provenance,
         )
 
     # ---------- prompt ----------
@@ -290,6 +326,7 @@ class ReportGenerator:
         findings: VerifiedFindings,
         absent: tuple[SourceKind, ...],
         truncated: bool,
+        context_provenance: ContextProvenance = ContextProvenance.SESSION,
     ) -> dict[ReportSection, str]:
         """FR77: a section whose source was absent **says so** and is not omitted.
 
@@ -314,6 +351,12 @@ class ReportGenerator:
                 "\n\n(This session hit the recording cap; the later part of the "
                 "conversation is not covered by this report.)"
             )
+        if context_provenance is ContextProvenance.SUBSTITUTED:
+            # D-58, and it goes on the two sections the substitution actually distorts —
+            # JD fit and resume use are graded against the notes, while prep coverage
+            # rests on the tracker's stored verdict and survives intact.
+            for section in (ReportSection.ROLE_FIT, ReportSection.RESUME_USE):
+                sections[section] += f"\n\n({SUBSTITUTED_CONTEXT_NOTICE})"
         return sections
 
 

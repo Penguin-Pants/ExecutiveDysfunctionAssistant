@@ -52,7 +52,11 @@ from PySide6.QtWidgets import (
 
 from interview_prep_recall.report.consent import DISCLOSURE_TEXT, ReportConsent
 from interview_prep_recall.report.evidence import EvidenceKind, ReportSection
-from interview_prep_recall.report.generator import ReportUnavailableError
+from interview_prep_recall.report.generator import (
+    SUBSTITUTED_CONTEXT_NOTICE,
+    ContextProvenance,
+    ReportUnavailableError,
+)
 from interview_prep_recall.report.record import RecordedUtterance
 from interview_prep_recall.report.store import SessionStore, SessionSummary, StoredSession
 
@@ -177,6 +181,15 @@ class ReportDocument:
     truncated: bool
     absent_sources: tuple[str, ...]
     discarded: int
+    context_substituted: bool = False
+    """D-58: this report was graded against today's notes, not the interview's own.
+
+    Rendered at the **top** as well as inside the two sections the generator marks. The
+    per-section notice is where the distortion actually is; this one is because a reader
+    who skims the summaries would otherwise never meet it, and the whole failure mode is
+    a report that reads as authoritative while part of it was graded against the wrong
+    notes.
+    """
 
     def findings_for(self, section: ReportSection) -> tuple[ResolvedFinding, ...]:
         return tuple(f for f in self.findings if f.section is section)
@@ -253,6 +266,8 @@ def document_from_stored(stored: StoredSession, *, headline: NoteHeadline) -> Re
         sections=tuple(sections),
         findings=tuple(findings),
         truncated=bool(payload.get("truncated")),
+        context_substituted=payload.get("context_provenance")
+        == ContextProvenance.SUBSTITUTED.value,
         absent_sources=tuple(str(k) for k in payload.get("absent_sources") or []),
         discarded=int(payload.get("rejected_findings") or 0),
     )
@@ -267,6 +282,8 @@ def render_text(document: ReportDocument) -> str:
         f"{document.role or 'Interview'} — stored {document.stored_at}",
         "",
     ]
+    if document.context_substituted:
+        lines += [SUBSTITUTED_CONTEXT_NOTICE, ""]
     if document.truncated:
         lines += ["This session hit the recording cap; its later part is not covered.", ""]
     if document.absent_sources:
@@ -312,6 +329,8 @@ def render_markdown(document: ReportDocument) -> str:
         f"> {UNENCRYPTED_EXPORT_WARNING}",
         "",
     ]
+    if document.context_substituted:
+        lines += [f"> **{SUBSTITUTED_CONTEXT_NOTICE}**", ""]
     if document.truncated:
         lines += ["**This session hit the recording cap**; its later part is not covered.", ""]
     if document.absent_sources:
