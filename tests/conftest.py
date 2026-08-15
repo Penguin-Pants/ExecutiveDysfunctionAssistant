@@ -157,25 +157,28 @@ def qapp() -> Iterator[object]:
     Closing and deleting the top-level widgets here destroys them **while the application
     is still alive**, which is the ordering Qt actually supports.
 
-    **Hidden before deleted, because `close()` can legitimately be refused.** A dialog is
-    allowed to ignore a close — `NotesEditor` does exactly that when a save was rejected
-    and the user would otherwise lose the edits (T3.7) — and this loop then went on to
-    delete a widget that was still *visible*. On Windows that is an access violation in
-    the teardown, which is a red build with a green test report: every test passed and
-    the process died at the end. The Linux runs never hit it, so it arrived from CI.
+    **Only parentless roots are deleted, and never a widget Qt has already destroyed.**
+    A `QDialog` parented to a window is *both* a top-level widget and that window's
+    child, so a loop that calls `deleteLater` on everything `topLevelWidgets()` returns
+    queues a deletion for objects their parent is about to delete on the same pass — a
+    double free, which on Windows is an access violation in `processEvents` and on Linux
+    is silently survivable. Deleting the roots and letting Qt cascade is the ordering it
+    documents; `isValid` guards the wrappers whose C++ object went with an earlier root.
 
-    `hide()` first makes the deletion safe whatever `closeEvent` decides, and does not
-    take the decision away from the dialog — the refusal is still the behaviour under
-    test, and a test that leaves a widget dirty is no longer a hazard to the whole
-    session. Found by CI on PR #27; third instance of destroy-order trouble here after
-    D-53 and D-54.
+    `hide()` first because `close()` may legitimately be **refused** — `NotesEditor` does
+    exactly that when a save was rejected and closing would lose the edits (T3.7) — and
+    destroying a *visible* top-level widget is its own hazard. Both were found by CI on
+    PR #27, which is the fourth destroy-order defect in this fixture's history (D-53,
+    D-54) and the first that only Windows could see.
     """
     from PySide6.QtWidgets import QApplication
+    from shiboken6 import isValid
 
     app = QApplication.instance() or QApplication([])
     yield app
-    for widget in app.topLevelWidgets():
+    for widget in list(app.topLevelWidgets()):
+        if not isValid(widget) or widget.parent() is not None:
+            continue
         widget.hide()
-        widget.close()
         widget.deleteLater()
     app.processEvents()
