@@ -122,6 +122,10 @@ def _view(app: Application, **kwargs) -> ReportView:  # type: ignore[no-untyped-
     kwargs.setdefault("acknowledge", lambda _text: True)
     kwargs.setdefault("confirm_delete", lambda _message: True)
     kwargs.setdefault("choose_path", lambda _suggested: None)
+    # T11.10b: the model call is dispatched to a worker in production. Tests run it
+    # inline so assertions can follow `generate()` — the signal hop is a direct call
+    # within one thread, so this exercises the same slot the queued connection reaches.
+    kwargs.setdefault("dispatch", lambda work: work())
     return ReportView(app, **kwargs)
 
 
@@ -178,9 +182,9 @@ def test_the_reader_renders_every_section_and_both_evidence_kinds(
     _session(app)
 
     view = _view(app)
-    document = view.generate()
+    view.generate()
 
-    assert document is not None
+    assert view.document is not None
     body = view.body.toPlainText()
     for title in SECTION_TITLES.values():
         assert title.upper() in body
@@ -268,9 +272,9 @@ def test_declining_the_confirmation_sends_nothing(
     _session(app)
 
     view = _view(app, confirm=lambda _size: False)
-    document = view.generate()
+    view.generate()
 
-    assert document is None
+    assert view.document is None
     assert not [r for r in client.requests if any(t["name"] == "submit_report" for t in r["tools"])]
     assert "declined" in view.status.text().lower()
 
@@ -306,7 +310,8 @@ def test_the_disclosure_blocks_until_acknowledged(
 
     view = _view(app, acknowledge=lambda _text: False)
 
-    assert view.generate() is None
+    view.generate()
+    assert view.document is None
     assert not [r for r in client.requests if any(t["name"] == "submit_report" for t in r["tools"])]
     assert app.consent.required, "declining must not record an acknowledgement"
 
@@ -548,7 +553,8 @@ def test_a_finding_is_rendered_once_not_twice(qapp: QApplication, app_data) -> N
     _session(app)
 
     view = _view(app)
-    document = view.generate()
+    view.generate()
+    document = view.document
     assert document is not None
 
     finding_text = "You answered the opening question directly."
@@ -603,9 +609,9 @@ def test_a_failing_model_call_is_reported_not_raised(qapp: QApplication, app_dat
     _session(app)
 
     view = _view(app)
-    document = view.generate()
+    view.generate()
 
-    assert document is None
+    assert view.document is None
     assert "ConnectionError" in view.status.text()
     assert "no route to host" in view.status.text()
     assert view.generate_button.isEnabled(), "the control must come back"
@@ -674,3 +680,139 @@ def test_a_snapshotted_report_carries_no_such_notice(
     view.generate()
 
     assert SUBSTITUTED_CONTEXT_NOTICE not in view.body.toPlainText()
+
+
+# ---------- T11.10b: the model call does not run on the GUI thread ----------
+
+
+def test_the_confirmation_is_asked_before_anything_is_dispatched(
+    qapp: QApplication,
+    app_data,  # type: ignore[no-untyped-def]
+) -> None:
+    """FR81 must be asked on the thread that owns dialogs, and the worker must not start
+    before the answer. A modal opened from a worker is undefined behaviour in Qt — the
+    defect PR #22 found in the tracker feed."""
+    app = _app(app_data)
+    app.consent.acknowledge()
+    _session(app)
+    order: list[str] = []
+
+    view = _view(
+        app,
+        confirm=lambda _size: (order.append("confirm"), True)[1],
+        dispatch=lambda work: (order.append("dispatch"), work())[1],
+    )
+    view.generate()
+
+    assert order == ["confirm", "dispatch"]
+
+
+def test_declining_dispatches_nothing(qapp: QApplication, app_data) -> None:  # type: ignore[no-untyped-def]
+    """The decline path must not reach the worker, let alone the socket."""
+    client = ScriptedClient()
+    app = _app(app_data, client)
+    app.consent.acknowledge()
+    _session(app)
+    dispatched: list[str] = []
+
+    view = _view(
+        app,
+        confirm=lambda _size: False,
+        dispatch=lambda work: dispatched.append("ran"),
+    )
+    view.generate()
+
+    assert dispatched == []
+    assert not [r for r in client.requests if any(t["name"] == "submit_report" for t in r["tools"])]
+
+
+def test_a_refusal_dispatches_nothing(qapp: QApplication, app_data) -> None:  # type: ignore[no-untyped-def]
+    """FR80/FR85's refusals are raised while preparing, which is before the worker."""
+    app = _app(app_data)  # consent deliberately not acknowledged
+    _session(app)
+    dispatched: list[str] = []
+
+    view = _view(
+        app,
+        acknowledge=lambda _text: False,
+        dispatch=lambda work: dispatched.append("ran"),
+    )
+    view.generate()
+
+    assert dispatched == []
+
+
+def test_the_controls_are_disabled_while_generating_and_restored_after(
+    qapp: QApplication,
+    app_data,  # type: ignore[no-untyped-def]
+) -> None:
+    """A control that is working says so. Without this the second click starts a second
+    upload of the same interview — FR81 confirmed both, but the user meant one."""
+    app = _app(app_data)
+    app.consent.acknowledge()
+    _session(app)
+    during: list[bool] = []
+
+    def dispatch(work):  # type: ignore[no-untyped-def]
+        during.append(view.generate_button.isEnabled())
+        work()
+
+    view = _view(app, dispatch=dispatch)
+    view.generate()
+
+    assert during == [False], "disabled for the duration"
+    assert view.generate_button.isEnabled(), "restored afterwards"
+
+
+def test_a_second_click_while_running_starts_nothing(qapp: QApplication, app_data) -> None:  # type: ignore[no-untyped-def]
+    """The re-entrancy guard, asserted directly rather than trusted to the disabled
+    button — a slot is still reachable from a shortcut or a test."""
+    app = _app(app_data)
+    app.consent.acknowledge()
+    _session(app)
+    runs: list[str] = []
+
+    def dispatch(work):  # type: ignore[no-untyped-def]
+        runs.append("ran")
+        view.generate()  # re-entered while the first is still running
+        work()
+
+    view = _view(app, dispatch=dispatch)
+    view.generate()
+
+    assert runs == ["ran"]
+
+
+def test_the_default_dispatch_really_leaves_the_gui_thread(
+    qapp: QApplication,
+    app_data,  # type: ignore[no-untyped-def]
+) -> None:
+    """The claim this task exists to make true, tested against the production path
+    rather than the injected one — the inline dispatcher every other test uses would
+    pass whether or not a thread was ever created."""
+    import threading
+    import time
+
+    app = _app(app_data)
+    app.consent.acknowledge()
+    _session(app)
+    calling_thread = threading.current_thread().name
+    seen: list[str] = []
+
+    class ThreadRecordingClient(ScriptedClient):
+        def create(self, **kwargs):  # type: ignore[no-untyped-def]
+            seen.append(threading.current_thread().name)
+            return super().create(**kwargs)
+
+    app.reports.client = ThreadRecordingClient()
+
+    view = ReportView(app, confirm=lambda _size: True, acknowledge=lambda _text: True)
+    view.generate()
+
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline and view.status.text().startswith("Generating"):
+        qapp.processEvents()
+        time.sleep(0.01)
+
+    assert seen and seen[0] != calling_thread, "the model call ran off the GUI thread"
+    assert view.status.text() == "Report generated."

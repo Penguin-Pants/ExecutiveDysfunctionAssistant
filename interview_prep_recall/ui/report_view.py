@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QShowEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -55,6 +55,7 @@ from interview_prep_recall.report.evidence import EvidenceKind, ReportSection
 from interview_prep_recall.report.generator import (
     SUBSTITUTED_CONTEXT_NOTICE,
     ContextProvenance,
+    PreparedReport,
     ReportUnavailableError,
 )
 from interview_prep_recall.report.record import RecordedUtterance
@@ -398,11 +399,21 @@ class ReportView(QDialog):
     FR81's per-run confirmation, FR85's disclosure, FR83's deletion.
     """
 
+    generation_finished = Signal(str, object)
+    """The thread hop for T11.10b: (session id, error or None).
+
+    **Producers must emit this, not touch widgets.** `_run` executes on a worker, and
+    Qt's default connection is queued across threads — so the slot runs on the GUI
+    thread, which is the only place a `QWidget` may be read or written. Same contract
+    as `OverlayPanel.tracker_updated`, and the same defect if it is bypassed.
+    """
+
     def __init__(
         self,
         application: Application,
         *,
         confirm: Confirmer | None = None,
+        dispatch: Callable[[Callable[[], None]], None] | None = None,
         acknowledge: Acknowledger | None = None,
         choose_path: PathChooser | None = None,
         confirm_delete: Callable[[str], bool] | None = None,
@@ -415,7 +426,9 @@ class ReportView(QDialog):
         self._acknowledge = acknowledge if acknowledge is not None else self._ask_to_acknowledge
         self._choose_path = choose_path if choose_path is not None else self._ask_for_path
         self._confirm_delete = confirm_delete if confirm_delete is not None else self._ask_to_delete
+        self._dispatch = dispatch if dispatch is not None else self._default_dispatch
         self._document: ReportDocument | None = None
+        self._running = False
         # Populated by `refresh()` below; stated here because `selected_session_id` is
         # reachable from the signal wiring before that call returns.
         self._summaries: list[SessionSummary] = []
@@ -461,7 +474,13 @@ class ReportView(QDialog):
             buttons.addWidget(button)
         layout.addLayout(buttons)
 
+        self.generation_finished.connect(self._on_finished)
         self.refresh()
+
+    @property
+    def document(self) -> ReportDocument | None:
+        """What the reader is showing, once generation has finished."""
+        return self._document
 
     # ---------- listing ----------
 
@@ -548,7 +567,7 @@ class ReportView(QDialog):
         A disabled control with no reason is indistinguishable from a broken one, and the
         user's next move would be to look for the bug rather than for the switch.
         """
-        has_selection = self.selected_session_id is not None
+        has_selection = self.selected_session_id is not None and not self._running
         # Read straight off the generator, not through a defaulted `getattr`: a default
         # of False here would *enable* the button if the attribute ever moved, which is
         # FR80 failing open on the one control that sends an interview off the device.
@@ -565,52 +584,103 @@ class ReportView(QDialog):
 
     # ---------- generating ----------
 
-    def generate(self) -> ReportDocument | None:
-        """FR80, FR81, FR85. Returns the rendered document, or None if nothing was sent.
+    def generate(self) -> None:
+        """FR80, FR81, FR85 — and the model call goes to a worker (T11.10b).
 
-        The consent gate is checked here as well as in the generator, and that is not
-        duplication: the generator *refuses*, which is the guarantee, and this offers the
-        disclosure that lets the user proceed. Refusing with no route forward would make
-        the feature permanently unavailable to anyone who has not seen a dialog that
-        nothing shows.
+        The order is the requirement. Refusals and the prompt are built here, on the GUI
+        thread, because FR81's confirmation must be asked here — a modal dialog opened
+        from a worker is undefined behaviour in Qt, which is the defect PR #22 found in
+        the tracker feed. Only `send_report`, which is the network, is dispatched.
+
+        **This is also what makes FR81a true rather than nominal.** The egress indicator
+        is set for the duration of the upload; on a blocked event loop it is lit in
+        memory and dark on screen for exactly the seconds it exists to announce.
+
+        Returns nothing: the report arrives on `_finished`, which may be after this
+        returns. `document` is the property to read once it has.
         """
         session_id = self.selected_session_id
-        if session_id is None:
-            return None
+        if session_id is None or self._running:
+            return
         if not self._ensure_consent():
             self.status.setText("The disclosure was not accepted. Nothing was sent.")
-            return None
+            return
 
         try:
-            self.application.generate_report(confirm=self._confirm, session_id=session_id)
+            session_id, prepared = self.application.prepare_report(session_id=session_id)
         except ReportUnavailableError as error:
             # The generator's message is shown verbatim (FR80): it names which of the
             # several refusals happened, and paraphrasing it here would lose that.
             self.status.setText(str(error))
-            return None
-        except Exception as error:  # noqa: BLE001 — a UI boundary, see below
-            # **Anything the model client raises lands here**: offline, rate-limited,
-            # a bad key, a socket reset. The generator lets those propagate on purpose —
-            # it is not the layer that knows what to tell a person — and this slot is the
-            # end of the line. An exception escaping a Qt callback leaves the user with a
-            # button that did nothing and no way to tell an outage from a broken control.
-            #
-            # Broad on purpose, and it is not swallowing: the error type and message are
-            # both shown, and the failure is recorded structurally (FR36). Found by
-            # review on PR #24.
+            return
+
+        if not self._confirm(prepared.size_bytes):
+            self.application.reports.decline(prepared)
+            self.status.setText("Report generation was declined. Nothing was sent.")
+            return
+
+        self._set_running(True)
+        self._dispatch(lambda: self._run(session_id, prepared))
+
+    def _run(self, session_id: str, prepared: PreparedReport) -> None:
+        """The worker body. **Returns through a signal, never by touching a widget.**
+
+        Whatever the client raises is carried back rather than thrown here: an exception
+        on a worker thread has nowhere to go, and the user would be left watching a
+        dialog that says "Generating…" for the rest of the session.
+
+        **The store is touched from this thread**, which is safe for the reason the
+        store was built that way: every write goes through `os.replace` onto its own
+        per-session path, so a reader on the GUI thread sees either the old file or the
+        new one. It is not safe *in general* — a second generation running concurrently
+        would race on the same session — which is what `_running` prevents.
+        """
+        try:
+            self.application.send_report(session_id, prepared)
+        except Exception as error:  # noqa: BLE001 — marshalled, not swallowed
+            self.generation_finished.emit(session_id, error)
+            return
+        self.generation_finished.emit(session_id, None)
+
+    def _on_finished(self, session_id: str, error: object) -> None:
+        """Back on the GUI thread. Qt's queued connection is the whole of the hop."""
+        self._set_running(False)
+        if error is not None:
+            # Anything the model client raises: offline, rate-limited, bad key, a socket
+            # reset. An exception that reached here has already crossed a thread, so the
+            # type and message are all that is left of it — both are shown, and the
+            # failure is recorded structurally (FR36).
             self.application.ring.record("report_failed", code=type(error).__name__)
             self.status.setText(
                 f"The report could not be generated: {type(error).__name__}: {error}. "
                 "Nothing was saved; you can try again."
             )
-            self._sync_buttons()
-            return None
-
+            return
         self.refresh()
         self._select(session_id)
-        if self._document is not None:
-            self.status.setText("Report generated.")
-        return self._document
+        self.status.setText("Report generated.")
+
+    def _set_running(self, running: bool) -> None:
+        """A control that is working says so, and cannot be pressed twice.
+
+        Without this the second click starts a second upload of the same interview —
+        FR81 would have confirmed both, but the user meant one.
+        """
+        self._running = running
+        if running:
+            self.status.setText("Generating… this can take a few seconds.")
+        self._sync_buttons()
+
+    def _default_dispatch(self, work: Callable[[], None]) -> None:
+        """Run the network half off the GUI thread.
+
+        A plain daemon thread rather than the application's executor: that pool serves
+        the matching pipeline on a latency budget during a live interview (D-11), and a
+        multi-second report upload parked in it would sit in front of a stage-2 call.
+        """
+        import threading
+
+        threading.Thread(target=work, name="report-generation", daemon=True).start()
 
     def _ensure_consent(self) -> bool:
         """FR85. A prior FR63 acknowledgement does not carry over, and a bump re-asks."""
