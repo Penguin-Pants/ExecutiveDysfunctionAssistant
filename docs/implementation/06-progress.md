@@ -205,6 +205,15 @@ ship them as decisions nobody made.
    offering a non-field attribute added later.
 5. **`EXIT_OK` defined and never used.**
 
+**PR #18 review round (Codex) — one finding, half fixable now.** FR38 says the readiness check
+runs "at **session** start"; the entry point runs it at *process* start, and the report then goes
+stale — switch to a cloud backend in Settings and the window still shows the original "ready"
+without the API key or service ever being validated. The staleness half is fixed: applying
+settings re-runs the checks, and `run_preflight` is now public because it has to be re-runnable
+rather than run once. The other half — feeding `SessionManager.request_start()` /
+`preflight_result()` — cannot be wired until something can start a session, which is M1. Recorded
+as **T9.6b**.
+
 **A constraint recorded for T9.4:** a failed startup shows a *modal* message box, which is correct
 for a human and a hang for automation — verified by running the entry point headless, where it
 blocked until timeout. Any non-interactive smoke test of the packaged exe must drive or suppress

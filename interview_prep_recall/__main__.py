@@ -23,7 +23,12 @@ import sys
 from pathlib import Path
 
 from interview_prep_recall.app import Application
-from interview_prep_recall.startup import ApplicationFactory, StartupOutcome, start
+from interview_prep_recall.startup import (
+    ApplicationFactory,
+    StartupOutcome,
+    run_preflight,
+    start,
+)
 
 APP_DIR_NAME = "InterviewPrepRecall"
 
@@ -121,7 +126,12 @@ def main(
         QMessageBox.warning(None, WINDOW_TITLE, notice)
 
     assert result.application is not None  # guaranteed by the outcome above
-    window = MainWindow(result.application, result.preflight)
+    application = result.application
+    window = MainWindow(
+        application,
+        result.preflight,
+        refresh_preflight=lambda: run_preflight(application),
+    )
     window.show()
     return int(qt_app.exec())
 

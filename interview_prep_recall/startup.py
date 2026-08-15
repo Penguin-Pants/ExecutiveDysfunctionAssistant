@@ -112,7 +112,7 @@ def start(
     if application.config_status.settings_were_lost:
         notices.append(CONFIG_RESET_NOTICE)
 
-    report = _preflight(application, probes)
+    report = run_preflight(application, probes)
     outcome = StartupOutcome.NOT_READY if report.blocked else StartupOutcome.READY
     return StartupResult(
         outcome=outcome,
@@ -122,12 +122,20 @@ def start(
     )
 
 
-def _preflight(application: Application, probes: Mapping[str, Probe] | None) -> PreflightReport:
-    """FR38, run automatically at startup.
+def run_preflight(
+    application: Application, probes: Mapping[str, Probe] | None = None
+) -> PreflightReport:
+    """FR38's readiness check. Public because it must be **re-run**, not just run once.
 
-    Cloud checks are applicable only when a cloud backend is configured — running them
-    against a local-only install would warn about an API key the user has deliberately
-    not provided.
+    Which checks apply depends on the configured backend, so a report taken at process
+    start goes stale the moment the user switches to a cloud backend in Settings — they
+    would see the original "ready" without the API key or service ever being validated.
+    Found by review on PR #18.
+
+    FR38 says "at session start", and the *session*-start path
+    (`SessionManager.request_start` / `preflight_result`) is still unwired because nothing
+    can start a session without capture. That wiring belongs to M1; this function is what
+    it will call.
     """
     preflight = Preflight(
         probes or {},

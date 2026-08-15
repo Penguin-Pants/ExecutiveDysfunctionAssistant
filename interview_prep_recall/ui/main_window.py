@@ -64,12 +64,14 @@ class MainWindow(QMainWindow):
         report: PreflightReport | None = None,
         *,
         dialog_factory: DialogFactory = _default_dialog,
+        refresh_preflight: Callable[[], PreflightReport] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(WINDOW_TITLE)
         self.application = application
         self._dialog_factory = dialog_factory
+        self._refresh_preflight = refresh_preflight
 
         central = QWidget()
         layout = QVBoxLayout(central)
@@ -96,9 +98,18 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return None
         result = self.application.apply_settings(dialog.config())
+        # Re-run FR38's checks: which ones apply depends on the configured backend, so a
+        # report taken at process start goes stale the moment the user switches to a
+        # cloud backend. Leaving it would show "ready" without the API key or the service
+        # having ever been validated.
+        self.refresh_status()
         if result.needs_restart:
             self.notify_restart(result)
         return result
+
+    def refresh_status(self) -> None:
+        if self._refresh_preflight is not None:
+            self.status.setText(_status_text(self._refresh_preflight()))
 
     def notify_restart(self, result: AppliedSettings) -> None:
         """Tell the user which settings are waiting on a restart.

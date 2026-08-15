@@ -268,3 +268,50 @@ def test_a_failed_startup_exits_cleanly_instead_of_crashing(
     assert code == EXIT_STARTUP_FAILED
     assert shown, "the user was given no explanation"
     assert "dependency graph is incomplete" in shown[0]
+
+
+def test_settings_change_refreshes_the_readiness_report(
+    qapp: QApplication, application: Application
+) -> None:
+    """Found by review on PR #18.
+
+    Which FR38 checks apply depends on the configured backend, so a report taken at
+    process start goes stale the moment the user switches to a cloud backend — they would
+    see the original "ready" without the API key or service ever being validated.
+    """
+
+    # The device disappeared (or the backend changed) since the window opened.
+    def refresh() -> PreflightReport:
+        return _report(blocked=True)
+
+    def factory(app: Application) -> SettingsDialog:
+        dialog = SettingsDialog(app.config)
+        dialog.sensitivity.setValue(50)
+        dialog.exec = lambda: QDialog.DialogCode.Accepted  # type: ignore[method-assign]
+        return dialog
+
+    window = MainWindow(
+        application,
+        _report(blocked=False),
+        dialog_factory=factory,
+        refresh_preflight=refresh,
+    )
+    assert READY_TEXT in window.status.text()
+
+    window.open_settings()
+
+    assert BLOCKED_HEADING in window.status.text(), "the readiness report went stale"
+
+
+def test_a_window_without_a_refresh_hook_still_works(
+    qapp: QApplication, application: Application
+) -> None:
+    """The hook is optional, and its absence must not break the settings route."""
+
+    def factory(app: Application) -> SettingsDialog:
+        dialog = SettingsDialog(app.config)
+        dialog.exec = lambda: QDialog.DialogCode.Accepted  # type: ignore[method-assign]
+        return dialog
+
+    window = MainWindow(application, _report(blocked=False), dialog_factory=factory)
+    assert window.open_settings() is not None
