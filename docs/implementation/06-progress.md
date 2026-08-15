@@ -13,7 +13,7 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | Milestone | Status | Notes |
 |---|---|---|
 | **M0 — Scaffold** | ✅ Complete | 20 tests passing, lint + format + mypy clean |
-| **M1 — Audio capture spike** | ⛔ Blocked | Needs the Windows machine. **AS-2 gate.** |
+| **M1 — Audio capture spike** | 🟡 Code written, **unrun** | T1.1/T1.2/T1.4 implemented from `pyaudiowpatch` docs; T1.3 already done. **Nothing has executed** — `scripts/m1_spike.py` is the AS-2 gate and needs the Windows machine. |
 | **M2 — STT interface & local backend** | 🟢 T2.1–T2.3 complete | Interface, local backend, assembler. T2.4 is the **AS-1 latency gate** and genuinely needs the target laptop. T2.2's model adapter is unverified (**AS-9**) |
 | **M3 — Notes store & indexing** | 🟢 Logic complete | T3.1–T3.6 done. T3.7–T3.9 are Qt UI, deferred to Windows |
 | **M4 — Matching pipeline** | 🟢 T4.1–T4.6 complete | T4.7 **blocked**: needs the user's labelled fixtures |
