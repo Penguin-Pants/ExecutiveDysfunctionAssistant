@@ -42,7 +42,7 @@ TS§ = [test strategy](./04-test-strategy.md) section
 | FR35 | Review A11 | **D§7** | T5.7 | Unit per state |
 | FR36 | Review A12 | D§1 | T0.3, **T5.8** | Content-leak grep, TS§3 |
 | FR37 | Review A13 | D§9 | T6.7, T9.2, T9.2b | Integration |
-| FR38 | Review A14 | **D§6 (classification table)** | T6.5 | Unit per precondition |
+| FR38 | Review A14 | **D§6 (classification table)** | T6.5, T9.6 | Unit per precondition |
 | FR39a | Review A16 | D§9 | T1.4 | Manual device switch |
 | FR39b | Review-B C6 | D§9 | T1.4, T6.6 | Device-loss pause + auto-resume |
 | FR40 | Review A18 | D§5 | T4.5 ✅ | Fault injection |
@@ -68,7 +68,7 @@ TS§ = [test strategy](./04-test-strategy.md) section
 | FR60 | New (DI-3) | D§4 | T3.7, T3.8 | Unit |
 | FR61 | Review RB-2 | D§9 | T6.6 | Kill worker × 2 |
 | FR62 | Review RB-2 | D§9 | T6.6 | Manual lock/unlock |
-| FR63 | Review A19 | D§4 | T9.1, T9.1a | Unit + Qt (offscreen) |
+| FR63 | Review A19 | D§4 | T9.1, T9.1a, T9.6 | Unit + Qt (offscreen) |
 | ~~FR64~~ | D-U5 | **D§6** | ~~T6.3~~ | *Superseded by FR64a (D-U11)* |
 | FR64a | D-U11 | **D§6** | T6.3a | Panic pauses; no purge hook fires |
 | NFR1 | PRD §7 | **D§9a** | **T2.4** | Per-stage latency harness |
