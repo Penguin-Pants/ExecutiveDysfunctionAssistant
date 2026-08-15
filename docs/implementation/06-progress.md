@@ -206,6 +206,26 @@ pipeline and the editor share a set, so it is an ordinary race, and FR35 already
 panel shows when there is nothing to show. `from_stored_note` still raises for a fabricated id —
 the difference is that this checks first and that one is the guarantee.
 
+**PR #26 review — one finding, P1, and it was the same defect one layer in.** `MatchingPipeline`
+was constructed with `on_result=self.on_result`, which **copies** the field's value — the no-op
+default — so assigning `application.on_result` from the window changed nothing the pipeline calls.
+The fix for the missing wire did not fix the missing wire.
+
+**My end-to-end test masked it**, and that is the part worth keeping. It called
+`application.on_result(...)` directly, which proves the hook is assigned and nothing about the
+path a real interview takes. A test that skips the producer cannot see a producer holding a stale
+callback. The replacement drives an interviewer utterance through `consume` and asserts on the
+widget, and was checked by reverting the fix and watching it fail — a test written for a defect
+that was never observed failing is a guess.
+
+Two changes came out of it: the pipeline is given a **delegating** lambda so the field is a hook
+rather than a constructor argument that looks like one, and `on_result`'s default now **records**
+`match_unrendered` to the diagnostic ring instead of discarding silently. It cannot raise —
+a headless `Application` is legitimate, every test is one — but it can be the difference between
+"no surface is attached" and "the surface is attached and broken". That distinction is what was
+missing for six milestones, and D-60 is the rule; this is D-60 applied to the very hook that
+taught it.
+
 **Follow-up T5.10a:** the panel's `context_set` is assigned once, at window construction. Switching
 note sets (T3.8, unbuilt) must re-assign it, or the overlay renders against the previous set.
 Written down now because that is exactly the kind of wire this entry is about.

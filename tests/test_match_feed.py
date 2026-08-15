@@ -234,6 +234,68 @@ def test_the_application_hands_results_to_the_panel(qapp: QApplication, tmp_path
     assert window.overlay.context_set is application.context_set
 
 
+def test_an_utterance_reaches_the_overlay_through_the_real_pipeline(
+    qapp: QApplication,
+    tmp_path,  # type: ignore[no-untyped-def]
+) -> None:
+    """The end-to-end assertion, and the one the first version of this file lacked.
+
+    Calling `application.on_result(...)` directly proves the *hook* is wired and nothing
+    about the path a real interview takes — and it masked a defect exactly there:
+    `MatchingPipeline` was constructed with `on_result=self.on_result`, which **copied**
+    the no-op default, so assigning `application.on_result` afterwards changed nothing
+    the pipeline calls. A test that skips the producer cannot see that. Found by review
+    on PR #26; this drives an interviewer utterance in and asserts on the widget.
+    """
+    from interview_prep_recall.stt.assembler import Utterance
+    from interview_prep_recall.ui.main_window import MainWindow
+
+    note = _note(bullets=["Cut p99 latency from 900ms to 120ms."])
+    application = Application(
+        root=tmp_path,
+        embedder=FlatEmbedder(),
+        client=ScriptedClient(),
+        cipher=ReversingCipher(),
+        context_set=_set(note),
+    )
+    window = MainWindow(application, overlay_settings=_FakeSettings())
+    application.session.request_start()
+    application.session.preflight_result(blocked=False)
+    # Local-only takes the stage-1 fallback path, so the assertion is about the wire
+    # rather than about a scripted model reply.
+    application.session.set_switch("llm_matching", False)
+
+    application.consume(
+        Utterance(
+            stream_id="interviewer",
+            text="tell me about a migration",
+            t_start=0.0,
+            t_end=1.0,
+            context="",
+        ),
+        now=1.0,
+    )
+
+    assert window.overlay.headline.text().endswith(HEADLINE)
+
+
+def test_an_unwired_match_is_recorded_rather_than_dropped_silently(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """D-60. A headless application is legitimate — every test is one — so the default
+    cannot raise. What it must not do is be indistinguishable from a wired surface, which
+    is precisely how the missing match feed survived six milestones."""
+    application = Application(
+        root=tmp_path,
+        embedder=FlatEmbedder(),
+        client=ScriptedClient(),
+        cipher=ReversingCipher(),
+        context_set=_set(_note()),
+    )
+
+    application.on_result(_result(Outcome.CONFIRMED, _note().id))
+
+    assert any(event.event == "match_unrendered" for event in application.ring.snapshot())
+
+
 def test_the_result_hook_does_not_outlive_the_window(qapp: QApplication, tmp_path) -> None:  # type: ignore[no-untyped-def]
     """The application outlives the window, and the pipeline keeps emitting: a hook
     holding a bound `emit` of a deleted widget is the segfault shape D-53 and D-54
