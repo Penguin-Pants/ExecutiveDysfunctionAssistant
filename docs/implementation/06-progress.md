@@ -15,7 +15,7 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | **M0 — Scaffold** | ✅ Complete | 20 tests passing, lint + format + mypy clean |
 | **M1 — Audio capture spike** | 🟡 Code written, **unrun** | T1.1/T1.2/T1.4 implemented from `pyaudiowpatch` docs; T1.3 already done. **Nothing has executed** — `scripts/m1_spike.py` is the AS-2 gate and needs the Windows machine. |
 | **M2 — STT interface & local backend** | 🟢 T2.1–T2.3 complete | Interface, local backend, assembler. T2.4 is the **AS-1 latency gate** and genuinely needs the target laptop. T2.2's model adapter is unverified (**AS-9**) |
-| **M3 — Notes store & indexing** | 🟢 Logic complete | T3.1–T3.6 done. T3.7–T3.9 are Qt UI, deferred to Windows |
+| **M3 — Notes store & indexing** | 🟢 T3.1–T3.8 complete | Store, importer, index, **and the editor + set lifecycle**. T3.9's backup-restore UI is the last one |
 | **M4 — Matching pipeline** | 🟢 T4.1–T4.6 complete | T4.7 **blocked**: needs the user's labelled fixtures |
 | **M5 — Overlay UI** | 🟢 Everything buildable here is done · **T5.10 joined it to matching** | T5.1, T5.3, T5.4, T5.4a, T5.5, T5.6, T5.7, T5.8 complete and tested offscreen. Remaining: **T5.2** (`SetWindowDisplayAffinity` — Windows) and **T5.9** (end-to-end latency, needs the D-U6 laptop). Nothing else in M5 is buildable in this container |
 | **M6 — Session lifecycle** | 🟢 Logic complete · panic on hold (D-U11) | T6.1–T6.3, **T6.3b's panic surface**, T6.5 classification, T6.6 backpressure, T6.7 done. T6.4 and the OS trigger paths need Windows |
@@ -166,6 +166,99 @@ conservative choice, just a broken one.
 ---
 
 ## Log
+
+### T3.7 + T3.8 — the notes editor and the set lifecycle · complete · 2026-08-15
+
+`ui/editor.py` (was a four-line placeholder), `Application.activate_context_set`, wired into
+`ui/main_window.py`. New `tests/test_editor.py` (28 cases), `tests/test_main_window.py` +2.
+**1137 passing**, ruff, format and `mypy interview_prep_recall` clean.
+
+**Notes could be imported, matched, tracked, embedded and reported on — and not written.** The
+store, the model, the importer and the index all had tests, and the product had no way to create
+a note. Same shape as T5.10, one layer further out.
+
+**Three properties carry this surface.**
+
+* **Saving is debounced, never per keystroke.** `NotesStore.save` rotates FR29's five backup
+  generations on every write, so a save per keystroke leaves the user's recovery window covering
+  the last twelve characters they typed. Edits mark dirty; `flush` writes; the timer is a
+  convenience over `flush`, so what the tests drive is what ships. Closing flushes, because the
+  alternative discards five seconds of typing to a race with a timer.
+* **Ids survive edits** (FR41). The editor mutates the note the set holds rather than replacing
+  it — the embedding cache is keyed on note id, and a new id per edit is BC-1's stale-vector
+  failure arriving through the editor.
+* **FR42 is checked before the write.** A bullet that is not a substring of its note is generated
+  content one match away from the overlay. Refusing at save keeps the user in a fixable state;
+  writing it would leave notes that are stored and unusable, because the render boundary refuses
+  them later.
+
+**Switching sets was the trap (D-61).** `self.context_set` is not the only holder: the index is
+*built* from the set and `Prefilter` keeps its own reference. Assigning the attribute would have
+left matching drawing from the previous corpus — silent, and indistinguishable from bad
+retrieval. `activate_context_set` rebuilds both, and **refuses mid-session**: changing the corpus
+under a running interview leaves the tracker's verdict and the report's D-58 snapshot describing
+two different sets.
+
+**T5.10a is closed by the same wire.** The overlay holds the set it was handed once, so the switch
+notifies it through `on_context_set_change` — with D-60's loud default, so an unwired build
+records `context_set_change_unrendered` instead of rendering the old corpus under the new one's
+name.
+
+**One thing the tests found that the plan did not name.** An `Application` can be constructed with
+a set that has never been saved — the composition root does that on a first run — and until it
+exists on disk it cannot be listed, cannot be switched back to, and vanishes the moment the user
+creates a second set. The editor persists it on open. A write as a side effect of opening a window
+is worth stating out loud; the alternative is a surface that quietly loses the thing it is editing.
+
+**PR #27 review — six findings, all valid, all fixed.** Five were P1 and three of them are the
+same sentence: *more than one object holds the active set, and more than one holds its vectors.*
+
+| Severity | Finding | Why it mattered |
+|---|---|---|
+| P1 | **The tracker kept the previous set.** `reset()` clears session state, not the reference, so the checklist rendered the old set and tracking intersected the old tracked ids with the new index — no point in the newly active set could ever be marked. | Third holder of the same object, after the index and the prefilter. The count is the argument for `activate_context_set` existing at all. |
+| P1 | **Saving wrote JSON and not vectors.** A note added or re-headlined in the editor was matched on its previous text — absent entirely if new — until the user switched sets or restarted. | `Application.notes_changed`, on the application because the index is the application's; FR34's content hashes make it cheap enough per save. |
+| P1 | **A failed flush did not block a set switch.** `flush` refuses a non-verbatim set and leaves it dirty *on purpose*; switching anyway replaced `context_set` and put those edits where the user could not reach them. | The refusal says "you can fix it" and this made that false. |
+| P1 | **A failed flush did not block closing**, for the same reason and with a worse ending: the next editor opens clean against the mutated object, no timer is pending, and quitting loses the work. | |
+| P1 | **Deleting a set left its backups.** FR29 keeps five generations, so up to five complete copies of the notes stayed on disk under a control whose confirmation says "cannot be undone" — true of the user's access, false of the data. | |
+| P2 | **`ACTIVE_SET_KEY` had no reader.** The id was written and never read, so FR43's across-restart persistence did not exist. | D-20's shape, in the requirement this task is *for*. |
+
+**The last one is worth more than its severity.** `__main__._build_application` names FR43's
+active-set selection as one of three blockers keeping T9.6a unimplemented — so writing an id
+nobody read left the entry point blocked on a decision that had just been made and not connected.
+`editor.load_active_set` is that reader: the persisted set, else the only one, else a new empty
+one, and it never raises for an ordinary state because a first run and a set deleted on another
+machine are both situations the entry point has to survive. **T9.6a is down to two blockers** —
+the no-API-key policy and the Windows-only embedder and cipher.
+
+**Follow-up T3.7a:** the editor lists sets and cannot *import* into one — T3.5's importer has no
+surface either, so a `.md` of prep notes still cannot be brought in through the UI. That is the
+next instance of this same pattern, and it is now named rather than waiting to be tripped over.
+
+**Three Windows CI failures, and what they cost.** PR #27's Windows job died with *"Windows fatal
+exception: access violation"* in the `qapp` fixture's teardown, after every test had passed and
+with Linux green on the same commit. The crash does not reproduce here, so each attempt was a
+guess until the third one stopped being one.
+
+1. **Hide before delete.** The editor's `closeEvent` can refuse a close (a non-verbatim set), so a
+   dialog could still be visible when `deleteLater` ran. Plausible; wrong.
+2. **Delete only parentless roots, and check `isValid` first.** `topLevelWidgets()` returns
+   objects the C++ side may already have freed, and deleting a parented child double-frees. Also
+   real, also not it — the third stack pointed at the same `app.processEvents()` line.
+3. **The clock.** `processEvents()` dispatches **timers**, not just deferred deletions. T5.10 had
+   `MainWindow.__init__` call `overlay.start_clock()`, and `start_clock` built a *new* `QTimer`
+   every call — so every overlay any test ever constructed left a repeating 500 ms timer alive for
+   the rest of the session, firing into widgets queued for deletion. That is the access violation,
+   and it is a leak on the real product too: a panel the user never sees still ticks.
+
+   The fix puts the clock's lifetime where it belongs — `showEvent` starts it, `hideEvent` stops
+   it, one timer reused — so FR54's auto-clear runs exactly while the panel is on screen. Three
+   tests cover it, including that showing twice does not stack timers.
+
+**The lesson is about method, not about Qt.** The first two fixes were written from a reading of
+the code; the third was written from the stack trace, which had named `processEvents` all along.
+*Ask what else that line does* before proposing what to change around it. And a teardown crash
+with all tests passing is the same family as this project's recurring defect — the suite reported
+green while the process was dying.
 
 ### T5.10 — the match feed · complete · 2026-08-15
 

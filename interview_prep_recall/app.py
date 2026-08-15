@@ -54,7 +54,7 @@ from interview_prep_recall.report.generator import (
 from interview_prep_recall.report.record import SessionRecord
 from interview_prep_recall.report.store import Cipher, SessionStore
 from interview_prep_recall.session.health import HealthMonitor
-from interview_prep_recall.session.manager import PurgeHooks, SessionManager
+from interview_prep_recall.session.manager import PurgeHooks, SessionManager, SessionState
 from interview_prep_recall.settings import AppliedSettings, SettingsApplier
 from interview_prep_recall.stt.assembler import StreamRouter, Utterance
 from interview_prep_recall.stt.fallback import EgressMonitor
@@ -136,6 +136,10 @@ class CloudSwitchFanout:
             target.set_local_only(value)
 
 
+class ActiveSetLocked(RuntimeError):
+    """A note-set switch was attempted while a session was running (FR43)."""
+
+
 class ReportLocalOnlyAdapter:
     """Gives `ReportGenerator` the `set_local_only` shape the fan-out registers.
 
@@ -168,6 +172,13 @@ class Application:
     client: MessagesClient
     cipher: Cipher
     context_set: ContextSet
+    on_context_set_change: Callable[[ContextSet], None] = field(init=False, repr=False)
+    """Told when the active set changes (FR43, T3.8), so surfaces holding it re-read.
+
+    Defaults to a recording no-op for the D-60 reason: the overlay resolves matches
+    against a set it was handed once, and a switch nothing hears about renders the old
+    corpus under the new one's name."""
+
     on_result: Callable[[MatchResult], None] = field(init=False, repr=False)
     """Where a match goes. Assigned by whatever surface renders it (T5.10).
 
@@ -252,6 +263,7 @@ class Application:
         # user at, so a build whose UI forgot this wire is visible instead of merely
         # quiet. Set here rather than as a field default because it needs the ring.
         self.on_result = self._drop_unrendered_match
+        self.on_context_set_change = self._context_set_unwired
         self.runner = BackgroundCallRunner()
         self.pipeline = MatchingPipeline(
             prefilter=self.prefilter,
@@ -397,6 +409,67 @@ class Application:
         self.on_tracker_update(self.tracker.points(), tracking)
 
     # ---------- the report path ----------
+
+    def activate_context_set(self, context_set: ContextSet) -> None:
+        """Switch the active set (FR43, T3.8). **Rebuilds everything that reads it.**
+
+        `self.context_set` is not the only holder: the embedding index is built from it
+        and `Prefilter` keeps its own reference, so assigning the attribute alone would
+        leave matching drawing from the previous set — FR43's "matching draws only from
+        the active set", failing silently and looking like bad retrieval rather than a
+        stale wire. The same copied-reference shape as PR #26's `on_result`.
+
+        **Refused mid-session.** Changing the corpus under a running interview would make
+        the tracker's coverage verdict and the report's snapshot describe two different
+        sets, and D-58 exists because those disagreements are invisible in the artifact.
+
+        Re-embedding is why this is a method rather than a setter: `build` is the
+        expensive step, and it must happen before anything can match against the new set.
+        """
+        if self.session.state not in (SessionState.IDLE, SessionState.PREFLIGHT):
+            raise ActiveSetLocked(
+                "A session is running. Stop it before switching note sets — matching, "
+                "the tracker and the report all read the set that was active at the start."
+            )
+        self.context_set = context_set
+        self.index.build(context_set)
+        self.prefilter.note_set = context_set
+        # **The tracker holds its own reference too**, and `reset()` only clears session
+        # state. Left pointed at the previous set it would render the old checklist and
+        # intersect the old tracked ids with the new index, so no point in the newly
+        # active set could ever be marked. Third holder of the same object, found by
+        # review on PR #27 — the count is the argument for this method existing.
+        self.tracker.note_set = context_set
+        self.tracker.reset()
+        self.ring.record(
+            "context_set_activated", noteset_id=context_set.id, count=len(context_set.notes)
+        )
+        self.on_context_set_change(context_set)
+
+    def notes_changed(self) -> None:
+        """Re-embed after the active set's contents were edited (T3.7).
+
+        Saving writes JSON; it does not touch vectors. Without this, a note added or
+        re-headlined in the editor is matched on the *previous* text until the user
+        switches sets or restarts — absent entirely if it is new. `EmbeddingIndex.build`
+        re-embeds only what its content hashes say changed (FR34), so this is cheap
+        enough to run on every save.
+
+        On `Application` rather than in the editor because the index is the
+        application's, and a UI reaching into it would be a second owner of the cache
+        FR34 makes guarantees about. Found by review on PR #27.
+        """
+        self.index.build(self.context_set)
+        self.ring.record("notes_reindexed", count=len(self.context_set.notes))
+
+    def _context_set_unwired(self, context_set: ContextSet) -> None:
+        """D-60's loud default for `on_context_set_change`.
+
+        The overlay resolves match results against a set it was handed once (T5.10a), so
+        a switch that no surface hears about leaves the panel rendering the old corpus's
+        notes — text the user is no longer looking at, under a headline they are.
+        """
+        self.ring.record("context_set_change_unrendered", noteset_id=context_set.id)
 
     def _drop_unrendered_match(self, result: MatchResult) -> None:
         """The `on_result` default: nothing is rendering, and that is recorded.

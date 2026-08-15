@@ -156,12 +156,29 @@ def qapp() -> Iterator[object]:
 
     Closing and deleting the top-level widgets here destroys them **while the application
     is still alive**, which is the ordering Qt actually supports.
+
+    **Only parentless roots are deleted, and never a widget Qt has already destroyed.**
+    A `QDialog` parented to a window is *both* a top-level widget and that window's
+    child, so a loop that calls `deleteLater` on everything `topLevelWidgets()` returns
+    queues a deletion for objects their parent is about to delete on the same pass — a
+    double free, which on Windows is an access violation in `processEvents` and on Linux
+    is silently survivable. Deleting the roots and letting Qt cascade is the ordering it
+    documents; `isValid` guards the wrappers whose C++ object went with an earlier root.
+
+    `hide()` first because `close()` may legitimately be **refused** — `NotesEditor` does
+    exactly that when a save was rejected and closing would lose the edits (T3.7) — and
+    destroying a *visible* top-level widget is its own hazard. Both were found by CI on
+    PR #27, which is the fourth destroy-order defect in this fixture's history (D-53,
+    D-54) and the first that only Windows could see.
     """
     from PySide6.QtWidgets import QApplication
+    from shiboken6 import isValid
 
     app = QApplication.instance() or QApplication([])
     yield app
-    for widget in app.topLevelWidgets():
-        widget.close()
+    for widget in list(app.topLevelWidgets()):
+        if not isValid(widget) or widget.parent() is not None:
+            continue
+        widget.hide()
         widget.deleteLater()
     app.processEvents()

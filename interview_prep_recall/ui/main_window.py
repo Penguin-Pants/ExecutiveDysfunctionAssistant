@@ -46,6 +46,7 @@ from interview_prep_recall.session.manager import SessionState
 from interview_prep_recall.session.preflight import PreflightReport
 from interview_prep_recall.settings import AppliedSettings
 from interview_prep_recall.ui.diagnostics_view import DiagnosticsView
+from interview_prep_recall.ui.editor import NotesEditor
 from interview_prep_recall.ui.overlay import (
     OverlayGeometry,
     OverlayPanel,
@@ -66,6 +67,7 @@ RESET_OVERLAY_TEXT = "Reset overlay position"
 LOCK_OVERLAY_TEXT = "Lock overlay position"
 PREVIEW_OVERLAY_TEXT = "Show overlay"
 REPORTS_TEXT = "Interview reports…"
+NOTES_TEXT = "Notes…"
 
 PANIC_TEXT = "Panic — stop listening"
 """FR60: **single action, no confirmation.** The control is no longer destructive
@@ -94,6 +96,11 @@ DiagnosticsFactory = Callable[[Application, QWidget], DiagnosticsView]
 """Takes the parent, because a modeless window this one opens must be owned by it."""
 
 ReportsFactory = Callable[[Application, QWidget], ReportView]
+NotesFactory = Callable[[Application, object, QWidget], NotesEditor]
+
+
+def _no_context_set_change(_context_set: object) -> None:
+    """What `on_context_set_change` reverts to when the window goes."""
 
 
 def _no_result(_result: MatchResult) -> None:
@@ -107,6 +114,10 @@ def _default_diagnostics(application: Application, parent: QWidget) -> Diagnosti
 
 def _default_reports(application: Application, parent: QWidget) -> ReportView:
     return ReportView(application, parent=parent)
+
+
+def _default_notes(application: Application, settings: object, parent: QWidget) -> NotesEditor:
+    return NotesEditor(application, settings=settings, parent=parent)
 
 
 def _default_dialog(application: Application) -> SettingsDialog:
@@ -143,6 +154,7 @@ class MainWindow(QMainWindow):
         dialog_factory: DialogFactory = _default_dialog,
         diagnostics_factory: DiagnosticsFactory = _default_diagnostics,
         reports_factory: ReportsFactory = _default_reports,
+        notes_factory: NotesFactory = _default_notes,
         overlay_settings: object,
         refresh_preflight: Callable[[], PreflightReport] | None = None,
         parent: QWidget | None = None,
@@ -153,6 +165,7 @@ class MainWindow(QMainWindow):
         self._dialog_factory = dialog_factory
         self._diagnostics_factory = diagnostics_factory
         self._reports_factory = reports_factory
+        self._notes_factory = notes_factory
         self._refresh_preflight = refresh_preflight
         self._overlay_settings = overlay_settings
 
@@ -171,6 +184,10 @@ class MainWindow(QMainWindow):
         self.diagnostics_button = QPushButton("Diagnostics…")
         self.diagnostics_button.clicked.connect(self.open_diagnostics)
         layout.addWidget(self.diagnostics_button)
+
+        self.notes_button = QPushButton(NOTES_TEXT)
+        self.notes_button.clicked.connect(self.open_notes)
+        layout.addWidget(self.notes_button)
 
         self.reports_button = QPushButton(REPORTS_TEXT)
         self.reports_button.clicked.connect(self.open_reports)
@@ -249,12 +266,23 @@ class MainWindow(QMainWindow):
         # pipeline's worker thread calls this, so it is the panel's `emit` — the
         # `tracker_updated` contract, for the third collaborator in a row.
         self.overlay.context_set = application.context_set
+        # T5.10a, closed: the panel resolves matches against a set it was handed once, so
+        # switching sets (T3.8) has to re-hand it. Assigning the attribute rather than
+        # emitting because `activate_context_set` refuses while a session runs, which
+        # means this only ever fires on the GUI thread.
+        application.on_context_set_change = self._on_context_set_change
+        self.destroyed.connect(
+            lambda: setattr(application, "on_context_set_change", _no_context_set_change)
+        )
         application.on_result = self.overlay.match_received.emit
         self.destroyed.connect(lambda: setattr(application, "on_result", _no_result))
         # FR54's auto-clear had the same problem one layer down: `tick` was pull-based
         # and `start_clock` had no production caller either, so an unpinned snippet
         # would have stayed on screen for the whole interview once one finally arrived.
-        self.overlay.start_clock()
+        #
+        # **The panel starts its own clock when it becomes visible**, rather than being
+        # started here at construction. A clock on a hidden panel is work nobody sees and
+        # a timer that can tick into a teardown; see `OverlayPanel.showEvent`.
 
         application.monitor.on_change = self.overlay.health_updated.emit
         # **Cleared when this window is destroyed.** The application outlives the window,
@@ -389,6 +417,23 @@ class MainWindow(QMainWindow):
             self.panic_status.setText("Listening.")
         else:
             self.panic_status.setText(PANIC_UNAVAILABLE)
+
+    def _on_context_set_change(self, context_set: object) -> None:
+        """FR43. The panel renders against the newly active set from the next match on."""
+        self.overlay.context_set = context_set  # type: ignore[assignment]
+        self.refresh_checklist()
+
+    def open_notes(self) -> NotesEditor:
+        """T3.7/T3.8's surface. Same ownership rules as the other two dialogs.
+
+        The overlay's geometry store is handed over as the settings object: FR43's active
+        set persists beside the overlay's layout because both are per-user UI state, and
+        because a widget minting its own `QSettings` is what D-52 forbids.
+        """
+        view = self._notes_factory(self.application, self._overlay_settings, self)
+        self._notes = view
+        view.show()
+        return view
 
     def open_reports(self) -> ReportView:
         """M11's surface, reached from here (T11.10).
