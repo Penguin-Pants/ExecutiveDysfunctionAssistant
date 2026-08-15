@@ -18,12 +18,12 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | **M3 — Notes store & indexing** | 🟢 Logic complete | T3.1–T3.6 done. T3.7–T3.9 are Qt UI, deferred to Windows |
 | **M4 — Matching pipeline** | 🟢 T4.1–T4.6 complete | T4.7 **blocked**: needs the user's labelled fixtures |
 | **M5 — Overlay UI** | 🟢 Everything buildable here is done | T5.1, T5.3, T5.4, T5.4a, T5.5, T5.6, T5.7, T5.8 complete and tested offscreen. Remaining: **T5.2** (`SetWindowDisplayAffinity` — Windows) and **T5.9** (end-to-end latency, needs the D-U6 laptop). Nothing else in M5 is buildable in this container |
-| **M6 — Session lifecycle** | 🟢 Logic complete · panic on hold (D-U11) | T6.1–T6.3, T6.5 classification, T6.6 backpressure, T6.7 done. T6.4 and the OS trigger paths need Windows |
+| **M6 — Session lifecycle** | 🟢 Logic complete · panic on hold (D-U11) | T6.1–T6.3, **T6.3b's panic surface**, T6.5 classification, T6.6 backpressure, T6.7 done. T6.4 and the OS trigger paths need Windows |
 | **M7 — Progress tracker** | 🟢 Everything buildable here is done | T7.1, T7.3 and **T7.4** complete. T7.2 needs paired audio fixtures — the only M7 task left |
 | **M8 — Cloud STT backends** | 🟢 T8.1–T8.5 complete | Deepgram, ElevenLabs, fallback, egress. Protocols unverified against a live endpoint (**AS-8**) |
 | **M9 — Packaging & first run** | 🟡 T9.0–T9.2, T9.6 complete | Composition root, FR63 disclosure, config store, settings surface, **entry point**. T9.3 is **blocked on M1** (three of four steps are audio). T9.6a needs FR43; T9.4 is PyInstaller; T9.5 needs live vendor docs |
 | **M10 — Typed context sources** | 🟢 T10.1–T10.7 complete | Five kinds, per-kind caps and thresholds, schema v1→v2 migration, **FR72's per-kind marking**. T10.7's 1 m glance test and bundled-font glyph coverage ride with T5.9/T9.4 |
-| **M11 — Post-interview report** | 🟢 T11.1, T11.3–T11.10 complete | Record, evidence binding, encrypted store, retention, generation, **and the view/export**. Only T11.2's DPAPI cipher needs Windows |
+| **M11 — Post-interview report** | 🟢 T11.1, T11.3–T11.10 + a/b/c complete | Record, evidence binding, encrypted store, retention, generation, the view/export, **context snapshots (D-58) and off-thread generation (D-59)**. Only T11.2's DPAPI cipher needs Windows |
 
 **Next action: nothing is left that this container can build.** T11.10 landed on 2026-08-15 and
 was the last of them. What remains is genuinely external — hardware, the user's fixtures, or a
@@ -68,9 +68,9 @@ behind that one word for five milestones.
 
 Remaining, re-sorted after the Qt discovery:
 
-- **Buildable and testable here (Qt, offscreen):** nothing from the named task list. The
-  follow-ups are: **T10.7a** (a kind legend in the editor), **T11.10a** (FR87's signpost, which
-  needs a panic surface to sit on), **T7.4a**. *(M5's overlay widget, T7.4's checklist, T10.7's
+- **Buildable and testable here (Qt, offscreen):** **T10.7a** (a kind legend in the editor) and
+  **T7.4a**. *(T11.10a/b/c all landed on 2026-08-15, along with T6.3b — the panic surface T11.10a
+  needed, which no task had ever named.)* *(M5's overlay widget, T7.4's checklist, T10.7's
   per-kind marking and T11.10's report view were all on this list and are now done — T5.4, T5.7,
   T5.8, T7.4, T10.7 and T11.10 all landed on 2026-08-15.)*
 - **Genuinely needs Windows:** M1 (WASAPI, AS-2 gate), T2.4 (AS-1, needs the D-U6 laptop's CPU),
@@ -166,6 +166,53 @@ conservative choice, just a broken one.
 ---
 
 ## Log
+
+### T11.10a/b/c + T6.3b — the report follow-ups · complete · 2026-08-15
+
+All three follow-ups from PR #24's review, plus the task that was blocking one of them.
+**1082 passing**, ruff, format and `mypy interview_prep_recall` clean.
+
+**T11.10c — a report is graded against the interview's own context (D-58).** The transcript
+already travelled with the tracker's coverage verdict for exactly this reason, and the rest of
+the context did not: a report regenerated a week later graded its JD-fit and resume sections
+against whatever notes happened to be loaded that day. Silently, and confidently, in a document
+the user reads about themselves. A session now carries a snapshot of its context set, inside the
+same encrypted envelope so FR82 covers it and beside the transcript so FR84 deletes it. The set
+*id* was the tempting cheap answer and is useless — the set is mutable, so a week later the id
+resolves to something else. A session with no readable snapshot still generates, against today's
+notes, and says so on the two sections the substitution distorts; prep coverage stays unmarked
+because it rests on the tracker's stored verdict and survives intact. Marking it too would
+overstate the damage and train the reader to ignore the notice where it is true.
+
+**T11.10b — generation off the GUI thread (D-59).** `ReportGenerator` splits into `prepare` (the
+refusals and the prompt — no socket, no indicator) and `send` (the network). The split is at the
+*payload* rather than at the confirmation, which is what keeps FR81 honest under threading: the
+size shown and the size sent come from one `PreparedReport`. The confirmation stays on the GUI
+thread because a modal opened from a worker is undefined behaviour in Qt — PR #22's defect. Not
+the application's executor: that pool serves matching on a latency budget during a live interview
+(D-11), and a multi-second upload parked in it would sit in front of a stage-2 call.
+
+**FR81a was the real casualty, and it is worth stating plainly.** The egress indicator was set for
+the duration of the upload on a thread that could not repaint — lit in memory and dark on screen
+for exactly the seconds it exists to announce. The requirement's test passed the whole time,
+because it asserted the flag and not the pixels. That is this project's signature defect, and it
+survived two review rounds on the surface that renders the indicator.
+
+**T11.10a — FR87's signpost, and T6.3b, the task that had to exist first.** The blocker was never
+a decision: T6.3a built the state machine's half of the panic control and **nothing could press
+it**, so the surface FR87 names did not exist. Recorded as T6.3b rather than absorbed into
+whichever task tripped over it — the fourth time in this plan a named prerequisite turned out to
+have no ID (after T9.0, T9.2a and T9.6). Single action, no confirmation (FR60), pressing it before
+a session says so rather than raising, the paused state visible in words, and a signpost carrying
+both halves: that panic destroys nothing, and where the deliberate route is. A test asserts the
+route it names actually exists, because a signpost pointing at an absent control satisfies the
+wording and fails the reader.
+
+**The two tests worth keeping.** `test_the_default_dispatch_really_leaves_the_gui_thread` drives
+the *production* dispatcher and asserts the model call ran on another thread — every other test
+injects an inline dispatcher and would pass whether or not a thread was ever created. And
+`test_regeneration_uses_the_snapshot_not_todays_notes` asserts on the prompt: today's notes must
+not appear in it. Both are about the property rather than the plumbing.
 
 ### M11 — T11.10 · complete · 2026-08-15
 
