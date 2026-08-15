@@ -111,12 +111,13 @@ own §12 open risk and it gets answered here, not assumed.
 
 | Task | Requirements | Acceptance criteria |
 |---|---|---|
-| **T5.1** Frameless, translucent, always-on-top teleprompter panel | FR11 | Renders headline + ≤3 verbatim bullets; every rendered string is a byte-exact substring of the stored note. |
+| **T5.1** Frameless, translucent, always-on-top teleprompter panel | FR11 | Renders headline + ≤3 verbatim bullets; every rendered string is a byte-exact substring of the stored note.  ✅ **Done** — the substring rule is enforced in `SnippetView.__post_init__`, not just asserted in a test. |
 | **T5.2** Capture exclusion + failure warning | FR14, FR14a | Overlay absent across 6 combinations (Zoom/Teams/Meet × full-screen/window). Forced API failure produces the persistent warning. |
-| **T5.3** Confirmed vs degraded visual states | FR51 | Distinguishable at 1 m without reading text. |
-| **T5.4** Drag, resize, opacity, **brightness**, lock, reset | FR22–24, FR27, FR55, **FR65** | Each independent; off-screen persisted coordinates recoverable via reset. **Sweep brightness end to end and assert every reachable setting clears 4.5:1 for body text and 3:1 for both rails; assert the mid-gray range is unreachable; assert rails swap variants at the crossover.** Assert the sub-70% opacity halo engages. |
-| **T5.5** Transitions + auto-clear + pin | FR25, FR54, FR13 | Unpinned clears at τ_visible; pinned persists; replacement animates. |
-| **T5.6** `QSettings` persistence | FR26 | Survives restart; documented as exempt from §4. |
+| **T5.3** Confirmed vs degraded visual states | FR51 | Distinguishable at 1 m without reading text.  ✅ **Done** — rails plus a `~` glyph, because the rails differ in hue rather than luminance. |
+| **T5.4a** Brightness/opacity model + reset | FR24, FR27, **FR65** | ✅ **Done** — the contrast sweep runs over all 101 settings and verifies WCAG ratios computed in-module, rather than restating design §9b's table. |
+| **T5.4** Drag, resize, lock (the direct-manipulation half) | FR22–23, FR55 | Each independent; off-screen persisted coordinates recoverable via reset. **Sweep brightness end to end and assert every reachable setting clears 4.5:1 for body text and 3:1 for both rails; assert the mid-gray range is unreachable; assert rails swap variants at the crossover.** Assert the sub-70% opacity halo engages. |
+| **T5.5** Transitions + auto-clear + pin | FR25, FR54, FR13 | Unpinned clears at τ_visible; pinned persists; replacement animates.  ✅ **Done** — pull-based `tick(now)`, so FR54 is tested against a fake clock. |
+| **T5.6** `QSettings` persistence | FR26 | Survives restart; documented as exempt from §4.  ✅ **Done** |
 | **T5.7** Health + egress indicators | FR7, FR20, FR35 | Every state in design §7 renders distinctly; **no-match is visually distinct from every failure state**. Egress renders **cloud STT and LLM distinguishably** (§9b), not one shared dot. Includes the FR7 capture indicator, which FR20 is defined relative to. Built to §9b's token table. |
 | **T5.8** Diagnostics viewer | FR36 | In-app view of the ring buffer with export. *(FR36 required "viewable in-app"; T0.3 built only the buffer.)* |
 | **T5.9** End-to-end latency harness | NFR1, NFR3 | Measures **last audio sample → overlay paint** against §9a's per-stage budget, p50/p95, CPU-only on the D-U6 laptop. Also measures video-call frame time with the overlay active vs inactive (NFR3). *(T2.4 covers the STT slice only and lands before the overlay exists, so neither NFR had a task that could verify it.)* |
