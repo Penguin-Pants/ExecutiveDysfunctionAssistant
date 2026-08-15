@@ -42,12 +42,6 @@ from interview_prep_recall.ui.overlay import (  # noqa: E402
     no_match_view,
 )
 
-
-@pytest.fixture(scope="session")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
 CAPTURING = Health(loopback=Status.OK, mic=Status.OK, matching=MatchingStatus.OK)
 """Design §7's `capturing`: everything nominal, audio flowing."""
 

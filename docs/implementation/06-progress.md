@@ -157,7 +157,9 @@ conservative choice, just a broken one.
 `ui/indicators.py` (built out from a four-line stub), the new `ui/diagnostics_view.py`, and a
 route to it from `ui/main_window.py`. Tests: `tests/test_overlay.py` +49, new
 `tests/test_indicators.py` (15), new `tests/test_diagnostics_view.py` (10),
-`tests/test_main_window.py` +3. **868 passing**, ruff and `mypy` clean.
+`tests/test_main_window.py` +11. **879 passing**, ruff and `mypy` clean, and the suite's *exit
+code* verified across five consecutive runs — see the review round below for why that is stated
+separately from the pass count.
 
 **M5's Qt half is finished.** What is left is T5.2's `SetWindowDisplayAffinity` and T5.9's
 latency harness, and both were re-tested against the standing caution above rather than
@@ -228,16 +230,53 @@ would let unsafe events into the buffer and hide them from one reader.
   fixed product copy. That is now asserted, not described — a middle-elide added later would look
   like a cosmetic improvement and would quietly end the guarantee.
 
+#### Review round on PR #21 — three findings, all correct, all fixed
+
+An automated review made three P2 findings. Two of them contradicted a "done" claim above, and
+the correction is recorded rather than quietly absorbed.
+
+**1 & 2 — `set_locked` and `reset_geometry` had no production caller.** Both existed only as
+methods. FR27 asks for a *toggle* and FR55 for a *control*, and a method is neither. Worse for
+FR55 specifically: the case it exists for is a panel the user cannot reach, so a button on that
+panel is not a recovery route.
+
+`MainWindow` now owns the overlay and carries three controls: **Reset overlay position** (FR55),
+**Lock overlay position** (FR27) and a **Show overlay** toggle so the user can see what they are
+adjusting. `main_window.py`'s own docstring predicted this — *"when M5 lands, the overlay becomes
+the session surface and this stays the readiness-and-settings shell around it"* — so it was the
+plan's instruction, not new scope. The panel's `on_geometry_changed` now has a production
+subscriber, which closes the first deferred item from the previous round.
+
+**3 — elision applied at every panel height.** Correct, and the deeper problem was in how §9b was
+read. See **D-51**: the two-line allowance is a floor, and the real allowance is measured from
+the space the panel has.
+
+#### Three defects found while fixing those, none of them in the review
+
+* **`MainWindow` was building its own `QSettings`** (**D-52**). Every test that constructed a
+  window would have reached the user's real registry, and the T0.4 allowlist guard cannot see it
+  — `QSettings` writes through Qt's C++ layer, not Python's `open`. The store is injected now,
+  and required, so the one production call site is the only place it is chosen.
+* **Two segfaults from Qt ownership** (**D-53**). A parentless top-level widget destroyed through
+  a Python reference, and a window→panel→bound-method→window cycle left to the cyclic collector.
+  Both let Qt destroy objects in an order nobody chose. The cycle killed the interpreter only
+  after about twenty windows, so it surfaced as an unrelated test crashing on construction —
+  which is why the diagnosis took several passes down the wrong path.
+* **The `qapp` fixture never tore down** (**D-54**). Six modules each had their own copy and none
+  closed anything, so every widget survived to interpreter shutdown. The suite reported 879
+  passing and the process then died with 139 on roughly two runs in three. On CI that is a red
+  build with a green test report. One fixture in `conftest.py` now closes and deletes top-level
+  widgets while the application is still alive; five consecutive full runs exit 0.
+
+The last one is worth keeping in mind: **an exit-time crash does not appear in the test report.**
+Checking `pytest`'s exit code, not its summary line, is what caught it.
+
 #### Deferred, with reasons
 
-* **The overlay is not yet wired into `Application` or `MainWindow`.** `OverlayPanel` takes an
-  `on_geometry_changed` callback and a `Health`, and nothing in production supplies either — the
-  session cannot start yet (capture is M1), so there is no producer to connect. This is the
-  T9.2b-shaped gap the composition root exists to close, and it belongs to whichever task first
-  has a running session. **Recorded as a follow-up, not as done.**
-* **`QSettings` is not yet the store behind `save_geometry` / `load_geometry` in production.**
-  Same reason: T5.6's round-trip is tested against the double, and the real settings object gets
-  attached when the app owns an overlay instance.
+* **The overlay renders no session content.** It is constructed, positioned, persisted and
+  controllable, but nothing feeds it snippets or health — capture is M1 and matching needs a
+  running session. The geometry half of the wiring is done; the content half belongs to whichever
+  task first has a session. **Recorded as a follow-up, not as done.**
 * **T5.9's harness is not stubbed.** Writing a latency harness that cannot run measures nothing
   and would report a number from this container's CPU as if it were the D-U6 laptop's.
 

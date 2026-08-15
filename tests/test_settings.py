@@ -156,11 +156,6 @@ from interview_prep_recall.ui.settings import (  # noqa: E402
 )
 
 
-@pytest.fixture(scope="session")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
 def test_slider_conversion_round_trips_every_step() -> None:
     """`QSlider` is integer-only, so FR52's 0.20–0.60 range is scaled. A rounding
     mismatch between the write and read paths would move the user's setting a little

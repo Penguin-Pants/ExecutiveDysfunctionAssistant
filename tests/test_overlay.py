@@ -34,9 +34,9 @@ from interview_prep_recall.ui.overlay import (  # noqa: E402  # noqa: E402
     HALO_OPACITY_THRESHOLD,
     HEADLINE_PX_RANGE,
     LIGHT_BAND_MIN,
-    MAX_BULLET_LINES,
     MAX_BULLETS,
     MAX_SIZE,
+    MIN_BULLET_LINES,
     MIN_RENDERED_PX,
     MIN_SIZE,
     NO_MATCH_TEXT,
@@ -77,11 +77,6 @@ SOURCE = (
     "Led the migration off the monolith. Cut p99 latency from 900ms to 120ms. "
     "Team of four, six months."
 )
-
-
-@pytest.fixture(scope="session")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
 
 
 # ---------- FR11: the retrieval-only guarantee, at the render boundary ----------
@@ -881,7 +876,7 @@ def test_a_long_bullet_elides_rather_than_growing_unboundedly(qapp: QApplication
     assert rendered.endswith(ELLIPSIS)
     assert len(rendered) < len(long_source)
     metrics = QFontMetrics(panel.bullets[0].font())
-    assert line_count(rendered, metrics, panel.text_width) <= MAX_BULLET_LINES
+    assert line_count(rendered, metrics, panel.text_width) <= MIN_BULLET_LINES
 
 
 def test_a_short_bullet_is_rendered_verbatim(qapp: QApplication) -> None:
@@ -1015,3 +1010,53 @@ def test_the_indicator_groups_do_not_repaint_the_state_rail(qapp: QApplication) 
 
     for container in (panel.indicators, panel.indicators.egress, panel.indicators.health):
         assert "border: none" in container.styleSheet()
+
+
+# ---------- PR #21 review findings ----------
+
+
+def test_a_tall_panel_shows_more_lines_than_the_minimum_one(qapp: QApplication) -> None:
+    """§9b's two-line sentence is a floor, not a cap (D-51).
+
+    Read as a flat cap it clips text into two lines at every size, including a 600px panel
+    with most of its height empty — which is the clipping FR23 exists to forbid.
+    """
+    long_source = "Cut p99 latency from 900 milliseconds to 120 milliseconds fleet-wide. " * 20
+    view = SnippetView(
+        headline="Cut p99",
+        bullets=(long_source.strip(),),
+        state=SnippetState.CONFIRMED,
+        source_text=long_source,
+    )
+    short = OverlayPanel(OverlayGeometry(width=420, height=MIN_SIZE[1]))
+    tall = OverlayPanel(OverlayGeometry(width=420, height=MAX_SIZE[1]))
+
+    short.show_snippet(view, now=0.0)
+    tall.show_snippet(view, now=0.0)
+
+    assert tall.bullet_lines_available(bullet_px(MAX_SIZE[1])) > MIN_BULLET_LINES
+    assert len(tall.bullets[0].text()) > len(short.bullets[0].text())
+
+
+def test_the_smallest_panel_still_honours_the_two_line_floor(qapp: QApplication) -> None:
+    """At the minimum size the computed allowance is the two lines §9b describes."""
+    panel = OverlayPanel(OverlayGeometry(width=MIN_SIZE[0], height=MIN_SIZE[1]))
+
+    assert panel.bullet_lines_available(bullet_px(MIN_SIZE[1])) >= MIN_BULLET_LINES
+
+
+def test_text_that_fits_the_taller_panel_is_never_cut(qapp: QApplication) -> None:
+    """The FR11 consequence of the fix: a bullet only loses characters it has no room
+    for, so a panel with room renders the stored text byte for byte."""
+    text = "Cut p99 latency from 900 milliseconds to 120 milliseconds across the fleet."
+    source = f"{text} Team of four, six months."
+    panel = OverlayPanel(OverlayGeometry(width=MAX_SIZE[0], height=MAX_SIZE[1]))
+
+    panel.show_snippet(
+        SnippetView(
+            headline="Cut p99", bullets=(text,), state=SnippetState.CONFIRMED, source_text=source
+        ),
+        now=0.0,
+    )
+
+    assert panel.bullets[0].text() == text

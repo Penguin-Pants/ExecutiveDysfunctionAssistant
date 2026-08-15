@@ -16,6 +16,7 @@ from helpers import ReversingCipher, ScriptedClient
 
 pytest.importorskip("PySide6", reason="Qt UI tests require the [ui] extra")
 
+from PySide6.QtCore import QPoint  # noqa: E402
 from PySide6.QtWidgets import QApplication, QDialog  # noqa: E402
 
 from interview_prep_recall.app import Application  # noqa: E402
@@ -34,6 +35,11 @@ from interview_prep_recall.ui.main_window import (  # noqa: E402
     READY_TEXT,
     MainWindow,
 )
+from interview_prep_recall.ui.overlay import (  # noqa: E402
+    OverlayGeometry,
+    load_geometry,
+    save_geometry,
+)
 from interview_prep_recall.ui.settings import SettingsDialog  # noqa: E402
 
 
@@ -43,11 +49,6 @@ class FlatEmbedder:
 
     def encode(self, texts: list[str]) -> np.ndarray:
         return np.ones((len(texts), 2), dtype=np.float32)
-
-
-@pytest.fixture(scope="session")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture
@@ -63,6 +64,30 @@ def application(tmp_path: Path) -> Application:
     )
 
 
+class FakeSettings:
+    """Stands in for `QSettings`, round-tripping through strings as the real one does."""
+
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+
+    def setValue(self, key: str, value: object) -> None:  # noqa: N802 — Qt's name
+        self.store[key] = str(value)
+
+    def value(self, key: str, default: object = None) -> object:
+        return self.store.get(key, default)
+
+
+@pytest.fixture
+def overlay_settings() -> FakeSettings:
+    """Every window in these tests gets a settings double.
+
+    `MainWindow` requires one rather than defaulting to `QSettings`, so a test cannot
+    reach the real registry by forgetting — see the class docstring for why the T0.4
+    guard cannot catch that on its own.
+    """
+    return FakeSettings()
+
+
 def _report(*, blocked: bool) -> PreflightReport:
     check = Check("mic_device", "Microphone (you)", CheckClass.BLOCK)
     return PreflightReport((CheckResult(check, ok=not blocked, detail="no device"),))
@@ -71,9 +96,11 @@ def _report(*, blocked: bool) -> PreflightReport:
 # ---------- FR38 status ----------
 
 
-def test_blockers_are_listed_with_reasons(qapp: QApplication, application: Application) -> None:
+def test_blockers_are_listed_with_reasons(
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
+) -> None:
     """A count tells the user nothing about which thing to fix."""
-    window = MainWindow(application, _report(blocked=True))
+    window = MainWindow(application, _report(blocked=True), overlay_settings=overlay_settings)
 
     text = window.status.text()
     assert BLOCKED_HEADING in text
@@ -81,27 +108,31 @@ def test_blockers_are_listed_with_reasons(qapp: QApplication, application: Appli
     assert "no device" in text
 
 
-def test_a_clear_preflight_reads_as_ready(qapp: QApplication, application: Application) -> None:
-    window = MainWindow(application, _report(blocked=False))
+def test_a_clear_preflight_reads_as_ready(
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
+) -> None:
+    window = MainWindow(application, _report(blocked=False), overlay_settings=overlay_settings)
     assert READY_TEXT in window.status.text()
 
 
-def test_warnings_are_shown_without_blocking(qapp: QApplication, application: Application) -> None:
+def test_warnings_are_shown_without_blocking(
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
+) -> None:
     check = Check("echo_clear", "Headphones detected", CheckClass.WARN)
     report = PreflightReport((CheckResult(check, ok=False, detail="echo suspected"),))
 
-    window = MainWindow(application, report)
+    window = MainWindow(application, report, overlay_settings=overlay_settings)
 
     assert READY_TEXT in window.status.text()
     assert "Headphones detected" in window.status.text()
 
 
 def test_every_preflight_check_can_be_rendered(
-    qapp: QApplication, application: Application
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
 ) -> None:
     """A check added to `CHECKS` must not produce a window that crashes on display."""
     report = PreflightReport(tuple(CheckResult(c, ok=False, detail=c.key) for c in CHECKS))
-    window = MainWindow(application, report)
+    window = MainWindow(application, report, overlay_settings=overlay_settings)
     assert window.status.text()
 
 
@@ -109,7 +140,7 @@ def test_every_preflight_check_can_be_rendered(
 
 
 def test_accepting_settings_applies_and_persists(
-    qapp: QApplication, application: Application, tmp_path: Path
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings, tmp_path: Path
 ) -> None:
     """The whole T9.2b path: dialog → `apply_settings` → disk."""
 
@@ -121,7 +152,7 @@ def test_accepting_settings_applies_and_persists(
         dialog.exec = lambda: QDialog.DialogCode.Accepted  # type: ignore[method-assign]
         return dialog
 
-    window = MainWindow(application, dialog_factory=factory)
+    window = MainWindow(application, dialog_factory=factory, overlay_settings=overlay_settings)
     result = window.open_settings()
 
     assert result is not None
@@ -132,7 +163,7 @@ def test_accepting_settings_applies_and_persists(
 
 
 def test_cancelling_settings_changes_nothing(
-    qapp: QApplication, application: Application, tmp_path: Path
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings, tmp_path: Path
 ) -> None:
     """Cancel must be a genuine no-op — nothing applied, nothing written."""
     before = application.prefilter.tau_floor
@@ -143,7 +174,7 @@ def test_cancelling_settings_changes_nothing(
         dialog.exec = lambda: QDialog.DialogCode.Rejected  # type: ignore[method-assign]
         return dialog
 
-    window = MainWindow(application, dialog_factory=factory)
+    window = MainWindow(application, dialog_factory=factory, overlay_settings=overlay_settings)
 
     assert window.open_settings() is None
     assert application.prefilter.tau_floor == pytest.approx(before)
@@ -151,14 +182,14 @@ def test_cancelling_settings_changes_nothing(
 
 
 def test_the_default_dialog_wires_the_fr37_switches(
-    qapp: QApplication, application: Application
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
 ) -> None:
     """FR37's switches must reach `SessionManager.set_switch`, which is the only writer.
 
     Built through the *default* factory, because the production wiring is the thing under
     test — a test supplying its own factory would prove nothing about what ships.
     """
-    window = MainWindow(application)
+    window = MainWindow(application, overlay_settings=overlay_settings)
     dialog = window._dialog_factory(application)  # noqa: SLF001
 
     assert application.session.switches.progress_tracker is True
@@ -167,7 +198,7 @@ def test_the_default_dialog_wires_the_fr37_switches(
 
 
 def test_every_switch_reaches_the_session_manager(
-    qapp: QApplication, application: Application
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
 ) -> None:
     """Each FR37 switch must actually flip the manager's state.
 
@@ -176,7 +207,7 @@ def test_every_switch_reaches_the_session_manager(
     and named for a guarantee it did not check. The same defect this project keeps
     finding, in a test written minutes earlier.
     """
-    window = MainWindow(application)
+    window = MainWindow(application, overlay_settings=overlay_settings)
     dialog = window._dialog_factory(application)  # noqa: SLF001
 
     for name, checkbox in dialog.switches.items():
@@ -271,7 +302,7 @@ def test_a_failed_startup_exits_cleanly_instead_of_crashing(
 
 
 def test_settings_change_refreshes_the_readiness_report(
-    qapp: QApplication, application: Application
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
 ) -> None:
     """Found by review on PR #18.
 
@@ -294,6 +325,7 @@ def test_settings_change_refreshes_the_readiness_report(
         application,
         _report(blocked=False),
         dialog_factory=factory,
+        overlay_settings=overlay_settings,
         refresh_preflight=refresh,
     )
     assert READY_TEXT in window.status.text()
@@ -304,7 +336,7 @@ def test_settings_change_refreshes_the_readiness_report(
 
 
 def test_a_window_without_a_refresh_hook_still_works(
-    qapp: QApplication, application: Application
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
 ) -> None:
     """The hook is optional, and its absence must not break the settings route."""
 
@@ -313,7 +345,12 @@ def test_a_window_without_a_refresh_hook_still_works(
         dialog.exec = lambda: QDialog.DialogCode.Accepted  # type: ignore[method-assign]
         return dialog
 
-    window = MainWindow(application, _report(blocked=False), dialog_factory=factory)
+    window = MainWindow(
+        application,
+        _report(blocked=False),
+        dialog_factory=factory,
+        overlay_settings=overlay_settings,
+    )
     assert window.open_settings() is not None
 
 
@@ -321,24 +358,27 @@ def test_a_window_without_a_refresh_hook_still_works(
 
 
 def test_the_window_opens_the_diagnostics_viewer(
-    qapp: QApplication, application: Application
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
 ) -> None:
     """FR36's "viewable in-app" needs somewhere to be viewed *from*. The buffer and the
     view both existed and nothing reached either — the same gap T9.2b closed for settings.
     """
     application.ring.record("stt_connected", backend="local")
+    # The window is held: the viewer is parented to it, so a discarded window takes the
+    # dialog with it. That is the ownership the parent is there to provide.
+    window = window_with(application, overlay_settings)
 
-    view = window_with(application).open_diagnostics()
+    view = window.open_diagnostics()
 
     assert [row[1] for row in view.rows] == ["stt_connected"]
 
 
 def test_the_viewer_is_held_so_it_does_not_vanish(
-    qapp: QApplication, application: Application
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
 ) -> None:
     """A modeless `QDialog` that goes out of scope is collected and the window disappears
     — the defect the overlay's transition animation already had."""
-    window = window_with(application)
+    window = window_with(application, overlay_settings)
 
     view = window.open_diagnostics()
 
@@ -346,12 +386,126 @@ def test_the_viewer_is_held_so_it_does_not_vanish(
 
 
 def test_the_viewer_reads_the_applications_ring(
-    qapp: QApplication, application: Application
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
 ) -> None:
     """Not a fresh buffer: a viewer wired to its own ring would show an empty table for
     every session and look like a working feature."""
-    assert window_with(application).open_diagnostics().ring is application.ring
+    window = window_with(application, overlay_settings)
+
+    assert window.open_diagnostics().ring is application.ring
 
 
-def window_with(application: Application) -> MainWindow:
-    return MainWindow(application, _report(blocked=False))
+def window_with(application: Application, settings: FakeSettings) -> MainWindow:
+    return MainWindow(application, _report(blocked=False), overlay_settings=settings)
+
+
+# ---------- PR #21 review: FR27 and FR55 need reachable controls ----------
+
+
+def test_the_reset_control_is_on_the_window_not_the_panel(
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
+) -> None:
+    """FR55 exists for a panel the user cannot reach, so a button on that panel is not a
+    recovery route. Found by review on PR #21, where `reset_geometry` had no caller."""
+    settings = FakeSettings()
+    save_geometry(settings, OverlayGeometry(x=-9000, y=-9000, locked=True))
+    window = MainWindow(application, _report(blocked=False), overlay_settings=settings)
+    assert window.overlay.geometry_settings.x == -9000
+
+    recovered = window.reset_overlay()
+
+    assert recovered.x > -9000
+    assert recovered.locked is False
+
+
+def test_the_recovered_position_is_persisted(
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
+) -> None:
+    """A reset that lasts until restart would put the user back on the coordinates it
+    just rescued them from."""
+    settings = FakeSettings()
+    save_geometry(settings, OverlayGeometry(x=-9000, y=-9000))
+    window = MainWindow(application, _report(blocked=False), overlay_settings=settings)
+
+    recovered = window.reset_overlay()
+
+    assert load_geometry(settings).x == recovered.x
+
+
+def test_reset_brings_the_lock_checkbox_back_in_step(
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
+) -> None:
+    """Reset clears the lock, so a checkbox left ticked would show a lock the geometry no
+    longer has."""
+    settings = FakeSettings()
+    save_geometry(settings, OverlayGeometry(locked=True))
+    window = MainWindow(application, _report(blocked=False), overlay_settings=settings)
+    assert window.lock_overlay_box.isChecked() is True
+
+    window.reset_overlay()
+
+    assert window.lock_overlay_box.isChecked() is False
+
+
+def test_the_lock_toggle_reaches_the_panel_and_the_store(
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
+) -> None:
+    """FR27, from a surface that stays reachable when the panel does not."""
+    settings = FakeSettings()
+    window = MainWindow(application, _report(blocked=False), overlay_settings=settings)
+
+    window.lock_overlay_box.setChecked(True)
+
+    assert window.overlay.locked is True
+    assert load_geometry(settings).locked is True
+
+
+def test_the_lock_checkbox_starts_from_the_persisted_state(
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
+) -> None:
+    settings = FakeSettings()
+    save_geometry(settings, OverlayGeometry(locked=True))
+
+    window = MainWindow(application, _report(blocked=False), overlay_settings=settings)
+
+    assert window.lock_overlay_box.isChecked() is True
+
+
+def test_a_drag_on_the_panel_persists_through_the_window(
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
+) -> None:
+    """The wiring the panel could not do for itself: `on_geometry_changed` now has a
+    production subscriber, so FR26 holds outside the tests that fake one."""
+    settings = FakeSettings()
+    window = MainWindow(application, _report(blocked=False), overlay_settings=settings)
+    start = window.overlay.geometry_settings
+
+    window.overlay.begin_manipulation(QPoint(200, 60), QPoint(0, 0))
+    window.overlay.update_manipulation(QPoint(35, 0))
+    window.overlay.end_manipulation()
+
+    assert load_geometry(settings).x == start.x + 35
+
+
+def test_the_preview_toggle_shows_and_hides_the_panel(
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
+) -> None:
+    """Drag, resize and reset are things the user does to a panel they can see, and none
+    of them needs an interview to be running."""
+    window = MainWindow(application, _report(blocked=False), overlay_settings=overlay_settings)
+
+    window.preview_overlay_button.setChecked(True)
+    assert window.overlay.isVisible() is True
+
+    window.preview_overlay_button.setChecked(False)
+    assert window.overlay.isVisible() is False
+
+
+def test_the_overlay_starts_hidden(
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
+) -> None:
+    """There is no session, so an always-on-top panel appearing at launch would be a
+    claim that something is running."""
+    window = MainWindow(application, _report(blocked=False), overlay_settings=overlay_settings)
+
+    assert window.overlay.isVisible() is False

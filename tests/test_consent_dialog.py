@@ -36,13 +36,6 @@ from interview_prep_recall.ui.consent_dialog import (  # noqa: E402
 )
 
 
-@pytest.fixture(scope="session")
-def qapp() -> QApplication:
-    """One `QApplication` per session — Qt permits no more, and a per-test one would
-    abort the run rather than fail a test."""
-    return QApplication.instance() or QApplication([])
-
-
 @pytest.fixture
 def dialog(qapp: QApplication) -> FirstRunConsentDialog:
     return FirstRunConsentDialog(DISCLOSURE_TEXT)

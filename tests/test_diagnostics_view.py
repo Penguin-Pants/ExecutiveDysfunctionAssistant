@@ -29,11 +29,6 @@ from interview_prep_recall.ui.diagnostics_view import (  # noqa: E402
 )
 
 
-@pytest.fixture(scope="session")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
 @pytest.fixture
 def populated_ring() -> DiagnosticRing:
     ring = DiagnosticRing()

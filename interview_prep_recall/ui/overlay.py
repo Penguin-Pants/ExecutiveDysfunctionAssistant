@@ -85,9 +85,19 @@ MIN_RENDERED_PX = 13
 """PRISM's caption size is the floor. Below it the overlay stops being glanceable, which
 is the only thing it exists to be — so `BULLET_PX_RANGE` starts here and a test holds it."""
 
-MAX_BULLET_LINES = 2
-"""Design §9b: ellipsis is the last resort, not the first. A bullet clips only after
-scaling has hit the floor, and then at two lines."""
+MIN_BULLET_LINES = 2
+"""Design §9b's two-line allowance, as a **floor rather than a cap** (D-51).
+
+§9b states it without qualifying the height: "a bullet clips only after scaling has hit
+the floor: 2 lines maximum, then ellipsis". Read as a flat cap that is wrong at every
+size above the minimum — the font is a function of height alone (§9b's second rule), so
+"after scaling has hit the floor" is not an event elision can wait for, and a 600px panel
+would clip text into two lines with most of its height empty. That is precisely the
+clipping FR23 forbids.
+
+So the allowance is computed from the space the panel actually has, and never drops below
+this. At the minimum size the computed value *is* two, which is the height §9b's sentence
+was written about."""
 
 ELLIPSIS = "…"
 
@@ -241,13 +251,14 @@ def line_count(text: str, metrics: QFontMetrics, width: int) -> int:
 
 
 def elide_to_lines(
-    text: str, metrics: QFontMetrics, width: int, max_lines: int = MAX_BULLET_LINES
+    text: str, metrics: QFontMetrics, width: int, max_lines: int = MIN_BULLET_LINES
 ) -> str:
     """Trim `text` to at most `max_lines` wrapped lines, ending in an ellipsis.
 
-    Only reached once scaling has hit the floor (design §9b) — this is the last resort,
-    not the first. A binary search over the cut point rather than `QFontMetrics.elidedText`,
-    which elides to a *single* line and would throw away the second line the design allows.
+    The last resort, not the first (design §9b): the caller passes the allowance the panel
+    actually has at its current size, and only text exceeding *that* is cut. A binary
+    search over the cut point rather than `QFontMetrics.elidedText`, which elides to a
+    *single* line and would throw away every other line the panel could show.
 
     **This is the one place a rendered string is not byte-identical to the stored note**,
     and it stays inside FR11 because the only operations are *truncation* and appending
@@ -479,6 +490,21 @@ class OverlayGeometry:
 
 
 SETTINGS_KEYS = ("x", "y", "width", "height", "opacity", "brightness", "locked")
+
+SETTINGS_ORGANISATION = "InterviewPrepRecall"
+SETTINGS_APPLICATION = "Overlay"
+
+
+def default_settings() -> object:
+    """The production `QSettings` for overlay chrome (design §4's registry row).
+
+    Returned as `object` because everything here writes through `setValue`/`value` and
+    takes a dict double in tests — the store is an implementation detail of FR26, and
+    typing the callers to `QSettings` would make the double a lie rather than a stand-in.
+    """
+    from PySide6.QtCore import QSettings
+
+    return QSettings(SETTINGS_ORGANISATION, SETTINGS_APPLICATION)
 
 
 def save_geometry(settings: object, geometry: OverlayGeometry) -> None:
@@ -879,6 +905,7 @@ class OverlayPanel(QWidget):
         self.headline.setFont(headline_font)
 
         size = bullet_px(self.geometry_settings.height)
+        allowance = self.bullet_lines_available(size)
         for index, label in enumerate(self.bullets):
             font = label.font()
             font.setPixelSize(size)
@@ -886,8 +913,37 @@ class OverlayPanel(QWidget):
             if index >= len(self._bullet_texts):
                 continue
             label.setText(
-                elide_to_lines(self._bullet_texts[index], QFontMetrics(font), self.text_width)
+                elide_to_lines(
+                    self._bullet_texts[index], QFontMetrics(font), self.text_width, allowance
+                )
             )
+
+    def bullet_lines_available(self, bullet_size_px: int) -> int:
+        """How many wrapped lines each bullet may use at the panel's current size.
+
+        **Measured, not tabulated.** Design §9b gives a scaling table for font size and
+        says nothing about line counts by height, so a table here would be invented. The
+        panel's own layout already knows the answer: total height, less the padding, less
+        the indicator strip, less the headline, split between the bullets on screen.
+
+        Never below `MIN_BULLET_LINES` — see that constant for why §9b's two-line sentence
+        is a floor rather than a cap. A tall panel that clipped bullets to two lines with
+        most of its height empty would be the clipping FR23 exists to forbid.
+        """
+        metrics = QFontMetrics(self.bullets[0].font())
+        headline_metrics = QFontMetrics(self.headline.font())
+        content = self.geometry_settings.height - 2 * PADDING_PX
+        headline_height = (
+            line_count(self.headline.text(), headline_metrics, self.text_width)
+            * headline_metrics.lineSpacing()
+        )
+        spare = content - self.indicators.sizeHint().height() - headline_height
+        shown = max(1, len(self._bullet_texts))
+        # `bullet_size_px` rather than the metrics' own line spacing for the divisor floor:
+        # the font on the label has not been updated yet on the first pass, and a stale
+        # spacing would misjudge the allowance for the size about to be applied.
+        spacing = max(bullet_size_px, metrics.lineSpacing())
+        return max(MIN_BULLET_LINES, int(spare // shown) // spacing)
 
     # ---------- health (FR7, FR20, FR35) ----------
 

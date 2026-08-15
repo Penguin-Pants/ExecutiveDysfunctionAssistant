@@ -103,6 +103,7 @@ def main(
 
     from interview_prep_recall.ui.consent_dialog import present_disclosure
     from interview_prep_recall.ui.main_window import WINDOW_TITLE, MainWindow
+    from interview_prep_recall.ui.overlay import default_settings
 
     qt_app = QApplication.instance() or QApplication(sys.argv)
 
@@ -130,6 +131,10 @@ def main(
     window = MainWindow(
         application,
         result.preflight,
+        # One store for the process, built here rather than inside the widget: design §4
+        # puts overlay chrome in the registry, and the composition root is what owns
+        # process-wide resources (FR26).
+        overlay_settings=default_settings(),
         refresh_preflight=lambda: run_preflight(application),
     )
     window.show()
