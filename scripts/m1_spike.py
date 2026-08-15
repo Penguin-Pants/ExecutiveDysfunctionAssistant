@@ -51,6 +51,13 @@ FRAME_S = FRAME_BYTES / (SAMPLE_RATE * 2)
 DRIFT_BUDGET_S = 0.050
 """T1.2: "no clock drift beyond 50 ms"."""
 
+MIN_DELIVERY_PCT = 95.0
+"""T1.2's "no dropout", as a number.
+
+Not 100: the poll loop samples on a 1 s tick and the run ends mid-frame, so a healthy
+stream lands slightly under. 95% still fails any real dropout — 5% of an hour is three
+minutes of missing audio."""
+
 
 def _pyaudio():  # type: ignore[no-untyped-def]
     try:
@@ -212,6 +219,12 @@ def cmd_dual(seconds: float) -> int:
     for stream in streams.values():
         stream.start()
 
+    # Baseline **after** both streams are live. They open sequentially, so the first
+    # accumulates frames while the second endpoint is still opening — a fixed startup
+    # skew that is not drift. Counting it as drift would fail an otherwise perfectly
+    # synchronised 60-minute run because a device took 60 ms to open. Found by review.
+    time.sleep(0.5)
+    baseline = {k: s.frames_delivered for k, s in streams.items()}
     started = time.monotonic()
     worst_drift = 0.0
     try:
@@ -219,7 +232,7 @@ def cmd_dual(seconds: float) -> int:
             time.sleep(1.0)
             for queue in queues.values():
                 queue.drain()  # keep the queues from saturating; we only need counts
-            counts = {k: s.frames_delivered for k, s in streams.items()}
+            counts = {k: s.frames_delivered - baseline[k] for k, s in streams.items()}
             drift = abs(counts["interviewer"] - counts["user"]) * FRAME_S
             worst_drift = max(worst_drift, drift)
             elapsed = time.monotonic() - started
@@ -240,11 +253,14 @@ def cmd_dual(seconds: float) -> int:
     elapsed = time.monotonic() - started
     print("\n\n--- AS-2 gate result ---")
     print(f"elapsed            : {elapsed:.0f}s")
+    expected = elapsed / FRAME_S
+    delivered = {k: s.frames_delivered - baseline[k] for k, s in streams.items()}
+    percentages = {}
     for name, stream in streams.items():
-        expected = elapsed / FRAME_S
-        pct = 100.0 * stream.frames_delivered / expected if expected else 0.0
+        pct = 100.0 * delivered[name] / expected if expected else 0.0
+        percentages[name] = pct
         print(
-            f"{name:<18} : {stream.frames_delivered} frames "
+            f"{name:<18} : {delivered[name]} frames "
             f"({pct:.1f}% of expected), error={stream.error!r}"
         )
     print(
@@ -252,12 +268,21 @@ def cmd_dual(seconds: float) -> int:
     )
 
     failures = []
-    if any(s.frames_delivered == 0 for s in streams.values()):
+    if any(count == 0 for count in delivered.values()):
         failures.append("a stream delivered no frames")
     if any(s.error is not None for s in streams.values()):
         failures.append("a callback raised")
     if worst_drift > DRIFT_BUDGET_S:
         failures.append(f"drift {worst_drift * 1000:.1f} ms exceeds the 50 ms budget")
+    # Drift alone cannot see a shared stall: if both streams stop together, or both
+    # under-deliver at the same rate, their difference stays near zero and every other
+    # check passes while most of the interview was never captured. Found by review on
+    # PR #19 — the gate would have printed PASS for a major dropout.
+    for name, pct in percentages.items():
+        if pct < MIN_DELIVERY_PCT:
+            failures.append(
+                f"{name} delivered {pct:.1f}% of expected frames (floor {MIN_DELIVERY_PCT:.0f}%)"
+            )
 
     if failures:
         print("\nFAIL (T1.2 / AS-2): " + "; ".join(failures))

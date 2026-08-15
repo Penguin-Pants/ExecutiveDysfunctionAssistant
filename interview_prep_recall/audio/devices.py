@@ -119,7 +119,18 @@ def default_loopback(pa: Any) -> DeviceInfo:
 
 
 def default_microphone(pa: Any) -> DeviceInfo:
-    raw = pa.get_default_input_device_info()
+    """The default input device, or `DeviceError`.
+
+    PyAudio **raises** `OSError` when there is no default input rather than returning a
+    falsey record, so the vendor exception is normalised here. Without it the error
+    bypasses every `except DeviceError` in the spike script and the setup wizard, and a
+    machine with no microphone crashes instead of reporting a missing microphone — which
+    is a state FR39b already knows how to handle. Found by review on PR #19.
+    """
+    try:
+        raw = pa.get_default_input_device_info()
+    except Exception as exc:  # noqa: BLE001 — any vendor failure means "no usable mic"
+        raise DeviceError(f"no default input device; is a microphone connected? ({exc})") from exc
     if not raw:
         raise DeviceError("no default input device; is a microphone connected?")
     return _as_info(raw, DeviceKind.MICROPHONE)

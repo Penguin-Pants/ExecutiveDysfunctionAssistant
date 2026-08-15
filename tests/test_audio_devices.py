@@ -284,3 +284,37 @@ def test_assembly_preserves_the_byte_stream_exactly() -> None:
     # Everything emitted must be a byte-exact prefix of the input; the remainder is held.
     assert out == source[: len(out)]
     assert len(source) - len(out) == assembler.pending_bytes
+
+
+# ---------- PR #19 review findings ----------
+
+
+def test_a_raising_default_input_becomes_a_device_error() -> None:
+    """PyAudio raises `OSError` when there is no default input rather than returning a
+    falsey record. The vendor exception would bypass every `except DeviceError` in the
+    spike and the setup wizard, crashing on a machine with no microphone instead of
+    reporting one — a state FR39b already handles.
+    """
+
+    class RaisingPyAudio(FakePyAudio):
+        def get_default_input_device_info(self) -> dict[str, Any]:
+            raise OSError("no default input device")
+
+    pa = RaisingPyAudio(loopbacks=[raw_device(1, "Speakers (Loopback)")])
+
+    with pytest.raises(DeviceError, match="microphone"):
+        default_microphone(pa)
+    # And `describe` still returns what it did find.
+    assert [d.kind for d in describe(pa)] == [DeviceKind.LOOPBACK]
+
+
+def test_a_raising_default_input_is_read_as_absent_by_the_watcher() -> None:
+    """FR39b's "device loss" path: absent is a state, not a crash."""
+
+    class RaisingPyAudio(FakePyAudio):
+        def get_default_input_device_info(self) -> dict[str, Any]:
+            raise OSError("no default input device")
+
+    watcher, _seen = _watcher(RaisingPyAudio(loopbacks=[raw_device(1, "Speakers (Loopback)")]))
+    watcher.prime()
+    assert watcher.poll_once() == []

@@ -24,6 +24,15 @@ FRAME_MS = 20
 SAMPLE_RATE = 16_000
 CHANNELS = 1
 FRAME_BYTES = SAMPLE_RATE * CHANNELS * 2 * FRAME_MS // 1000
+FRAME_S = FRAME_MS / 1000
+
+PA_CONTINUE = 0
+"""PortAudio's `paContinue`, as a literal.
+
+The callback must not import the vendor module to build its return value: that import
+fails everywhere except Windows, so the one line guaranteed to run on every callback
+would have raised on any machine used to test the rest of it. The value is part of
+PortAudio's stable ABI."""
 """640 bytes: 20 ms of 16 kHz mono int16 (design §1a)."""
 
 QUEUE_FRAMES = 150
@@ -290,17 +299,33 @@ class CaptureStream:
             input_device_index=self.device.index,
             frames_per_buffer=frames_per_buffer,
             stream_callback=self._callback,
+            # `open()` defaults to `start=True`, and calling `start_stream()` on an
+            # already-running stream raises `paStreamIsNotStopped`. Opening stopped and
+            # starting explicitly keeps the two-phase shape — the callback is wired before
+            # any audio can arrive — without that error. Found by review on PR #19.
+            start=False,
         )
         self._stream.start_stream()
 
     def stop(self) -> None:
+        """Close the device and **discard everything buffered**.
+
+        Two reasons, and either alone would be sufficient. Restarting the same stream
+        would otherwise prepend the previous session's partial frame and resume a resampler
+        primed on old audio — the new interview would open with a fragment of the last
+        one. And FR16's purge means audio must not survive in memory past the session that
+        captured it; a `bytearray` held on a stopped stream is exactly that.
+        """
         stream, self._stream = self._stream, None
-        if stream is None:
-            return
         try:
-            stream.stop_stream()
+            if stream is not None:
+                try:
+                    stream.stop_stream()
+                finally:
+                    stream.close()
         finally:
-            stream.close()
+            self._assembler = FrameAssembler()
+            self._converter = FormatConverter(self.device.sample_rate, self.device.channels)
 
     # ---------- the callback ----------
 
@@ -314,9 +339,16 @@ class CaptureStream:
         """
         try:
             t_capture = self.clock()
-            for frame in self._assembler.push(self._converter.convert(in_data)):
-                self.queue.push(frame, t_capture)
+            frames = self._assembler.push(self._converter.convert(in_data))
+            # Frames from one callback are **not** simultaneous: they are consecutive
+            # 20 ms spans. Stamping them all with the arrival time collapses their
+            # timeline, which shows up downstream as early `t_end` values, mis-anchored
+            # cloud clocks and echo windows compared against the wrong instant. Found by
+            # review on PR #19; a long driver buffer is explicitly supported, so this is
+            # a normal path rather than an edge case.
+            for offset, frame in enumerate(frames):
+                self.queue.push(frame, t_capture + offset * FRAME_S)
                 self._callback_count += 1
         except BaseException as exc:  # noqa: BLE001 — see the docstring
             self._error = exc
-        return (None, _load_pyaudiowpatch().paContinue)
+        return (None, PA_CONTINUE)
