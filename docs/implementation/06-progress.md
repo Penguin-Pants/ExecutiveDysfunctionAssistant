@@ -15,7 +15,7 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | **M0 — Scaffold** | ✅ Complete | 20 tests passing, lint + format + mypy clean |
 | **M1 — Audio capture spike** | 🟡 Code written, **unrun** | T1.1/T1.2/T1.4 implemented from `pyaudiowpatch` docs; T1.3 already done. **Nothing has executed** — `scripts/m1_spike.py` is the AS-2 gate and needs the Windows machine. |
 | **M2 — STT interface & local backend** | 🟢 T2.1–T2.3 complete | Interface, local backend, assembler. T2.4 is the **AS-1 latency gate** and genuinely needs the target laptop. T2.2's model adapter is unverified (**AS-9**) |
-| **M3 — Notes store & indexing** | 🟢 Logic complete | T3.1–T3.6 done. T3.7–T3.9 are Qt UI, deferred to Windows |
+| **M3 — Notes store & indexing** | 🟢 T3.1–T3.8 complete | Store, importer, index, **and the editor + set lifecycle**. T3.9's backup-restore UI is the last one |
 | **M4 — Matching pipeline** | 🟢 T4.1–T4.6 complete | T4.7 **blocked**: needs the user's labelled fixtures |
 | **M5 — Overlay UI** | 🟢 Everything buildable here is done · **T5.10 joined it to matching** | T5.1, T5.3, T5.4, T5.4a, T5.5, T5.6, T5.7, T5.8 complete and tested offscreen. Remaining: **T5.2** (`SetWindowDisplayAffinity` — Windows) and **T5.9** (end-to-end latency, needs the D-U6 laptop). Nothing else in M5 is buildable in this container |
 | **M6 — Session lifecycle** | 🟢 Logic complete · panic on hold (D-U11) | T6.1–T6.3, **T6.3b's panic surface**, T6.5 classification, T6.6 backpressure, T6.7 done. T6.4 and the OS trigger paths need Windows |
@@ -166,6 +166,53 @@ conservative choice, just a broken one.
 ---
 
 ## Log
+
+### T3.7 + T3.8 — the notes editor and the set lifecycle · complete · 2026-08-15
+
+`ui/editor.py` (was a four-line placeholder), `Application.activate_context_set`, wired into
+`ui/main_window.py`. New `tests/test_editor.py` (28 cases), `tests/test_main_window.py` +2.
+**1137 passing**, ruff, format and `mypy interview_prep_recall` clean.
+
+**Notes could be imported, matched, tracked, embedded and reported on — and not written.** The
+store, the model, the importer and the index all had tests, and the product had no way to create
+a note. Same shape as T5.10, one layer further out.
+
+**Three properties carry this surface.**
+
+* **Saving is debounced, never per keystroke.** `NotesStore.save` rotates FR29's five backup
+  generations on every write, so a save per keystroke leaves the user's recovery window covering
+  the last twelve characters they typed. Edits mark dirty; `flush` writes; the timer is a
+  convenience over `flush`, so what the tests drive is what ships. Closing flushes, because the
+  alternative discards five seconds of typing to a race with a timer.
+* **Ids survive edits** (FR41). The editor mutates the note the set holds rather than replacing
+  it — the embedding cache is keyed on note id, and a new id per edit is BC-1's stale-vector
+  failure arriving through the editor.
+* **FR42 is checked before the write.** A bullet that is not a substring of its note is generated
+  content one match away from the overlay. Refusing at save keeps the user in a fixable state;
+  writing it would leave notes that are stored and unusable, because the render boundary refuses
+  them later.
+
+**Switching sets was the trap (D-61).** `self.context_set` is not the only holder: the index is
+*built* from the set and `Prefilter` keeps its own reference. Assigning the attribute would have
+left matching drawing from the previous corpus — silent, and indistinguishable from bad
+retrieval. `activate_context_set` rebuilds both, and **refuses mid-session**: changing the corpus
+under a running interview leaves the tracker's verdict and the report's D-58 snapshot describing
+two different sets.
+
+**T5.10a is closed by the same wire.** The overlay holds the set it was handed once, so the switch
+notifies it through `on_context_set_change` — with D-60's loud default, so an unwired build
+records `context_set_change_unrendered` instead of rendering the old corpus under the new one's
+name.
+
+**One thing the tests found that the plan did not name.** An `Application` can be constructed with
+a set that has never been saved — the composition root does that on a first run — and until it
+exists on disk it cannot be listed, cannot be switched back to, and vanishes the moment the user
+creates a second set. The editor persists it on open. A write as a side effect of opening a window
+is worth stating out loud; the alternative is a surface that quietly loses the thing it is editing.
+
+**Follow-up T3.7a:** the editor lists sets and cannot *import* into one — T3.5's importer has no
+surface either, so a `.md` of prep notes still cannot be brought in through the UI. That is the
+next instance of this same pattern, and it is now named rather than waiting to be tripped over.
 
 ### T5.10 — the match feed · complete · 2026-08-15
 

@@ -440,6 +440,33 @@ def test_the_report_view_reads_the_applications_store(
     assert window.open_reports().sessions is application.sessions
 
 
+# ---------- T3.7/T3.8: the route into the notes editor ----------
+
+
+def test_the_window_opens_the_notes_editor(
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
+) -> None:
+    """The product could import, match, track and report on notes, and had no way to
+    write one."""
+    window = window_with(application, overlay_settings)
+
+    view = window.open_notes()
+
+    assert view.isVisible()
+    assert window._notes is view  # noqa: SLF001
+    assert view.parent() is window
+
+
+def test_the_editor_gets_the_windows_settings_object(
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
+) -> None:
+    """FR43's active set persists beside the overlay's layout — both are per-user UI
+    state, and a widget minting its own `QSettings` is what D-52 forbids."""
+    window = window_with(application, overlay_settings)
+
+    assert window.open_notes().settings is overlay_settings
+
+
 def window_with(application: Application, settings: FakeSettings) -> MainWindow:
     return MainWindow(application, _report(blocked=False), overlay_settings=settings)
 
