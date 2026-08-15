@@ -23,6 +23,7 @@ from interview_prep_recall.app import Application  # noqa: E402
 from interview_prep_recall.config import ConfigStore  # noqa: E402
 from interview_prep_recall.first_run import CONSENT_FILENAME, FirstRunConsent  # noqa: E402
 from interview_prep_recall.notes.model import ContextSet, Note, SourceKind  # noqa: E402
+from interview_prep_recall.session.manager import PauseCause, SessionState  # noqa: E402
 from interview_prep_recall.session.preflight import (  # noqa: E402
     CHECKS,
     Check,
@@ -30,10 +31,13 @@ from interview_prep_recall.session.preflight import (  # noqa: E402
     CheckResult,
     PreflightReport,
 )
+from interview_prep_recall.stt.assembler import Utterance  # noqa: E402
 from interview_prep_recall.tracker.progress import TrackedPoint  # noqa: E402
-from interview_prep_recall.ui.main_window import (  # noqa: E402
+from interview_prep_recall.ui.main_window import (
     BLOCKED_HEADING,
+    PANIC_UNAVAILABLE,
     READY_TEXT,
+    REPORTS_TEXT,  # noqa: E402
     MainWindow,
 )
 from interview_prep_recall.ui.overlay import (  # noqa: E402
@@ -41,6 +45,7 @@ from interview_prep_recall.ui.overlay import (  # noqa: E402
     load_geometry,
     save_geometry,
 )
+from interview_prep_recall.ui.report_view import DELETE_ALL_TEXT  # noqa: E402
 from interview_prep_recall.ui.settings import SettingsDialog  # noqa: E402
 
 
@@ -635,3 +640,106 @@ def test_a_cancelled_settings_dialog_still_redraws_the_checklist(
 
     assert window.open_settings() is None
     assert window.overlay.checklist.showing is False
+
+
+# ---------- T6.3b / T11.10a: the panic surface and FR87's signpost ----------
+
+
+def test_panic_is_a_single_action_that_pauses(
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
+) -> None:
+    """FR60 keeps panic single-action, and FR64a makes it a pause. One press, no
+    confirmation — a dialog on the control someone reaches for when a person walks into
+    the room is a control that does not work."""
+    application.session.request_start()
+    application.session.preflight_result(blocked=False)
+    window = window_with(application, overlay_settings)
+
+    assert window.panic() is True
+
+    assert application.session.state is SessionState.PAUSED
+    assert application.session.pause_cause is PauseCause.PANIC
+
+
+def test_panic_destroys_nothing(
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
+) -> None:
+    """FR58/FR64a. The signpost claims the transcript survives; this is the claim."""
+    application.session.request_start()
+    application.session.preflight_result(blocked=False)
+    application.consume(
+        Utterance(stream_id="interviewer", text="a question", t_start=0.0, t_end=1.0, context=""),
+        now=1.0,
+    )
+    window = window_with(application, overlay_settings)
+
+    window.panic()
+
+    assert len(application.record) == 1, "the transcript survives a panic (D-U11)"
+
+
+def test_panic_before_a_session_says_so_rather_than_raising(
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
+) -> None:
+    """`panic_clear` raises from IDLE, and an exception escaping the one control a user
+    presses under pressure is the worst answer to a press that was merely early."""
+    window = window_with(application, overlay_settings)
+
+    assert window.panic() is False
+    assert window.panic_status.text() == PANIC_UNAVAILABLE
+
+
+def test_a_paused_session_can_be_resumed_from_the_same_surface(
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
+) -> None:
+    """A pause the user can undo is only a pause if they can."""
+    application.session.request_start()
+    application.session.preflight_result(blocked=False)
+    window = window_with(application, overlay_settings)
+    window.panic()
+
+    assert window.resume() is True
+    assert application.session.state is SessionState.RUNNING
+
+
+def test_the_paused_state_is_visible_not_inferred(
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
+) -> None:
+    """A user who pressed panic and sees nothing change cannot tell it registered, and
+    the failure mode is pressing it again — or assuming it worked when it did not."""
+    application.session.request_start()
+    application.session.preflight_result(blocked=False)
+    window = window_with(application, overlay_settings)
+
+    window.panic()
+
+    assert "paused" in window.panic_status.text().lower()
+    assert "panic" in window.panic_status.text().lower()
+    assert window.resume_button.isEnabled(), "and the way out is offered with it"
+
+
+def test_the_panic_surface_signposts_delete_all(
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
+) -> None:
+    """FR87, which is the whole of T11.10a: panic no longer destroys anything, so the
+    surface has to say so *and* point at the deliberate route — otherwise a user reaching
+    for panic for privacy reasons leaves with a false impression and no way to act on it.
+    """
+    window = window_with(application, overlay_settings)
+
+    signpost = window.panic_signpost.text()
+    assert DELETE_ALL_TEXT.rstrip("…") in signpost
+    assert REPORTS_TEXT.rstrip("…") in signpost
+    assert "deletes anything" in signpost
+
+
+def test_the_route_the_signpost_names_actually_exists(
+    qapp: QApplication, application: Application, overlay_settings: FakeSettings
+) -> None:
+    """A signpost pointing at a control that is not there would satisfy FR87's wording
+    and fail the person reading it."""
+    window = window_with(application, overlay_settings)
+
+    view = window.open_reports()
+
+    assert view.delete_all_button.text() == DELETE_ALL_TEXT

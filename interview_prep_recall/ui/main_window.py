@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
 )
 
 from interview_prep_recall.app import Application
+from interview_prep_recall.session.manager import SessionState
 from interview_prep_recall.session.preflight import PreflightReport
 from interview_prep_recall.settings import AppliedSettings
 from interview_prep_recall.ui.diagnostics_view import DiagnosticsView
@@ -64,6 +65,28 @@ RESET_OVERLAY_TEXT = "Reset overlay position"
 LOCK_OVERLAY_TEXT = "Lock overlay position"
 PREVIEW_OVERLAY_TEXT = "Show overlay"
 REPORTS_TEXT = "Interview reports…"
+
+PANIC_TEXT = "Panic — stop listening"
+"""FR60: **single action, no confirmation.** The control is no longer destructive
+(FR64a/D-U11), so there is nothing to confirm — and a confirmation on the control a user
+reaches for when someone walks into the room is a control that does not work."""
+
+RESUME_TEXT = "Resume listening"
+
+PANIC_SIGNPOST = (
+    "Panic pauses capture and nothing else — your transcript, notes and this session all "
+    "survive, and Resume continues where you left off. Nothing here deletes anything. "
+    "To delete stored interviews, use “Delete all sessions” in Interview reports."
+)
+"""FR87, at the surface it names.
+
+The requirement exists because panic used to destroy things and no longer does (D-U11),
+which leaves a user who presses it for privacy reasons with a false impression unless the
+surface says otherwise — and then leaves them with no route to the thing they actually
+wanted. Both halves are here: what panic does not do, and where the deliberate route is.
+"""
+
+PANIC_UNAVAILABLE = "Nothing is being captured right now."
 
 DialogFactory = Callable[[Application], SettingsDialog]
 DiagnosticsFactory = Callable[[Application, QWidget], DiagnosticsView]
@@ -142,6 +165,27 @@ class MainWindow(QMainWindow):
         self.reports_button = QPushButton(REPORTS_TEXT)
         self.reports_button.clicked.connect(self.open_reports)
         layout.addWidget(self.reports_button)
+
+        # ---- the panic surface (T6.3b — FR60, FR64a, FR87) ----
+        self.panic_button = QPushButton(PANIC_TEXT)
+        self.panic_button.clicked.connect(self.panic)
+        layout.addWidget(self.panic_button)
+
+        self.resume_button = QPushButton(RESUME_TEXT)
+        self.resume_button.clicked.connect(self.resume)
+        layout.addWidget(self.resume_button)
+
+        self.panic_signpost = QLabel(PANIC_SIGNPOST)
+        self.panic_signpost.setWordWrap(True)
+        self.panic_signpost.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(self.panic_signpost)
+
+        self.panic_status = QLabel("")
+        self.panic_status.setWordWrap(True)
+        self.panic_status.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(self.panic_status)
+
+        self.refresh_panic()
 
         # The overlay is built here, from the persisted geometry, so FR26's stored layout
         # is what the chrome controls below actually operate on.
@@ -247,6 +291,57 @@ class MainWindow(QMainWindow):
         if result.needs_restart:
             self.notify_restart(result)
         return result
+
+    # ---------- the panic surface (T6.3b — FR60, FR64a, FR87) ----------
+
+    def panic(self) -> bool:
+        """FR60's single action. One press, no confirmation, no second thought.
+
+        **Guarded by state rather than by a dialog.** `panic_clear` raises from IDLE, and
+        an exception escaping the one control a user presses under pressure is the worst
+        possible response to a press that was merely early. Returns whether anything was
+        stopped.
+        """
+        session = self.application.session
+        if session.state not in (SessionState.RUNNING, SessionState.PAUSED):
+            self.panic_status.setText(PANIC_UNAVAILABLE)
+            self.refresh_panic()
+            return False
+        session.panic_clear()
+        self.refresh_panic()
+        return True
+
+    def resume(self) -> bool:
+        """FR64a's other half. A pause the user can undo is only a pause if they can."""
+        session = self.application.session
+        if session.state is not SessionState.PAUSED:
+            self.refresh_panic()
+            return False
+        session.resume()
+        self.refresh_panic()
+        return True
+
+    def refresh_panic(self) -> None:
+        """State, in words, next to the control that changed it.
+
+        The paused state has to be *visible*: a user who pressed panic and sees nothing
+        change has no way to tell the press registered, and the failure mode is pressing
+        it again — or worse, assuming it worked when it did not.
+        """
+        session = self.application.session
+        paused = session.state is SessionState.PAUSED
+        self.panic_button.setEnabled(session.state is SessionState.RUNNING or paused)
+        self.resume_button.setEnabled(paused)
+        if paused:
+            cause = session.pause_cause
+            self.panic_status.setText(
+                f"Paused ({cause.name.lower() if cause else 'unknown'}). "
+                "Nothing is being captured. Everything from this session is still here."
+            )
+        elif session.state is SessionState.RUNNING:
+            self.panic_status.setText("Listening.")
+        else:
+            self.panic_status.setText(PANIC_UNAVAILABLE)
 
     def open_reports(self) -> ReportView:
         """M11's surface, reached from here (T11.10).
