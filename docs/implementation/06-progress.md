@@ -21,7 +21,7 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | **M6 — Session lifecycle** | 🟢 Logic complete · panic on hold (D-U11) | T6.1–T6.3, **T6.3b's panic surface**, T6.5 classification, T6.6 backpressure, T6.7 done. T6.4 and the OS trigger paths need Windows |
 | **M7 — Progress tracker** | 🟢 Everything buildable here is done | T7.1, T7.3 and **T7.4** complete. T7.2 needs paired audio fixtures — the only M7 task left |
 | **M8 — Cloud STT backends** | 🟢 T8.1–T8.5 complete | Deepgram, ElevenLabs, fallback, egress. Protocols unverified against a live endpoint (**AS-8**) |
-| **M9 — Packaging & first run** | 🟡 T9.0–T9.2, T9.6 complete | Composition root, FR63 disclosure, config store, settings surface, **entry point**. T9.3 is **blocked on M1** (three of four steps are audio). T9.6a needs FR43; T9.4 is PyInstaller; T9.5 needs live vendor docs |
+| **M9 — Packaging & first run** | 🟡 T9.0–T9.2, T9.6 complete | Composition root, FR63 disclosure, config store, settings surface, **entry point**. T9.3 is **blocked on M1** (three of four steps are audio). **T9.6a no longer needs FR43** — T3.8 answered it and `editor.load_active_set` is the reader; it is down to the no-API-key policy (from T9.3), a real embedding model (`sentence-transformers` is in the platform-neutral `embeddings` extra — blocked **here** by network policy, same as AS-9, not by platform) and the Windows-only DPAPI cipher. T9.4 is PyInstaller; T9.5 needs live vendor docs |
 | **M10 — Typed context sources** | 🟢 T10.1–T10.7 complete | Five kinds, per-kind caps and thresholds, schema v1→v2 migration, **FR72's per-kind marking**. T10.7's 1 m glance test and bundled-font glyph coverage ride with T5.9/T9.4 |
 | **M11 — Post-interview report** | 🟢 T11.1, T11.3–T11.10 + a/b/c complete | Record, evidence binding, encrypted store, retention, generation, the view/export, **context snapshots (D-58) and off-thread generation (D-59)**. Only T11.2's DPAPI cipher needs Windows |
 
@@ -238,7 +238,8 @@ the one not being restored.
 **One thing worth flagging rather than fixing.** `load_active_set`'s new `ring` argument
 has no production caller, because `load_active_set` itself still has none — T9.6a is the
 entry point that will call it, and it remains blocked on the no-API-key policy and the
-Windows-only embedder and cipher. This is the D-20 shape by the letter of it. It is
+network-blocked embedding model and the Windows-only cipher. This is the D-20 shape by
+the letter of it. It is
 recorded here rather than dressed up: the recovery is reachable and tested, the *notice*
 needs a surface that does not exist yet.
 
@@ -305,7 +306,8 @@ nobody read left the entry point blocked on a decision that had just been made a
 `editor.load_active_set` is that reader: the persisted set, else the only one, else a new empty
 one, and it never raises for an ordinary state because a first run and a set deleted on another
 machine are both situations the entry point has to survive. **T9.6a is down to two blockers** —
-the no-API-key policy and the Windows-only embedder and cipher.
+the no-API-key policy, a real embedding model (network, not platform) and the
+Windows-only DPAPI cipher.
 
 **Follow-up T3.7a:** the editor lists sets and cannot *import* into one — T3.5's importer has no
 surface either, so a `.md` of prep notes still cannot be brought in through the UI. That is the

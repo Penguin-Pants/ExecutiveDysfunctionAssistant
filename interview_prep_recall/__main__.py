@@ -82,7 +82,8 @@ def _build_application(root: Path) -> Application:
     """
     raise NotImplementedError(
         "T9.6a: real dependency construction needs the no-API-key policy from T9.3, plus "
-        "the Windows-only embedder and cipher. FR43's active-note-set selection is done — "
+        "a real embedding model (blocked here by network policy, not by platform) and the "
+        "Windows-only DPAPI cipher. FR43's active-note-set selection is done — "
         "`ui.editor.load_active_set(root, default_settings())`"
     )
 
