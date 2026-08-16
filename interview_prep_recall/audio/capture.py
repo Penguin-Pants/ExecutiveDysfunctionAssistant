@@ -20,6 +20,8 @@ from typing import Any
 
 import numpy as np
 
+from interview_prep_recall.audio.devices import DeviceKind, render_device_for
+
 FRAME_MS = 20
 SAMPLE_RATE = 16_000
 CHANNELS = 1
@@ -242,11 +244,11 @@ class FrameAssembler:
 class CaptureStream:
     """One WASAPI capture endpoint feeding a `BoundedFrameQueue` (T1.1, T1.2).
 
-    **Never executed.** `pyaudiowpatch` has no Linux distribution and this container has
-    no sound subsystem, so every line below is written from documentation — this is
-    **AS-2**, the project's oldest and riskiest assumption, and M1 is the gate that
-    settles it. The parts that are ours (`FormatConverter`, `FrameAssembler`, the queue)
-    are tested; the `open()` call is not.
+    **Executed on the target machine on 2026-08-16** (M1), after being written entirely
+    from documentation. Both endpoints opened and ran concurrently at 100% delivery, which
+    is the first half of **AS-2**. The run also found the defect the `keep_alive` field
+    documents — an idle loopback endpoint delivers nothing rather than silence — which no
+    amount of reading the vendor docs had suggested.
 
     **The callback does the minimum.** Convert, cut into frames, push, return. No
     allocation beyond the conversion, no logging, no locks held across work — FR45 gives
@@ -256,12 +258,30 @@ class CaptureStream:
     stream_id: str
     queue: BoundedFrameQueue
     device: Any
-    """A `DeviceInfo`. Typed loosely to avoid a circular import with `devices`."""
+    """A `DeviceInfo`. Typed loosely so tests can pass a stand-in; the module imports
+    `devices` directly for the keep-alive, and no cycle exists — `devices` imports only
+    the standard library."""
 
     pa: Any = None
     """The `pyaudiowpatch.PyAudio` handle. Injected so the caller owns its lifetime —
     one handle is shared by both streams, and terminating it under a live stream is a
     crash in the C layer rather than an exception."""
+
+    keep_alive: bool = True
+    """Hold a silent render stream open on a loopback endpoint while capturing (D-60).
+
+    Measured on the target machine during M1: a WASAPI loopback endpoint with nothing
+    playing delivers **no callbacks at all** — 0 frames in 6 s — rather than frames of
+    silence. With a silent render stream open on the same endpoint, the same 6 s yields
+    298 of 300 expected frames.
+
+    That is a correctness matter, not a metrics one. `EnergyVad` closes an utterance after
+    700 ms of silence and learns silence *from frames*; with none arriving, an
+    interviewer's question stays open until `max_span_s` force-cuts it 10 s later, and
+    every downstream gap measured from `t_end` moves with it.
+
+    Ignored for microphone devices, which stream continuously on their own. Settable only
+    so a test can turn it off."""
 
     clock: Callable[[], float] = time.monotonic
     """Capture-side monotonic clock. Contract rule 5: every downstream timestamp derives
@@ -271,12 +291,37 @@ class CaptureStream:
         self._converter = FormatConverter(self.device.sample_rate, self.device.channels)
         self._assembler = FrameAssembler()
         self._stream: Any = None
+        self._keep_alive_stream: Any = None
+        self._keep_alive_error: BaseException | None = None
         self._callback_count = 0
         self._error: BaseException | None = None
 
     @property
     def frames_delivered(self) -> int:
         return self._callback_count
+
+    @property
+    def keep_alive_active(self) -> bool:
+        """Whether the silence keep-alive is currently holding the endpoint producing.
+
+        Exposed rather than asserted internally so a change that stops wiring it fails a
+        test instead of degrading an interview — the same answer `wired_purge_hooks()`
+        gives for hooks that default to reporting success.
+        """
+        return self._keep_alive_stream is not None
+
+    @property
+    def keep_alive_error(self) -> BaseException | None:
+        """Why the keep-alive could not open, if it could not.
+
+        Capture still runs without it: no keep-alive costs utterance boundaries during
+        silence, whereas refusing to open the device costs the interview.
+        """
+        return self._keep_alive_error
+
+    @property
+    def _wants_keep_alive(self) -> bool:
+        return self.keep_alive and getattr(self.device, "kind", None) is DeviceKind.LOOPBACK
 
     @property
     def error(self) -> BaseException | None:
@@ -287,6 +332,10 @@ class CaptureStream:
     def start(self) -> None:
         pa = self.pa or _load_pyaudiowpatch().PyAudio()
         module = _load_pyaudiowpatch()
+        # **Before** the capture stream, not after: the endpoint has to be producing by
+        # the time capture opens, or the first frames of the session are the ones lost.
+        if self._wants_keep_alive:
+            self._start_keep_alive(pa, module)
         # Ask the driver for ~20 ms at *its* rate. The exact count does not matter —
         # `FrameAssembler` owns the remainder — but a buffer near our frame size keeps
         # latency low without waking the callback needlessly often.
@@ -317,6 +366,7 @@ class CaptureStream:
         captured it; a `bytearray` held on a stopped stream is exactly that.
         """
         stream, self._stream = self._stream, None
+        keep_alive, self._keep_alive_stream = self._keep_alive_stream, None
         try:
             if stream is not None:
                 try:
@@ -324,8 +374,53 @@ class CaptureStream:
                 finally:
                     stream.close()
         finally:
-            self._assembler = FrameAssembler()
-            self._converter = FormatConverter(self.device.sample_rate, self.device.channels)
+            try:
+                # **After** the capture stream. Closing the keep-alive first would let the
+                # endpoint go idle while capture is still open — the exact defect the
+                # keep-alive exists to prevent, reproduced during teardown.
+                if keep_alive is not None:
+                    try:
+                        keep_alive.stop_stream()
+                    finally:
+                        keep_alive.close()
+            finally:
+                self._assembler = FrameAssembler()
+                self._converter = FormatConverter(self.device.sample_rate, self.device.channels)
+
+    def _start_keep_alive(self, pa: Any, module: Any) -> None:
+        """Open a silent render stream on the endpoint this loopback shadows.
+
+        Failure is recorded rather than raised: capture without a keep-alive still
+        transcribes, and `keep_alive_error` is what the diagnostics surface reads.
+        """
+        self._keep_alive_error = None
+        try:
+            render = render_device_for(pa, self.device)
+            channels = render.channels
+
+            def _silence(
+                in_data: bytes | None, frame_count: int, time_info: dict[str, Any], status: int
+            ) -> tuple[bytes, int]:
+                return (b"\x00" * (frame_count * channels * 2), PA_CONTINUE)
+
+            stream = pa.open(
+                format=module.paInt16,
+                channels=channels,
+                rate=render.sample_rate,
+                output=True,
+                output_device_index=render.index,
+                frames_per_buffer=max(1, int(render.sample_rate * FRAME_MS / 1000)),
+                stream_callback=_silence,
+                # Same two-phase shape as the capture stream: `open()` defaults to
+                # `start=True`, and `start_stream()` on a running stream raises.
+                start=False,
+            )
+            stream.start_stream()
+        except Exception as exc:  # noqa: BLE001 — see the docstring
+            self._keep_alive_error = exc
+            self._keep_alive_stream = None
+            return
+        self._keep_alive_stream = stream
 
     # ---------- the callback ----------
 

@@ -62,8 +62,87 @@ class DeviceInfo:
         return f"[{self.index}] {self.name} ({self.channels}ch @ {self.sample_rate} Hz)"
 
 
+@dataclass(frozen=True)
+class RenderDevice:
+    """An *output* endpoint — the other side of a loopback capture device.
+
+    Deliberately not a `DeviceInfo` with a third `DeviceKind`. `DefaultDeviceWatcher`
+    iterates `for kind in DeviceKind` wholesale, so a new member would make it poll for a
+    device `_read` has no branch for, and report the fallback as a change.
+    """
+
+    index: int
+    name: str
+    channels: int
+    sample_rate: int
+
+    @property
+    def label(self) -> str:
+        return f"[{self.index}] {self.name} ({self.channels}ch @ {self.sample_rate} Hz)"
+
+
 class DeviceError(RuntimeError):
     pass
+
+
+LOOPBACK_SUFFIX = " [Loopback]"
+"""What `pyaudiowpatch` appends to the render device's name to name its loopback."""
+
+
+def _as_render(raw: dict[str, Any]) -> RenderDevice:
+    return RenderDevice(
+        index=int(raw["index"]),
+        name=str(raw.get("name", "unknown")),
+        channels=int(raw.get("maxOutputChannels") or 0),
+        sample_rate=int(float(raw.get("defaultSampleRate") or 0)),
+    )
+
+
+def render_device_for(pa: Any, loopback: DeviceInfo) -> RenderDevice:
+    """The output endpoint a loopback capture device shadows (M1's keep-alive, D-60).
+
+    WASAPI loopback delivers **no frames at all** while its endpoint is idle — not silent
+    frames, nothing — so `CaptureStream` holds a silent render stream open on the endpoint
+    to keep it producing. This finds the device to open it on.
+
+    **Matched on host API as well as name, which is not defensive.** Measured on the
+    target machine: the same physical endpoint is listed three times — MME `[5]`,
+    DirectSound `[16]` and WASAPI `[24]` — all named "Headphones (Astro A50 Game)". MME
+    sorts first, so a name-only search silently returns the wrong host API's entry, and
+    MME truncates names to 31 characters, so exact matching against a long name fails
+    there outright.
+    """
+    try:
+        raw = pa.get_device_info_by_index(loopback.index)
+    except Exception as exc:  # noqa: BLE001 — a vendor lookup failure means "no match"
+        raise DeviceError(f"cannot read loopback device {loopback.index}: {exc}") from exc
+    host_api = raw.get("hostApi") if raw else None
+
+    wanted = loopback.name
+    if wanted.endswith(LOOPBACK_SUFFIX):
+        wanted = wanted[: -len(LOOPBACK_SUFFIX)]
+
+    candidates: list[dict[str, Any]] = []
+    for index in range(int(pa.get_device_count())):
+        try:
+            device = pa.get_device_info_by_index(index)
+        except Exception:  # noqa: BLE001 — devices churn while being enumerated
+            continue
+        if not device or int(device.get("maxOutputChannels") or 0) < 1:
+            continue
+        if host_api is not None and device.get("hostApi") != host_api:
+            continue
+        candidates.append(device)
+
+    for device in candidates:
+        if str(device.get("name", "")) == wanted:
+            return _as_render(device)
+    # Truncated names are why this fallback exists, so it compares both directions.
+    for device in candidates:
+        name = str(device.get("name", ""))
+        if name and (name in wanted or wanted in name):
+            return _as_render(device)
+    raise DeviceError(f"no output device matches loopback {loopback.label}")
 
 
 def _as_info(raw: dict[str, Any], kind: DeviceKind) -> DeviceInfo:

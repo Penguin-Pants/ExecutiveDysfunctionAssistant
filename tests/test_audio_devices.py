@@ -26,10 +26,12 @@ from interview_prep_recall.audio.capture import (
 from interview_prep_recall.audio.devices import (
     DefaultDeviceWatcher,
     DeviceError,
+    DeviceInfo,
     DeviceKind,
     default_loopback,
     default_microphone,
     describe,
+    render_device_for,
 )
 
 
@@ -42,6 +44,48 @@ def raw_device(index: int, name: str, *, rate: int = 48_000, channels: int = 2) 
     }
 
 
+def raw_endpoint(
+    index: int,
+    name: str,
+    *,
+    host_api: int = 2,
+    inputs: int = 0,
+    outputs: int = 0,
+    rate: int = 48_000,
+) -> dict[str, Any]:
+    """One row of the flat device table `get_device_info_by_index` walks."""
+    return {
+        "index": index,
+        "name": name,
+        "hostApi": host_api,
+        "maxInputChannels": inputs,
+        "maxOutputChannels": outputs,
+        "defaultSampleRate": float(rate),
+    }
+
+
+class FakeStream:
+    """A PortAudio stream handle, recording its lifecycle into a shared event list so
+    ordering between two streams is assertable."""
+
+    def __init__(self, label: str, events: list[str]) -> None:
+        self.label = label
+        self._events = events
+        self.started = False
+        self.closed = False
+
+    def start_stream(self) -> None:
+        self.started = True
+        self._events.append(f"start:{self.label}")
+
+    def stop_stream(self) -> None:
+        self._events.append(f"stop:{self.label}")
+
+    def close(self) -> None:
+        self.closed = True
+        self._events.append(f"close:{self.label}")
+
+
 class FakePyAudio:
     """The slice of `pyaudiowpatch` the device layer touches."""
 
@@ -52,12 +96,39 @@ class FakePyAudio:
         default_output: dict[str, Any] | None = None,
         *,
         has_convenience_getter: bool = True,
+        table: list[dict[str, Any]] | None = None,
+        open_error: Exception | None = None,
     ) -> None:
         self._loopbacks = loopbacks or []
         self._mic = mic
         self._default_output = default_output
+        self._table = table or []
+        self._open_error = open_error
+        self.opened: list[dict[str, Any]] = []
+        self.events: list[str] = []
         if has_convenience_getter:
             self.get_default_wasapi_loopback = self._default_wasapi_loopback  # type: ignore[method-assign]
+
+    def get_device_count(self) -> int:
+        """One past the highest index, not the row count.
+
+        PortAudio indices are positional, and these tables use the real machine's sparse
+        numbering for readability — so the gaps have to be walkable. Lookups into a gap
+        raise, which is the path `render_device_for` skips over.
+        """
+        return max((int(d["index"]) for d in self._table), default=-1) + 1
+
+    def get_device_info_by_index(self, index: int) -> dict[str, Any]:
+        for device in self._table:
+            if int(device["index"]) == index:
+                return device
+        raise OSError(f"no device at index {index}")
+
+    def open(self, **kwargs: Any) -> FakeStream:
+        if self._open_error is not None and kwargs.get("output"):
+            raise self._open_error
+        self.opened.append(kwargs)
+        return FakeStream("output" if kwargs.get("output") else "input", self.events)
 
     def _default_wasapi_loopback(self) -> dict[str, Any] | None:
         return self._loopbacks[0] if self._loopbacks else None
@@ -318,3 +389,105 @@ def test_a_raising_default_input_is_read_as_absent_by_the_watcher() -> None:
     watcher, _seen = _watcher(RaisingPyAudio(loopbacks=[raw_device(1, "Speakers (Loopback)")]))
     watcher.prime()
     assert watcher.poll_once() == []
+
+
+# ---------- the render device behind a loopback (M1's keep-alive, D-60) ----------
+
+MME, WASAPI = 0, 2
+
+
+def _loopback_info(index: int = 33, name: str = "Headphones (Astro A50 Game) [Loopback]") -> Any:
+    return DeviceInfo(
+        index=index, name=name, kind=DeviceKind.LOOPBACK, channels=2, sample_rate=48_000
+    )
+
+
+def test_the_render_device_is_matched_on_host_api_not_name_alone() -> None:
+    """The measured layout of the target machine: the same physical endpoint is listed
+    under MME `[5]` and WASAPI `[24]` with an identical name, and MME sorts first.
+
+    A name-only search returns the MME entry — a different host API from the loopback it
+    is meant to shadow. This test fails against that implementation, which is the whole
+    reason the host-API filter is there.
+    """
+    pa = FakePyAudio(
+        table=[
+            raw_endpoint(5, "Headphones (Astro A50 Game)", host_api=MME, outputs=2),
+            raw_endpoint(24, "Headphones (Astro A50 Game)", host_api=WASAPI, outputs=2),
+            raw_endpoint(
+                33, "Headphones (Astro A50 Game) [Loopback]", host_api=WASAPI, inputs=2
+            ),
+        ]
+    )
+
+    assert render_device_for(pa, _loopback_info()).index == 24
+
+
+def test_a_capture_only_device_is_never_offered_as_the_render_side() -> None:
+    """`Line (Astro A50 Game)` is a WASAPI *input* on the same box. Opening an output
+    stream on it would fail in the C layer."""
+    pa = FakePyAudio(
+        table=[
+            raw_endpoint(30, "Headphones (Astro A50 Game)", host_api=WASAPI, inputs=2),
+            raw_endpoint(24, "Headphones (Astro A50 Game)", host_api=WASAPI, outputs=2),
+            raw_endpoint(
+                33, "Headphones (Astro A50 Game) [Loopback]", host_api=WASAPI, inputs=2
+            ),
+        ]
+    )
+
+    assert render_device_for(pa, _loopback_info()).index == 24
+
+
+def test_a_truncated_render_name_still_matches() -> None:
+    """MME truncates names to 31 characters. The fallback compares both directions so a
+    shortened name is still recognised as the same endpoint."""
+    pa = FakePyAudio(
+        table=[
+            raw_endpoint(6, "1 - BenQ EX240N (AMD High Defin", host_api=WASAPI, outputs=2),
+            raw_endpoint(
+                31,
+                "1 - BenQ EX240N (AMD High Definition Audio Device) [Loopback]",
+                host_api=WASAPI,
+                inputs=2,
+            ),
+        ]
+    )
+
+    device = render_device_for(
+        pa,
+        _loopback_info(31, "1 - BenQ EX240N (AMD High Definition Audio Device) [Loopback]"),
+    )
+
+    assert device.index == 6
+
+
+def test_no_matching_render_device_is_a_device_error() -> None:
+    pa = FakePyAudio(
+        table=[
+            raw_endpoint(24, "Some Other Speakers", host_api=WASAPI, outputs=2),
+            raw_endpoint(
+                33, "Headphones (Astro A50 Game) [Loopback]", host_api=WASAPI, inputs=2
+            ),
+        ]
+    )
+
+    with pytest.raises(DeviceError):
+        render_device_for(pa, _loopback_info())
+
+
+def test_the_render_device_reports_its_output_channel_count() -> None:
+    """Channels come from `maxOutputChannels`, not `maxInputChannels`. A render endpoint
+    reports 0 inputs, and a keep-alive opened with 0 channels raises in the C layer."""
+    pa = FakePyAudio(
+        table=[
+            raw_endpoint(24, "Headphones (Astro A50 Game)", host_api=WASAPI, outputs=2, rate=44_100),
+            raw_endpoint(
+                33, "Headphones (Astro A50 Game) [Loopback]", host_api=WASAPI, inputs=2
+            ),
+        ]
+    )
+
+    device = render_device_for(pa, _loopback_info())
+
+    assert (device.channels, device.sample_rate) == (2, 44_100)
