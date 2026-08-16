@@ -25,10 +25,10 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | **M10 — Typed context sources** | 🟢 T10.1–T10.7 complete | Five kinds, per-kind caps and thresholds, schema v1→v2 migration, **FR72's per-kind marking**. T10.7's 1 m glance test and bundled-font glyph coverage ride with T5.9/T9.4 |
 | **M11 — Post-interview report** | 🟢 T11.1, T11.3–T11.10 + a/b/c complete | Record, evidence binding, encrypted store, retention, generation, the view/export, **context snapshots (D-58) and off-thread generation (D-59)**. Only T11.2's DPAPI cipher needs Windows |
 
-**Next action: T10.7a — a kind legend in the editor.** FR72's per-kind marks are on the overlay
-(T10.7) with nothing anywhere that says what the glyphs mean, so the marking is learnable only by
-inference. **T7.4a** is the one after it. Both are buildable here; after them, this container is
-genuinely out of work and the remaining list is hardware, fixtures and a vendor key.
+**Next action: T7.4a.** It is the last item on the buildable list; after it, this container is
+genuinely out of work and the remaining list is hardware, the user's fixtures and a vendor key.
+**T10.7b** — the same legend beside the import dialog's kind selector — is the one small thing
+behind it.
 
 *(T3.7a landed on 2026-08-16 — the importer has a surface, so notes can finally be brought in
 rather than typed.)*
@@ -79,8 +79,8 @@ behind that one word for five milestones.
 
 Remaining, re-sorted after the Qt discovery:
 
-- **Buildable and testable here (Qt, offscreen):** **T10.7a** (a kind legend in the editor) and
-  **T7.4a**. *(T3.9's backup restore and T3.7a's import surface both landed on 2026-08-16,
+- **Buildable and testable here (Qt, offscreen):** **T7.4a**, and **T10.7b** (the kind legend
+  beside the import dialog's selector too). *(T10.7a landed on 2026-08-16.)* *(T3.9's backup restore and T3.7a's import surface both landed on 2026-08-16,
   completing M3.)* *(T11.10a/b/c all landed on 2026-08-15, along with T6.3b — the panic surface T11.10a
   needed, which no task had ever named.)* *(M5's overlay widget, T7.4's checklist, T10.7's
   per-kind marking and T11.10's report view were all on this list and are now done — T5.4, T5.7,
@@ -178,6 +178,60 @@ conservative choice, just a broken one.
 ---
 
 ## Log
+
+### T10.7a — the kind legend · complete · 2026-08-16
+
+`ui/editor.py` gains a legend and marked note rows; `overlay.legend_entries` publishes the
+marks in order. `tests/test_editor.py` +6. **1216 passing**, ruff, format and
+`python -m mypy interview_prep_recall` clean.
+
+**A code with no key.** T10.7 gave each kind a shape (D-55) and a tooltip, and the tooltip
+is on the overlay — so the only way to learn what ▲ meant was to hover it *during an
+interview*, the one moment the user has no attention to spare for learning a code. FR72
+asks for the kind to be distinguishable without reading, which the shapes achieve; being
+distinguishable and being *identifiable* are not the same property.
+
+**Two halves, and the second is what makes it teach.** The legend names all five beside
+the kind selector, which is where the question is actually asked. And every note's row in
+the editor now carries the same glyph it will show on the overlay — so the user sees ■
+beside their prep notes every time they edit, and the shape is already familiar the first
+time one appears mid-interview. A legend alone is a thing you read once and forget;
+repetition against your own notes is what makes it stick.
+
+**Derived, never restated.** `legend_text` is built from `overlay.legend_entries`, and a
+test replaces a mark at runtime and asserts the legend follows. A legend that drifts from
+the marks it explains is worse than no legend, because the reader has no way to tell which
+of the two is lying — and this project has already shipped one doc that disagreed with the
+code it described.
+
+**PR #31 review — one finding, valid, fixed.** Prefixing each row with the glyph broke
+Qt's type-to-select: incremental search matches `Qt.DisplayRole` from the start of the
+string, so typing a headline's first letters no longer reached that note. **Keyboard
+navigation traded for a decoration**, and an accessibility regression introduced by a task
+about making the product easier to read.
+
+The mark now trails the headline (D-67). Leading would read better — a column of shapes
+scans faster than a ragged right edge — and overriding `keyboardSearch` would buy that
+back, but reimplementing Qt's multi-key timeout, cycling and wrap-around semantics is real
+complexity for a placement. The association still forms; the glyph is on every row either
+way.
+
+**A near miss worth recording.** Running each test against its own defect, the row-marking
+test *passed* against an unmarked list — which would have meant a test asserting nothing.
+It was not a weak test: the `sed` that was supposed to break the code had silently matched
+nothing, so the "defect" was never applied. Repeating it with an assertion that the
+substitution took effect showed the test failing correctly. **The discipline needs its own
+check:** verify that the mutation landed before trusting what the run says about it,
+because a no-op edit and a vacuous test look identical from the outside.
+
+**Not done, and unchanged from T10.7.** FR72's acceptance is a glance test at 1 m, and
+glyph coverage in the bundled Plex faces is still unverified — both ride with T5.9 and
+T9.4. The legend does not change either: it makes the shapes learnable, not legible at a
+metre.
+
+**Follow-up T10.7b:** the import dialog assigns kinds in bulk and has no legend beside its
+own kind selector. Deliberately out of this task, which the plan scoped to the editor.
+
 
 ### T3.7a — the import surface · complete · 2026-08-16
 
@@ -688,7 +742,7 @@ the previous snippet's source label.
 
 **Follow-up T10.7a:** the shapes are learnable only by hovering the overlay. A legend in the
 editor, beside the per-kind sources it already lists, is where a user would actually look. Small,
-and outside FR72 as written.
+and outside FR72 as written. ✅ **Done on 2026-08-16** — legend plus a mark on every note row.
 
 ### M7 — T7.4 · complete · 2026-08-15
 

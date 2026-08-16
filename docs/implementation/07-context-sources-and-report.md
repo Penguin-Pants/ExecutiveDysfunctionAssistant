@@ -187,6 +187,7 @@ anything, and it is what a user reaching for panic actually wants.
 | **T10.2** `ContextSet` replacing `NoteSet`, five documents, independent lifecycle | FR66, FR73 | Delete one kind, others byte-identical; any subset loads |
 | **T10.2a** **Schema v1 → v2 migration**, notes mapped to `PREP`, IDs preserved, atomic, backed up | FR73a, FR73b, FR73c | Real v1 file round-trips with IDs unchanged; SIGKILL mid-migration ×10 leaves a readable set; v1 retained as a backup generation |
 | **T10.3** Per-kind importers (JD paste, resume `.md`, interviewer notes) | FR66 | Each proposes verbatim chunks for review (FR2) |
+| **T10.7a** Kind legend in the editor | FR72 | Every kind named beside its glyph, derived from the overlay's own marks; each note's row in the editor carries the mark it will show on screen. *(The shapes were learnable only by hovering the overlay — mid-interview.)* ✅ **Done** — `ui/editor.py`, built from `overlay.legend_entries`. |
 | **T10.4** Per-kind prefilter with the 2-per-kind cap | FR68, FR69 | 200 skewed chunks, no kind exceeds 2 enum members |
 | **T10.5** Kind labels in the stage-2 prompt | FR71 | Label present on every candidate, every request |
 | **T10.6** Tracker restricted to PREP + RESUME | FR70 | `track_progress` on other kinds raises |
