@@ -494,6 +494,79 @@ def test_restoring_a_corrupt_set_then_activates_it(qapp: QApplication, tmp_path:
     assert editor.settings.values[ACTIVE_SET_KEY] == other.id  # type: ignore[attr-defined]
 
 
+def test_restoring_another_set_saves_the_edits_it_is_leaving(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    """**The edits belong to the set being left, not the one being restored.**
+
+    The dialog is modeless, so they can be typed while it is open, and its unsaved-changes
+    notice only covers the active set. Clearing the dirty flag here discarded them with no
+    warning and no write. Found by review on PR #28.
+    """
+    mine = _set("Acme", "One")
+    app = _app(tmp_path, mine)
+    store = NotesStore(tmp_path)
+    other = _set("Other", "Theirs")
+    _history(store, other.id, [other, other])
+    _corrupt(store.path_for(other.id))
+    editor = _editor(app, restore_factory=SpyRestore())
+
+    assert editor.activate(other.id) is False
+    editor.headline_edit.setText("Typed while the restore dialog was open")
+    editor._on_edited()
+    assert editor.dirty is True
+
+    assert editor._restore is not None
+    assert editor._restore.restore_selected() is True
+
+    assert app.context_set.id == other.id  # the switch still happened
+    assert [n.headline for n in store.load(mine.id).notes] == [
+        "Typed while the restore dialog was open"
+    ]
+
+
+def test_a_refused_flush_blocks_the_switch_to_a_restored_set(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    """FR42's refusal has to mean the same thing here as everywhere else: the user is left
+    somewhere they can fix it, rather than losing the edits to a switch."""
+    mine = _set("Acme", "One")
+    app = _app(tmp_path, mine)
+    store = NotesStore(tmp_path)
+    other = _set("Other", "Theirs")
+    _history(store, other.id, [other, other])
+    _corrupt(store.path_for(other.id))
+    editor = _editor(app, restore_factory=SpyRestore())
+
+    assert editor.activate(other.id) is False
+    editor.bullets_edit.setPlainText("A bullet that is nowhere in the note")
+    editor._on_edited()
+
+    assert editor._restore is not None
+    assert editor._restore.restore_selected() is True
+
+    assert app.context_set.id == mine.id  # not switched
+    assert editor.dirty is True  # still fixable
+    assert "unsaved changes are still here" in editor.status.text()
+
+
+def test_a_set_that_is_corrupt_on_open_is_still_listed(qapp: QApplication, tmp_path: Path) -> None:
+    """Omitting it hid the only route to its backups: selecting a set is what runs
+    `activate`, and `activate` is what offers the restore. Found by review on PR #28."""
+    app = _app(tmp_path, _set("Acme", "One"))
+    store = NotesStore(tmp_path)
+    other = _set("Other", "Theirs")
+    _history(store, other.id, [other, other])
+    _corrupt(store.path_for(other.id))
+
+    editor = _editor(app, restore_factory=SpyRestore())
+
+    listed = [editor.set_box.itemData(row) for row in range(editor.set_box.count())]
+    assert other.id in listed
+    label = editor.set_box.itemText(listed.index(other.id))
+    assert "Unreadable" in label
+
+
 # ---------- startup: FR44's "or starting empty" ----------
 
 

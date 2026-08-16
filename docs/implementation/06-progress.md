@@ -227,6 +227,14 @@ one of the tests had been passing for the wrong reason before the helper was fix
 history fixture minted a fresh id per version, so **nothing rotated** and eleven tests
 were asserting against sets with no backups at all).
 
+**PR #28 review — two findings, both valid, both fixed.** Both were about the *other* set:
+the one not being restored.
+
+| Severity | Finding | Why it mattered |
+|---|---|---|
+| P1 | **Restoring a different set discarded the current set's unsaved edits.** The dirty flag was cleared unconditionally, and the dialog's unsaved-changes notice only covers the active set — so edits typed while the modeless dialog was open vanished with no write and no warning. | Who owns the pending write decides what happens to it. Restoring *this* set drops them (they belong to the version being replaced); restoring another one flushes them, and a refused flush blocks the switch — the same rule `activate` already followed. |
+| P2 | **A set that was corrupt when the editor opened was not listed at all**, so `activate` never ran on it and the restore was never offered. Its five generations were on disk with no control anywhere that could reach them. | The recovery path built by this task was unreachable for the case it exists for. Unreadable sets are now listed and marked; selecting one runs the offer. |
+
 **One thing worth flagging rather than fixing.** `load_active_set`'s new `ring` argument
 has no production caller, because `load_active_set` itself still has none — T9.6a is the
 entry point that will call it, and it remains blocked on the no-API-key policy and the

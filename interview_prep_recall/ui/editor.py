@@ -72,6 +72,10 @@ rather than blocking a save the requirement permits."""
 
 TRACK_DISABLED_TEXT = "Only prep notes and resume entries can be tracked (FR70)."
 
+UNREADABLE_LABEL = "⚠ Unreadable set {short}… — select to restore"
+"""How a corrupt set appears in the selector (T3.9). It is listed rather than hidden
+because selecting it is the only route to its backups — see `refresh_sets`."""
+
 Confirmer = Callable[[str], bool]
 """FR60's confirmation for destructive actions. Injected so the requirement is testable
 without driving a modal."""
@@ -297,7 +301,14 @@ class NotesEditor(QDialog):
         return self.application.context_set
 
     def refresh_sets(self) -> None:
-        """Re-read what is on disk, keeping the active set selected."""
+        """Re-read what is on disk, keeping the active set selected.
+
+        **An unreadable set is still listed** (T3.9). Omitting it hid the only route to
+        its backups: selecting a set is what runs `activate`, and `activate` is what
+        offers the restore — so a set that was already corrupt when this window opened had
+        five recoverable generations on disk and no control anywhere that could reach
+        them. Found by review on PR #28.
+        """
         self._loading = True
         try:
             ids = self.store.list_ids()
@@ -308,6 +319,7 @@ class NotesEditor(QDialog):
                         known[set_id] = self.store.load(set_id).name
                     except Exception:  # noqa: BLE001 — one bad file must not hide the rest
                         self.application.ring.record("note_set_unreadable", noteset_id=set_id)
+                        known[set_id] = UNREADABLE_LABEL.format(short=set_id[:8])
             self.set_box.clear()
             for set_id, name in known.items():
                 self.set_box.addItem(name, set_id)
@@ -395,14 +407,32 @@ class NotesEditor(QDialog):
         return dialog
 
     def _on_restored(self, restored: ContextSet) -> None:
-        """The disk changed under this window. Catch up, and **drop the pending write**.
+        """The disk changed under this window. Catch up — and **who owns the pending
+        write decides what happens to it**.
 
-        The edits in memory belong to the version the user just chose to replace, and
-        `flush` on close would put them straight back over the restored file — the
-        restore undone by the window that offered it.
+        *The restored set is the one being edited:* the edits belong to the version the
+        user just chose to replace, so they are dropped. `flush` on close would otherwise
+        put them straight back over the restored file — the restore undone by the window
+        that offered it.
+
+        *The restored set is a different one:* the edits belong to the set being **left**,
+        and this dialog is modeless, so they can have been typed while it was open. Same
+        rule as `activate` — flush first, and if the flush refuses, do not switch. Clearing
+        the flag here was the version of this that silently discarded them, with no
+        warning either, because the dialog's unsaved-changes notice only covers the active
+        set. Found by review on PR #28.
         """
-        self._dirty = False
-        if restored.id != self.context_set.id:
+        if restored.id == self.context_set.id:
+            self._dirty = False
+        else:
+            self.flush()
+            if self._dirty:
+                self.status.setText(
+                    f"{self.status.text()} The restored set was not opened, so your "
+                    "unsaved changes are still here to fix."
+                )
+                self.refresh_sets()
+                return
             # The set the user was trying to open was unreadable and has been repaired;
             # finish the switch they asked for. `activate_context_set` rather than
             # `activate`, because the set is already in hand and re-reading it from disk
