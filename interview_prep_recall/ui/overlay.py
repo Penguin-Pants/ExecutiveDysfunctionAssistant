@@ -174,6 +174,21 @@ def mark_for(kind: SourceKind) -> KindMark:
         raise RenderError(f"no FR72 mark defined for {kind!r}") from exc
 
 
+def legend_entries() -> list[tuple[SourceKind, KindMark]]:
+    """Every mark, in enum order, for a surface that teaches them (T10.7a).
+
+    FR72 asks for the kind to be distinguishable *without reading*, which five shapes
+    achieve and five words do not — but a shape nobody can look up is a private code. The
+    tooltip answers "what is this one"; a legend answers "what are they", which is the
+    question a user has before they have seen a match at all.
+
+    Enum order rather than alphabetical, so the legend reads in the same sequence as the
+    kind selectors beside it. A legend whose order drifts from its control is one more
+    thing for the reader to reconcile.
+    """
+    return [(kind, mark_for(kind)) for kind in SourceKind]
+
+
 class SnippetState(Enum):
     """FR51. Two content states plus the one the design insists is never blank."""
 

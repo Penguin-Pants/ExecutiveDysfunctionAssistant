@@ -577,3 +577,95 @@ def test_a_persisted_id_that_no_longer_exists_falls_through(
     settings.setValue(ACTIVE_SET_KEY, "00000000-0000-4000-8000-000000000000")
 
     assert load_active_set(tmp_path, settings).id == survivor.id
+
+
+# ---------- T10.7a: the kind legend (FR72) ----------
+
+
+def test_the_legend_names_every_kind(qapp: QApplication, tmp_path: Path) -> None:
+    """FR72's shapes were learnable only by hovering the overlay — during an interview,
+    the one moment the user has no attention to spare for learning a code.
+
+    Every kind, because a legend that covers four of five is worse than none: the missing
+    glyph looks like a mark with no meaning rather than a gap in the legend.
+    """
+    from interview_prep_recall.notes.model import SourceKind as Kind
+    from interview_prep_recall.ui.overlay import mark_for
+
+    editor = _editor(_app(tmp_path))
+    text = editor.legend.text()
+
+    for kind in Kind:
+        mark = mark_for(kind)
+        assert mark.glyph in text, kind
+        assert mark.label in text, kind
+
+
+def test_the_legend_is_built_from_the_marks_it_explains(qapp: QApplication, tmp_path: Path) -> None:
+    """Not restated. A legend that drifts from the marks is worse than no legend, because
+    the reader cannot tell which of the two is lying."""
+    from interview_prep_recall.ui import overlay
+    from interview_prep_recall.ui.editor import legend_text
+    from interview_prep_recall.ui.overlay import KindMark
+
+    original = dict(overlay.KIND_MARKS)
+    try:
+        overlay.KIND_MARKS[SourceKind.PREP] = KindMark("☂", "Umbrella notes")
+        assert "☂ Umbrella notes" in legend_text()
+    finally:
+        overlay.KIND_MARKS.clear()
+        overlay.KIND_MARKS.update(original)
+
+
+def test_the_legend_reads_in_the_same_order_as_the_kind_selector(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    """A legend whose order drifts from the control beside it is one more thing for the
+    reader to reconcile."""
+    from interview_prep_recall.ui.overlay import legend_entries
+
+    editor = _editor(_app(tmp_path))
+    in_box = [editor.kind_box.itemData(row) for row in range(editor.kind_box.count())]
+
+    assert in_box == [kind for kind, _mark in legend_entries()]
+
+
+def test_each_note_carries_its_overlay_mark_in_the_list(qapp: QApplication, tmp_path: Path) -> None:
+    """The half that makes the legend *teach*: the user sees the glyph beside their own
+    notes every time they edit, so it is already familiar the first time one appears on
+    the overlay mid-interview."""
+    from interview_prep_recall.ui.overlay import mark_for
+
+    app = _app(
+        tmp_path,
+        ContextSet(
+            name="Acme",
+            notes=[
+                Note(headline="A prep note", kind=SourceKind.PREP),
+                Note(headline="The posting", kind=SourceKind.ROLE),
+            ],
+        ),
+    )
+    editor = _editor(app)
+
+    assert editor.note_list.item(0).text().startswith(mark_for(SourceKind.PREP).glyph)
+    assert editor.note_list.item(1).text().startswith(mark_for(SourceKind.ROLE).glyph)
+
+
+def test_the_mark_survives_an_edit_to_the_headline(qapp: QApplication, tmp_path: Path) -> None:
+    """`_on_edited` rewrites the row as the user types. Rebuilding it without the mark
+    would make the glyph disappear from exactly the note being worked on."""
+    from interview_prep_recall.ui.overlay import mark_for
+
+    app = _app(
+        tmp_path,
+        ContextSet(name="Acme", notes=[Note(headline="Before", kind=SourceKind.RESUME)]),
+    )
+    editor = _editor(app)
+    editor.note_list.setCurrentRow(0)
+    editor.headline_edit.setText("After")
+    editor._on_edited()
+
+    row = editor.note_list.item(0).text()
+    assert row.startswith(mark_for(SourceKind.RESUME).glyph)
+    assert "After" in row

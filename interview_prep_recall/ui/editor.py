@@ -53,6 +53,7 @@ from interview_prep_recall.diagnostics.ring import DiagnosticRing
 from interview_prep_recall.notes.model import TRACKABLE_KINDS, ContextSet, Note, SourceKind
 from interview_prep_recall.notes.store import NotesStore, NotesStoreError, SchemaTooNewError
 from interview_prep_recall.ui.import_notes import ImportDialog
+from interview_prep_recall.ui.overlay import legend_entries, mark_for
 from interview_prep_recall.ui.restore import RestoreDialog
 
 if TYPE_CHECKING:
@@ -72,6 +73,31 @@ NOT_OPTIMISED_TEXT = "No bullets — the overlay will show the start of the body
 rather than blocking a save the requirement permits."""
 
 TRACK_DISABLED_TEXT = "Only prep notes and resume entries can be tracked (FR70)."
+
+LEGEND_TITLE = "Overlay marks (FR72):"
+"""T10.7a. The shapes were learnable only by hovering the overlay — during an interview,
+which is the one moment the user has no attention to spare for learning a code."""
+
+
+def legend_text() -> str:
+    """The five marks on one line, glyph then name.
+
+    Built from `overlay.legend_entries` rather than restated here: a legend that drifts
+    from the marks it explains is worse than no legend, because the reader has no way to
+    tell which of the two is lying.
+    """
+    return "    ".join(f"{mark.glyph} {mark.label}" for _kind, mark in legend_entries())
+
+
+def list_label(note: Note) -> str:
+    """A note's row in the editor list, carrying the same mark the overlay will show.
+
+    This is the half that makes the legend teach rather than merely inform: the user sees
+    ■ beside their prep notes every time they edit, so the glyph is already familiar the
+    first time one appears on the overlay mid-interview.
+    """
+    return f"{mark_for(note.kind).glyph}  {note.headline or '(untitled)'}"
+
 
 UNREADABLE_LABEL = "⚠ Unreadable set {short}… — select to restore"
 """How a corrupt set appears in the selector (T3.9). It is listed rather than hidden
@@ -242,6 +268,13 @@ class NotesEditor(QDialog):
             self.kind_box.addItem(kind.value, kind)
         form.addWidget(QLabel("Kind (fixed after creation — FR67):", self))
         form.addWidget(self.kind_box)
+
+        # T10.7a: beside the control that assigns the kind, because that is where the
+        # question "which of these is mine" is actually asked.
+        self.legend = QLabel(f"{LEGEND_TITLE}  {legend_text()}", self)
+        self.legend.setWordWrap(True)
+        self.legend.setTextFormat(Qt.TextFormat.PlainText)
+        form.addWidget(self.legend)
 
         self.headline_edit = QLineEdit(self)
         self.headline_edit.textEdited.connect(self._on_edited)
@@ -561,7 +594,7 @@ class NotesEditor(QDialog):
             row = self.note_list.currentRow()
             self.note_list.clear()
             for note in self.context_set.notes:
-                item = QListWidgetItem(note.headline or "(untitled)")
+                item = QListWidgetItem(list_label(note))
                 item.setData(Qt.ItemDataRole.UserRole, note.id)
                 self.note_list.addItem(item)
             if self.note_list.count():
@@ -634,7 +667,7 @@ class NotesEditor(QDialog):
                 self.track_box.setChecked(False)
         item = self.note_list.currentItem()
         if item is not None:
-            item.setText(note.headline or "(untitled)")
+            item.setText(list_label(note))
         self._refresh_advisory()
         self.mark_dirty()
 
