@@ -514,3 +514,54 @@ def test_a_bad_bullet_elsewhere_in_the_set_stops_the_import(
 
     assert "Not imported" in dialog.status.text()
     assert [n.id for n in app.context_set.notes] == [resume.id]  # nothing replaced
+
+
+def test_changing_the_source_blocks_the_import(qapp: QApplication, tmp_path: Path) -> None:
+    """**The review list must describe what the user is looking at.**
+
+    Pasting a second source left the previous source's chunks on screen with Import still
+    live — and because the import replaces every note of the chosen kind, pressing it
+    would have destroyed the user's notes in favour of a file they were not looking at.
+    Found by review on PR #30.
+    """
+    app = _app(tmp_path)
+    NotesStore(tmp_path).save(app.context_set)
+    dialog = _loaded(app)
+    assert dialog.import_button.isEnabled() is True
+
+    dialog.source_edit.setPlainText("## A completely different source\nWith other notes.")
+
+    assert dialog.stale is True
+    assert dialog.import_button.isEnabled() is False
+    assert dialog.import_now() is False
+    assert app.context_set.notes == []
+
+
+def test_edits_survive_a_source_change(qapp: QApplication, tmp_path: Path) -> None:
+    """Disabling, not discarding: clearing the list would throw away review edits every
+    time the user touched the source box. Undoing the change re-enables the import,
+    because staleness is a comparison rather than a flag."""
+    dialog = _loaded(_app(tmp_path))
+    dialog.headline_edit.setText("An edit worth keeping?")
+    dialog._on_edited()
+
+    dialog.source_edit.setPlainText("something else")
+    assert dialog.proposals[0].headline == "An edit worth keeping?"
+
+    dialog.source_edit.setPlainText(MARKDOWN)
+    assert dialog.stale is False
+    assert dialog.import_button.isEnabled() is True
+
+
+def test_declining_a_re_chunk_puts_the_selector_back(qapp: QApplication, tmp_path: Path) -> None:
+    """FR2 requires the review UI to *name* the strategy the chunks were made with.
+    Leaving the box on the declined choice names one that was never applied, and the user
+    can import that misreading. Found by review on PR #30."""
+    dialog = _loaded(_app(tmp_path), confirm=lambda _message: False)
+    dialog.headline_edit.setText("An edit?")
+    dialog._on_edited()
+
+    _choose(dialog, ChunkStrategy.BLANK_LINE)
+
+    assert dialog.strategy is ChunkStrategy.MD_HEADER
+    assert dialog.strategy_box.currentText() == STRATEGY_NAMES[ChunkStrategy.MD_HEADER]

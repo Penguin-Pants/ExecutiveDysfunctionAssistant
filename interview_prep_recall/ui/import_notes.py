@@ -134,6 +134,12 @@ class ImportDialog(QDialog):
         self._strategy_chosen = False
         """Whether the user has picked a strategy themselves. Until they do, FR2's
         detection runs on every chunk — see `analyse`."""
+        self._chunked_source: str | None = None
+        """The exact text the chunks on screen were made from. Compared against the box
+        to tell whether the review still describes what the user is looking at."""
+        self._applied_strategy: ChunkStrategy | None = None
+        """The strategy those chunks were made with, so a declined re-chunk can put the
+        selector back rather than leaving it naming one that was not used."""
         self._loading = False
 
         layout = QVBoxLayout(self)
@@ -147,6 +153,7 @@ class ImportDialog(QDialog):
         layout.addLayout(source_row)
 
         self.source_edit = QPlainTextEdit(self)
+        self.source_edit.textChanged.connect(self._on_source_changed)
         layout.addWidget(self.source_edit)
 
         # ---- the strategy (FR2: named, and switchable before saving) ----
@@ -287,6 +294,8 @@ class ImportDialog(QDialog):
             return False
         result = import_text(text, self.filename, self.strategy if self._strategy_chosen else None)
         self.proposals = result.proposals
+        self._chunked_source = text
+        self._applied_strategy = result.strategy
         self._edited = False
         self._select_strategy(result.strategy)
         self._refresh_chunks()
@@ -302,12 +311,44 @@ class ImportDialog(QDialog):
             )
         return True
 
+    @property
+    def stale(self) -> bool:
+        """Whether the chunks on screen were made from text that is no longer there.
+
+        Pasting a second source, or opening another file, leaves the review list showing
+        the *previous* source's chunks. Importing then writes those — and because the
+        import replaces every note of the chosen kind, it would destroy the user's notes
+        in favour of a file they are not looking at. Found by review on PR #30.
+        """
+        return self._chunked_source is not None and (
+            self.source_edit.toPlainText() != self._chunked_source
+        )
+
+    def _on_source_changed(self) -> None:
+        """**Disable, do not discard.** Clearing the list would throw away review edits
+        every time the user touched the source box; leaving Import live would let them
+        save the wrong source. Disabling does neither, and undoing the change re-enables
+        it because staleness is a comparison rather than a flag."""
+        if self._chunked_source is None:
+            return
+        self._refresh_buttons()
+        if self.stale:
+            self.status.setText(
+                "The text has changed since these chunks were made. Press “Chunk it” "
+                "again to review the new text."
+            )
+
     def _on_strategy_changed(self, _index: int) -> None:
         if self._loading:
             return
         if not self.source_edit.toPlainText().strip():
             return
         if self._edited and not self._confirm(RECHUNK_WARNING):
+            # Put the box back. FR2 requires the review UI to *name* the strategy the
+            # chunks were made with, and leaving it on the declined choice names one that
+            # was never applied — a review the user could import while misreading it.
+            if self._applied_strategy is not None:
+                self._select_strategy(self._applied_strategy)
             return
         self._strategy_chosen = True
         self.analyse()
@@ -389,8 +430,9 @@ class ImportDialog(QDialog):
         return True
 
     def _refresh_buttons(self) -> None:
-        # FR2: the save is blocked until there is something reviewed to save.
-        self.import_button.setEnabled(bool(self.proposals))
+        # FR2: the save is blocked until there is something reviewed to save — and until
+        # what was reviewed is still what is on screen.
+        self.import_button.setEnabled(bool(self.proposals) and not self.stale)
         self.drop_button.setEnabled(self.selected is not None)
 
     # ---------- importing (FR66, FR60, FR42) ----------
@@ -404,6 +446,14 @@ class ImportDialog(QDialog):
         """
         if not self.proposals:
             self.status.setText(NOTHING_TO_IMPORT_TEXT)
+            return False
+        if self.stale:
+            # Guarded here as well as on the button: this one replaces notes, and a
+            # disabled control is a UI state, not an invariant.
+            self.status.setText(
+                "These chunks came from text that has since changed. Press “Chunk it” "
+                "again before importing."
+            )
             return False
         if not self.application.can_change_context_set:
             self.status.setText(SESSION_LOCKED_TEXT)

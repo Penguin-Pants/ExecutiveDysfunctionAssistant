@@ -182,7 +182,7 @@ conservative choice, just a broken one.
 ### T3.7a — the import surface · complete · 2026-08-16
 
 New `ui/import_notes.py`, wired into `ui/editor.py`; `headline_needs_review` published from
-the importer. New `tests/test_import_notes.py` (28 cases), plus a drain fixture in `conftest`. **1207 passing**, ruff, format
+the importer. New `tests/test_import_notes.py` (31 cases), plus a drain fixture in `conftest`. **1207 passing**, ruff, format
 and `python -m mypy interview_prep_recall` clean.
 
 **Two modules with passing tests and no caller, joined at last.** T3.5 built the chunkers,
@@ -214,7 +214,7 @@ note of a kind that the tracker's verdict and the report's D-58 snapshot both de
 | Fix now | **A bad bullet elsewhere in the set would have raised out of a Qt slot.** `add_source` verifies the incoming notes; `NotesStore.save` verifies the whole set. Between them sits the modeless editor, which can make the *rest* of the set unsavable while the dialog is open — leaving the set replaced in memory and unchanged on disk. | The survivors are verified before anything is removed (D-65), preserving the property `add_source` was built around. |
 | Fix now | **`dialog.strategy` was annotated `ChunkStrategy` and returned `str`.** `ChunkStrategy` is a `StrEnum` and Qt stores a `str` subclass as a plain `str`. | Everything worked, because a `StrEnum` compares as its value — which is exactly why it was worth fixing. mypy cannot see through Qt's `Any`, and the first caller to write `is ChunkStrategy.MD_HEADER` would have been quietly wrong. Found by a test asserting `is`. |
 
-**Eight tests were run against their own defect**, one at a time: no re-embed, no
+**Ten tests were run against their own defect**, one at a time: no re-embed, no
 mid-session guard, a strategy switch that does not re-chunk, a headline warning never
 recomputed, an editor that opens the import without flushing, a missing suffix check, and
 the two fixes above. All eight failed, then passed.
@@ -224,6 +224,15 @@ editor holds unsaved edits writes those edits as a side effect, because the impo
 the same `ContextSet` object. The editor now flushes first and **does not open the dialog
 if the flush refuses** — the same rule as `activate` and `_on_restored`. A refusal that
 means different things at different exits is not a refusal.
+
+**PR #30 review — two findings, both valid, both fixed.** Both were the same mistake in
+two places: **the review UI describing something other than what would actually be
+imported.**
+
+| Severity | Finding | Why it mattered |
+|---|---|---|
+| P1 | **Changing the source did not invalidate the review.** Pasting a second source, or opening another file, left the previous source's chunks on screen with Import still live. | Importing replaces every note of the chosen kind, so pressing it would have destroyed the user's notes in favour of a file they were not looking at. Staleness is now a comparison against the exact text that was chunked — so the import is *disabled*, not discarded, and undoing the change re-enables it rather than costing the user their review edits. |
+| P2 | **Declining the re-chunk warning left the selector on the declined strategy**, naming one the chunks were never made with. | FR2 requires the review UI to *name* the strategy that was applied. The box goes back. |
 
 **And a segfault, found by running the suite rather than by reading it.** Adding 28 Qt
 tests made the full run crash roughly two times in three — on Linux, where the previous
