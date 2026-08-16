@@ -189,6 +189,26 @@ def legend_entries() -> list[tuple[SourceKind, KindMark]]:
     return [(kind, mark_for(kind)) for kind in SourceKind]
 
 
+LEGEND_TITLE = "Overlay marks (FR72):"
+"""Heading for the legend, wherever it is shown."""
+
+
+def legend_text() -> str:
+    """The five marks on one line, glyph then name (T10.7a, T10.7b).
+
+    Lives here, beside `KIND_MARKS`, because **two** surfaces show it — the editor, where
+    a note's kind is set one at a time, and the import dialog, where a whole source is
+    assigned a kind at once. It cannot live in either of them: `editor` imports
+    `import_notes`, so a legend defined in the editor could not be reached from the
+    dialog without a cycle, and a copy in each is two things to keep in step.
+
+    Derived from `legend_entries` rather than restated, for the reason a legend exists at
+    all: one that drifts from the marks it explains is worse than none, because the reader
+    has no way to tell which of the two is lying.
+    """
+    return "    ".join(f"{mark.glyph} {mark.label}" for _kind, mark in legend_entries())
+
+
 class SnippetState(Enum):
     """FR51. Two content states plus the one the design insists is never blank."""
 

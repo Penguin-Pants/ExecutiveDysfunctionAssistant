@@ -565,3 +565,58 @@ def test_declining_a_re_chunk_puts_the_selector_back(qapp: QApplication, tmp_pat
 
     assert dialog.strategy is ChunkStrategy.MD_HEADER
     assert dialog.strategy_box.currentText() == STRATEGY_NAMES[ChunkStrategy.MD_HEADER]
+
+
+# ---------- T10.7b: the kind legend, here too (FR72) ----------
+
+
+def test_the_import_dialog_names_every_kind_mark(qapp: QApplication, tmp_path: Path) -> None:
+    """**T10.7b.** This dialog assigns a kind to a whole source at once, so the cost of
+    picking the wrong one is larger here than in the editor, where it is one note. The
+    legend the editor got in T10.7a belongs beside this selector too."""
+    from interview_prep_recall.ui.overlay import mark_for
+
+    dialog = _dialog(_app(tmp_path))
+    text = dialog.legend.text()
+
+    for kind in SourceKind:
+        mark = mark_for(kind)
+        assert mark.glyph in text, kind
+        assert mark.label in text, kind
+
+
+def test_both_legends_come_from_one_definition(qapp: QApplication, tmp_path: Path) -> None:
+    """Two copies would be two things to keep in step, and a legend that disagrees with
+    the marks — or with the other legend — is worse than none.
+
+    The definition lives in `overlay`, beside `KIND_MARKS`, because `editor` imports
+    `import_notes`: a legend defined in the editor could not be reached from here without
+    a cycle.
+    """
+    from interview_prep_recall.ui import overlay
+    from interview_prep_recall.ui.overlay import KindMark
+
+    original = dict(overlay.KIND_MARKS)
+    try:
+        overlay.KIND_MARKS[SourceKind.ROLE] = KindMark("☂", "Umbrella posting")
+        dialog = _dialog(_app(tmp_path))
+        editor = _editor(_app(tmp_path), import_factory=SpyImport())
+
+        assert "☂ Umbrella posting" in dialog.legend.text()
+        assert "☂ Umbrella posting" in editor.legend.text()
+    finally:
+        overlay.KIND_MARKS.clear()
+        overlay.KIND_MARKS.update(original)
+
+
+def test_the_legend_order_matches_this_dialogs_kind_selector(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    """A legend whose order drifts from the control beside it is one more thing to
+    reconcile — and this selector is a different widget from the editor's."""
+    from interview_prep_recall.ui.overlay import legend_entries
+
+    dialog = _dialog(_app(tmp_path))
+    in_box = [dialog.kind_box.itemData(row) for row in range(dialog.kind_box.count())]
+
+    assert in_box == [kind for kind, _mark in legend_entries()]

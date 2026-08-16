@@ -25,9 +25,14 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | **M10 — Typed context sources** | 🟢 T10.1–T10.7 complete | Five kinds, per-kind caps and thresholds, schema v1→v2 migration, **FR72's per-kind marking**. T10.7's 1 m glance test and bundled-font glyph coverage ride with T5.9/T9.4 |
 | **M11 — Post-interview report** | 🟢 T11.1, T11.3–T11.10 + a/b/c complete | Record, evidence binding, encrypted store, retention, generation, the view/export, **context snapshots (D-58) and off-thread generation (D-59)**. Only T11.2's DPAPI cipher needs Windows |
 
-**Next action: T10.7b**, the one small thing left — the kind legend beside the import dialog's
-selector as well as the editor's. After that this container is genuinely out of work: what
-remains is the Windows machine, the user's fixtures, or a vendor key.
+**Next action: nothing this container can build.** T10.7b landed on 2026-08-16 and was the last
+of them. What remains is the Windows machine, the user's labelled fixtures, a vendor key, or the
+real-surface session that owes judgements on T5.9, FR72's 1 m glance test and T7.4a's readability.
+
+**That sentence has been wrong seven times.** It is written here as a claim to re-test, not a
+fact — the check that has caught every previous instance is to try a "blocked" task for four
+minutes before believing its label. Each blocked item below carries a falsifiable reason; test
+the reason.
 
 *(T7.4a was measured on 2026-08-16. Its code half turned out to be a test that asserted nothing;
 its remaining half is a real-surface judgement riding with T5.9.)*
@@ -81,9 +86,9 @@ behind that one word for five milestones.
 
 Remaining, re-sorted after the Qt discovery:
 
-- **Buildable and testable here (Qt, offscreen):** **T10.7b** (the kind legend beside the import
-  dialog's selector too). *(T10.7a and T7.4a both landed on 2026-08-16 — T7.4a's remaining half
-  is a real-surface judgement, listed under T5.9 below.)* *(T3.9's backup restore and T3.7a's import surface both landed on 2026-08-16,
+- **Buildable and testable here (Qt, offscreen):** *none left.* T10.7a, T7.4a, T7.4b and T10.7b
+  all landed on 2026-08-16. T7.4a's remaining half is a real-surface judgement, listed under
+  T5.9 below. *(T3.9's backup restore and T3.7a's import surface both landed on 2026-08-16,
   completing M3.)* *(T11.10a/b/c all landed on 2026-08-15, along with T6.3b — the panic surface T11.10a
   needed, which no task had ever named.)* *(M5's overlay widget, T7.4's checklist, T10.7's
   per-kind marking and T11.10's report view were all on this list and are now done — T5.4, T5.7,
@@ -185,6 +190,27 @@ conservative choice, just a broken one.
 ---
 
 ## Log
+
+### T10.7b — the legend beside the import selector · complete · 2026-08-16
+
+`legend_text` and `LEGEND_TITLE` moved from `ui/editor.py` to `ui/overlay.py`; the label
+added to `ui/import_notes.py`. `tests/test_import_notes.py` +3. **1226 passing**, ruff,
+format and `python -m mypy interview_prep_recall` clean.
+
+**The smaller half of T10.7a, and the one where the mistake costs more.** The editor sets
+a kind one note at a time; the import dialog assigns a whole source at once, so choosing
+wrong there replaces every note of a kind (FR66) rather than mislabelling a single note.
+The surface with the larger consequence was the one without the key.
+
+**Where it lives is the whole design decision.** `editor` imports `import_notes`, so a
+legend defined in the editor cannot be reached from the dialog without a cycle — and a
+copy in each is two things to keep in step, which is the failure the legend exists to
+prevent one level down. It moved to `overlay.py`, beside `KIND_MARKS`, which both surfaces
+already depend on. A test replaces a mark at runtime and asserts **both** legends follow.
+
+**No new decision recorded**, because none was made: T10.7a's reasoning covers this
+entirely, and the only judgement here was where to put a function.
+
 
 ### T7.4b — the taller panel · complete · 2026-08-16
 
@@ -314,8 +340,8 @@ size is usable rather than merely non-clipping — is a judgement about a real s
 real distance. It rides with T5.9, alongside FR72's glance test and the bundled-font glyph
 coverage. Nothing in this container can answer it, and no test here should pretend to.
 
-**This container is now out of buildable work**, with **T10.7b** the one exception.
-*(T7.4b was raised here and fixed the same day, once the user chose the taller panel.)*
+**This container is now out of buildable work.** *(T7.4b was raised here and fixed the same day,
+once the user chose the taller panel; T10.7b followed.)*
 
 
 ### T10.7a — the kind legend · complete · 2026-08-16
@@ -370,6 +396,7 @@ metre.
 
 **Follow-up T10.7b:** the import dialog assigns kinds in bulk and has no legend beside its
 own kind selector. Deliberately out of this task, which the plan scoped to the editor.
+✅ **Done on 2026-08-16.**
 
 
 ### T3.7a — the import surface · complete · 2026-08-16

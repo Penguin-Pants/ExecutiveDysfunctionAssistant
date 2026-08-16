@@ -53,7 +53,7 @@ from interview_prep_recall.diagnostics.ring import DiagnosticRing
 from interview_prep_recall.notes.model import TRACKABLE_KINDS, ContextSet, Note, SourceKind
 from interview_prep_recall.notes.store import NotesStore, NotesStoreError, SchemaTooNewError
 from interview_prep_recall.ui.import_notes import ImportDialog
-from interview_prep_recall.ui.overlay import legend_entries, mark_for
+from interview_prep_recall.ui.overlay import LEGEND_TITLE, legend_text, mark_for
 from interview_prep_recall.ui.restore import RestoreDialog
 
 if TYPE_CHECKING:
@@ -73,20 +73,6 @@ NOT_OPTIMISED_TEXT = "No bullets — the overlay will show the start of the body
 rather than blocking a save the requirement permits."""
 
 TRACK_DISABLED_TEXT = "Only prep notes and resume entries can be tracked (FR70)."
-
-LEGEND_TITLE = "Overlay marks (FR72):"
-"""T10.7a. The shapes were learnable only by hovering the overlay — during an interview,
-which is the one moment the user has no attention to spare for learning a code."""
-
-
-def legend_text() -> str:
-    """The five marks on one line, glyph then name.
-
-    Built from `overlay.legend_entries` rather than restated here: a legend that drifts
-    from the marks it explains is worse than no legend, because the reader has no way to
-    tell which of the two is lying.
-    """
-    return "    ".join(f"{mark.glyph} {mark.label}" for _kind, mark in legend_entries())
 
 
 def list_label(note: Note) -> str:

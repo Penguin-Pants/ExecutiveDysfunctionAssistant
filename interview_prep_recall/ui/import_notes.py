@@ -56,6 +56,7 @@ from interview_prep_recall.notes.importer import (
 )
 from interview_prep_recall.notes.model import SourceKind
 from interview_prep_recall.notes.store import NotesStore
+from interview_prep_recall.ui.overlay import LEGEND_TITLE, legend_text
 
 if TYPE_CHECKING:
     from interview_prep_recall.app import Application
@@ -173,6 +174,14 @@ class ImportDialog(QDialog):
         self.chunk_button.clicked.connect(self.analyse)
         controls.addWidget(self.chunk_button)
         layout.addLayout(controls)
+
+        # T10.7b. The editor sets a kind one note at a time and shows this beside its own
+        # selector; here a whole source is assigned a kind at once, so the consequence of
+        # choosing wrong is larger and the legend is worth more, not less.
+        self.legend = QLabel(f"{LEGEND_TITLE}  {legend_text()}", self)
+        self.legend.setWordWrap(True)
+        self.legend.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(self.legend)
 
         # ---- the review (FR2: every chunk presented and editable before save) ----
         review = QHBoxLayout()
