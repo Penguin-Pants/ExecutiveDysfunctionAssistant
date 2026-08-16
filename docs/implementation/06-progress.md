@@ -25,10 +25,12 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | **M10 — Typed context sources** | 🟢 T10.1–T10.7 complete | Five kinds, per-kind caps and thresholds, schema v1→v2 migration, **FR72's per-kind marking**. T10.7's 1 m glance test and bundled-font glyph coverage ride with T5.9/T9.4 |
 | **M11 — Post-interview report** | 🟢 T11.1, T11.3–T11.10 + a/b/c complete | Record, evidence binding, encrypted store, retention, generation, the view/export, **context snapshots (D-58) and off-thread generation (D-59)**. Only T11.2's DPAPI cipher needs Windows |
 
-**Next action: T7.4a.** It is the last item on the buildable list; after it, this container is
-genuinely out of work and the remaining list is hardware, the user's fixtures and a vendor key.
-**T10.7b** — the same legend beside the import dialog's kind selector — is the one small thing
-behind it.
+**Next action: T10.7b**, the one small thing left — the kind legend beside the import dialog's
+selector as well as the editor's. After that this container is genuinely out of work: what
+remains is the Windows machine, the user's fixtures, or a vendor key.
+
+*(T7.4a was measured on 2026-08-16. Its code half turned out to be a test that asserted nothing;
+its remaining half is a real-surface judgement riding with T5.9.)*
 
 *(T3.7a landed on 2026-08-16 — the importer has a surface, so notes can finally be brought in
 rather than typed.)*
@@ -79,8 +81,9 @@ behind that one word for five milestones.
 
 Remaining, re-sorted after the Qt discovery:
 
-- **Buildable and testable here (Qt, offscreen):** **T7.4a**, and **T10.7b** (the kind legend
-  beside the import dialog's selector too). *(T10.7a landed on 2026-08-16.)* *(T3.9's backup restore and T3.7a's import surface both landed on 2026-08-16,
+- **Buildable and testable here (Qt, offscreen):** **T10.7b** (the kind legend beside the import
+  dialog's selector too). *(T10.7a and T7.4a both landed on 2026-08-16 — T7.4a's remaining half
+  is a real-surface judgement, listed under T5.9 below.)* *(T3.9's backup restore and T3.7a's import surface both landed on 2026-08-16,
   completing M3.)* *(T11.10a/b/c all landed on 2026-08-15, along with T6.3b — the panic surface T11.10a
   needed, which no task had ever named.)* *(M5's overlay widget, T7.4's checklist, T10.7's
   per-kind marking and T11.10's report view were all on this list and are now done — T5.4, T5.7,
@@ -89,9 +92,12 @@ Remaining, re-sorted after the Qt discovery:
   T5.2's `SetWindowDisplayAffinity`, T6.4's ProcMon trace, T9.1a's device-open enforcement,
   T9.4's PyInstaller build, T11.2's DPAPI cipher. **T11.10 is off this list** — it was on it, and
   the export writes an ordinary file to an ordinary path.
-- **Needs the real surface (not merely Windows):** T5.9's end-to-end latency, and now **FR72's
+- **Needs the real surface (not merely Windows):** T5.9's end-to-end latency; **FR72's
   1 m glance test and the bundled-font glyph coverage** — Qt substitutes a fallback font per
-  missing glyph, which is invisible headless and wrong only where it is looked at.
+  missing glyph, which is invisible headless and wrong only where it is looked at; and
+  **T7.4a's readability judgement** — measured here as 7 bullet lines falling to 5 under a full
+  checklist at FR23's maximum, and 2 at the minimum. Whether those densities *read* is not a
+  number this container can produce.
 - **Needs the user's fixtures:** T4.7 (the OQ-1 gate), T7.2 (paired audio).
 - **Needs a vendor key:** AS-8, T9.5.
 
@@ -178,6 +184,47 @@ conservative choice, just a broken one.
 ---
 
 ## Log
+
+### T7.4a — the checklist at FR23's ceiling · measured · 2026-08-16
+
+`tests/test_checklist.py`: one vacuous test replaced by three that bite. No production
+change. **1216 passing**, ruff, format and `python -m mypy interview_prep_recall` clean.
+
+**Scope first, and the scope turned out to be smaller and different than the plan said.**
+T7.4a is written as "confirm against the real surface in T5.9", which is a hardware check,
+not code. So the question was what — if anything — is verifiable here. The answer was
+found by measuring rather than reading, and it was not what the note claimed.
+
+**The floor is not where the plan put it.** T7.4's note said the bullets give way at
+FR23's 600px maximum "and never past `MIN_BULLET_LINES`". Measured: at 600px the allowance
+falls from **7 lines to 5** when a full checklist appears, and the floor is nowhere near.
+It engages at the **minimum** size, where the unfloored measurement comes out at **zero**
+and two lines is the whole of what §9b guarantees.
+
+**So the test written for that paragraph asserted nothing.** It read
+`assert panel.bullet_lines_available(...) >= MIN_BULLET_LINES` at the maximum size — a
+comparison of 5 against 2, on a path where the floor is never reached. It would have
+passed against a panel that ignored the checklist's height entirely, which is the one
+thing it existed to catch. **The fifteenth instance of this project's characteristic
+defect**, and the first found by asking what a documented number actually is rather than
+by a test failing.
+
+Three tests replace it, each run against its own defect:
+
+| Test | Defect it was run against |
+|---|---|
+| The allowance **falls** when the checklist appears at the maximum | `bullet_lines_available` ignoring `reserved_height` |
+| The two-line floor holds **at the minimum size**, where it is reached | the `max(MIN_BULLET_LINES, …)` floor removed |
+| A squeezed bullet **elides** rather than clips (FR23) | `elide_to_lines` returning its input |
+
+**What is still blocked, and it is the half T7.4a was actually about.** Whether five lines
+of bullet under a five-row checklist *reads* well — and whether two lines at the minimum
+size is usable rather than merely non-clipping — is a judgement about a real surface at a
+real distance. It rides with T5.9, alongside FR72's glance test and the bundled-font glyph
+coverage. Nothing in this container can answer it, and no test here should pretend to.
+
+**This container is now out of buildable work**, with one exception named below.
+
 
 ### T10.7a — the kind legend · complete · 2026-08-16
 
@@ -773,10 +820,15 @@ not jump a size every time a point is marked. Two tests hold it: the bullets' li
 unchanged when a checklist appears, and so is the rendered bullet text.
 
 **The one place it cannot hold is FR23's 600px maximum**, where there is no room to grow and the
-checklist's height comes out of the bullets' allowance instead. They elide rather than clip, and
-never past `MIN_BULLET_LINES`. Recorded as **T7.4a** rather than hidden: it is a real limit of
-§9b's "grows downward *within* the FR23 max height", and the panel is at that height only if the
-user dragged it there.
+checklist's height comes out of the bullets' allowance instead. They elide rather than clip.
+Recorded as **T7.4a** rather than hidden: it is a real limit of §9b's "grows downward *within*
+the FR23 max height", and the panel is at that height only if the user dragged it there.
+
+> **Corrected on 2026-08-16 (T7.4a).** The sentence above originally ended "and never past
+> `MIN_BULLET_LINES`", which put the floor at the maximum size. It is not there: at 600px the
+> allowance falls from 7 lines to 5 and the floor is never reached. It engages at the *minimum*
+> size, where the measurement comes out at zero. The test written for this paragraph asserted
+> `>= MIN_BULLET_LINES` against a value of 5 — a comparison that could not fail.
 
 **The marked colour swaps at the brightness crossover.** PRISM's `--green-500` measures 8.29:1
 on the darkest panel and **1.26:1** at the light band's edge, so a single value would have made
