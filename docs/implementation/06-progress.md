@@ -97,7 +97,9 @@ Remaining, re-sorted after the Qt discovery:
   missing glyph, which is invisible headless and wrong only where it is looked at; and
   **T7.4a's readability judgement** — measured here as 7 bullet lines falling to 5 under a full
   checklist at FR23's maximum, and 2 at the minimum. Whether those densities *read* is not a
-  number this container can produce.
+  number this container can produce. **T7.4b** rides with it: a five-row checklist overflows the
+  panel by 34px at FR23's minimum height, and which of three repairs is right (taller panel,
+  fewer rows, no floor) is a look-at-it decision.
 - **Needs the user's fixtures:** T4.7 (the OQ-1 gate), T7.2 (paired audio).
 - **Needs a vendor key:** AS-8, T9.5.
 
@@ -187,8 +189,8 @@ conservative choice, just a broken one.
 
 ### T7.4a — the checklist at FR23's ceiling · measured · 2026-08-16
 
-`tests/test_checklist.py`: one vacuous test replaced by three that bite. No production
-change. **1216 passing**, ruff, format and `python -m mypy interview_prep_recall` clean.
+`tests/test_checklist.py`: one vacuous test replaced by three that bite, one of them
+corrected again after review. No production change. **T7.4b raised.** **1216 passing**, ruff, format and `python -m mypy interview_prep_recall` clean.
 
 **Scope first, and the scope turned out to be smaller and different than the plan said.**
 T7.4a is written as "confirm against the real surface in T5.9", which is a hardware check,
@@ -217,13 +219,46 @@ Three tests replace it, each run against its own defect:
 | The two-line floor holds **at the minimum size**, where it is reached | the `max(MIN_BULLET_LINES, …)` floor removed |
 | A squeezed bullet **elides** rather than clips (FR23) | `elide_to_lines` returning its input |
 
+**PR #32 review found a real one, by pushing on what the test proved.** The elision test
+asserted on `bullets[0].text()` — assigned *before* layout — so it would have passed with
+the label sitting entirely below the bottom of the panel. An ellipsis is not evidence of
+no-clipping. It now asserts the text **and** the rendered geometry, and was re-run against
+a clipping `elide_to_lines`.
+
+**Following that geometry turned up a defect the plan had not named — T7.4b.** At FR23's
+*minimum* panel height, a five-row checklist overflows the panel by **34px**, roughly two
+rows. Measured across the range, with two long bullets at the minimum width:
+
+| Stored height | Rendered | Checklist bottom | Overflow |
+|---|---|---|---|
+| **120 (FR23 min)** | 205 | 239 | **34** |
+| 160 | 245 | 240 | 0 |
+| 200 | 285 | 278 | 0 |
+| 300 | 385 | 322 | 0 |
+| 600 (FR23 max) | 600 | 394 | 0 |
+
+The bullets fit at every size; it is the checklist that is cut. The cause is that
+`rendered_height` grows by the checklist's reservation on the assumption that the bullets
+keep the height they had — and at the minimum they do not, because `MIN_BULLET_LINES`
+forces them from one line to two. The growth covers the checklist but not the floor.
+
+**Not fixed here, deliberately.** The obvious repair is to grow by the reservation *plus*
+the floor's shortfall, but "how much may the panel exceed the height the user chose"
+is a design question §9b does not answer — it says the panel grows downward *within* the
+FR23 maximum and is silent about the bottom end. The alternatives trade different
+requirements: a taller panel than the user asked for, fewer checklist rows at small sizes,
+or dropping the two-line floor. Which is right depends on what the thing looks like, which
+is the same real-surface session T7.4a's own remaining half needs. Recorded with the
+numbers so that session can settle it in one pass.
+
 **What is still blocked, and it is the half T7.4a was actually about.** Whether five lines
 of bullet under a five-row checklist *reads* well — and whether two lines at the minimum
 size is usable rather than merely non-clipping — is a judgement about a real surface at a
 real distance. It rides with T5.9, alongside FR72's glance test and the bundled-font glyph
 coverage. Nothing in this container can answer it, and no test here should pretend to.
 
-**This container is now out of buildable work**, with one exception named below.
+**This container is now out of buildable work**, with **T10.7b** the one exception, and
+**T7.4b** newly on the real-surface list rather than the buildable one.
 
 
 ### T10.7a — the kind legend · complete · 2026-08-16

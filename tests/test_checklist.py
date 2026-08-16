@@ -322,10 +322,19 @@ def test_the_two_line_floor_holds_where_it_is_actually_reached(qapp: QApplicatio
     assert panel.bullet_lines_available(bullet_px(MIN_SIZE[1])) == MIN_BULLET_LINES
 
 
-def test_a_squeezed_bullet_elides_rather_than_clips(qapp: QApplication) -> None:
-    """FR23 forbids clipping at any size. Under the checklist at the minimum size the
-    bullets cannot fit, so they must be shortened *visibly* — an ellipsis the user can
-    read as "there is more", rather than a sentence that stops mid-word."""
+def test_a_squeezed_bullet_is_elided_and_fits_inside_the_panel(qapp: QApplication) -> None:
+    """FR23 forbids clipping, so a bullet that cannot fit must be shortened *visibly* — an
+    ellipsis the user reads as "there is more" — **and the shortened label must then
+    actually fit**.
+
+    Both halves, because the first alone proves nothing. An earlier version of this test
+    asserted only on `bullets[0].text()`, which is assigned before layout: it would have
+    passed with the label sitting entirely below the bottom of the panel. Asserting the
+    text *and* the geometry is what makes it a no-clipping test. Found by review on PR #32.
+
+    Scoped to the bullets on purpose — the checklist has a measured overflow at exactly
+    this size, recorded as T7.4b rather than asserted here.
+    """
     long_bullet = (
         "A bullet long enough that it cannot possibly fit inside two lines of a panel "
         "at the minimum supported width, however generously it is measured."
@@ -342,9 +351,17 @@ def test_a_squeezed_bullet_elides_rather_than_clips(qapp: QApplication) -> None:
 
     panel.set_tracked_points(points(MAX_VISIBLE_ROWS))
 
+    panel.resize(panel.width(), panel.rendered_height)
+    panel.show()
+    qapp.processEvents()
+
     rendered = panel.bullets[0].text()
     assert rendered != long_bullet
     assert "…" in rendered
+    for bullet in panel.bullets:
+        if bullet.isVisible():
+            assert bullet.y() + bullet.height() <= panel.height(), "bullet below the panel"
+    panel.hide()
 
 
 def test_the_bottom_resize_edge_follows_the_grown_panel(qapp: QApplication) -> None:
