@@ -93,10 +93,15 @@ def list_label(note: Note) -> str:
     """A note's row in the editor list, carrying the same mark the overlay will show.
 
     This is the half that makes the legend teach rather than merely inform: the user sees
-    ■ beside their prep notes every time they edit, so the glyph is already familiar the
-    first time one appears on the overlay mid-interview.
+    ■ on their prep notes every time they edit, so the glyph is already familiar the first
+    time one appears on the overlay mid-interview.
+
+    **The mark trails the headline** (D-67). Qt's incremental search matches
+    `Qt.DisplayRole` from the start of the string, so a leading glyph means typing a
+    headline's first letters no longer selects it — a keyboard user loses navigation to a
+    decoration. Found by review on PR #31.
     """
-    return f"{mark_for(note.kind).glyph}  {note.headline or '(untitled)'}"
+    return f"{note.headline or '(untitled)'}  {mark_for(note.kind).glyph}"
 
 
 UNREADABLE_LABEL = "⚠ Unreadable set {short}… — select to restore"

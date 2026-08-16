@@ -182,7 +182,7 @@ conservative choice, just a broken one.
 ### T10.7a — the kind legend · complete · 2026-08-16
 
 `ui/editor.py` gains a legend and marked note rows; `overlay.legend_entries` publishes the
-marks in order. `tests/test_editor.py` +5. **1215 passing**, ruff, format and
+marks in order. `tests/test_editor.py` +6. **1216 passing**, ruff, format and
 `python -m mypy interview_prep_recall` clean.
 
 **A code with no key.** T10.7 gave each kind a shape (D-55) and a tooltip, and the tooltip
@@ -203,6 +203,18 @@ test replaces a mark at runtime and asserts the legend follows. A legend that dr
 the marks it explains is worse than no legend, because the reader has no way to tell which
 of the two is lying — and this project has already shipped one doc that disagreed with the
 code it described.
+
+**PR #31 review — one finding, valid, fixed.** Prefixing each row with the glyph broke
+Qt's type-to-select: incremental search matches `Qt.DisplayRole` from the start of the
+string, so typing a headline's first letters no longer reached that note. **Keyboard
+navigation traded for a decoration**, and an accessibility regression introduced by a task
+about making the product easier to read.
+
+The mark now trails the headline (D-67). Leading would read better — a column of shapes
+scans faster than a ragged right edge — and overriding `keyboardSearch` would buy that
+back, but reimplementing Qt's multi-key timeout, cycling and wrap-around semantics is real
+complexity for a placement. The association still forms; the glyph is on every row either
+way.
 
 **A near miss worth recording.** Running each test against its own defect, the row-marking
 test *passed* against an unmarked list — which would have meant a test asserting nothing.

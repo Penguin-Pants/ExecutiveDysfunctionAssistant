@@ -648,8 +648,10 @@ def test_each_note_carries_its_overlay_mark_in_the_list(qapp: QApplication, tmp_
     )
     editor = _editor(app)
 
-    assert editor.note_list.item(0).text().startswith(mark_for(SourceKind.PREP).glyph)
-    assert editor.note_list.item(1).text().startswith(mark_for(SourceKind.ROLE).glyph)
+    assert editor.note_list.item(0).text().endswith(mark_for(SourceKind.PREP).glyph)
+    assert editor.note_list.item(1).text().endswith(mark_for(SourceKind.ROLE).glyph)
+    # The headline still leads, so Qt's type-to-select still finds it (D-67).
+    assert editor.note_list.item(0).text().startswith("A prep note")
 
 
 def test_the_mark_survives_an_edit_to_the_headline(qapp: QApplication, tmp_path: Path) -> None:
@@ -667,5 +669,30 @@ def test_the_mark_survives_an_edit_to_the_headline(qapp: QApplication, tmp_path:
     editor._on_edited()
 
     row = editor.note_list.item(0).text()
-    assert row.startswith(mark_for(SourceKind.RESUME).glyph)
-    assert "After" in row
+    assert row.endswith(mark_for(SourceKind.RESUME).glyph)
+    assert row.startswith("After")
+
+
+def test_typing_a_headline_still_selects_it(qapp: QApplication, tmp_path: Path) -> None:
+    """**A keyboard user must not lose navigation to a decoration.**
+
+    Qt's incremental search matches `Qt.DisplayRole` from the start of the string, so a
+    row prefixed with the FR72 glyph cannot be reached by typing the headline. The mark
+    trails instead (D-67). Found by review on PR #31.
+    """
+    app = _app(
+        tmp_path,
+        ContextSet(
+            name="Acme",
+            notes=[
+                Note(headline="Alpha migration", kind=SourceKind.PREP),
+                Note(headline="Zebra posting", kind=SourceKind.ROLE),
+            ],
+        ),
+    )
+    editor = _editor(app)
+    editor.note_list.setCurrentRow(0)
+
+    editor.note_list.keyboardSearch("Zebra")
+
+    assert editor.note_list.currentRow() == 1
