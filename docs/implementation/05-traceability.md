@@ -8,8 +8,8 @@ TS§ = [test strategy](./04-test-strategy.md) section
 
 | Req | Origin | Design | Task | Test |
 |---|---|---|---|---|
-| FR1a | PRD | D§4 | T3.5 | Unit + fixture `notes/*` |
-| FR2 | PRD | D§4 | T3.5 | Unit + fixture |
+| FR1a | PRD | D§4 | T3.5, **T3.7a** | Unit + fixture `notes/*` |
+| FR2 | PRD | D§4 | T3.5, **T3.7a** | Unit + fixture |
 | FR3 | PRD | D§4 | T3.7 | Unit |
 | FR4 | PRD | D§4 | T3.7 | Unit |
 | FR5 | PRD | D§1 | T1.1 | Manual × 3 apps |

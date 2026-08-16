@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import builtins
 import os
+import sys
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
@@ -182,3 +183,31 @@ def qapp() -> Iterator[object]:
         widget.hide()
         widget.deleteLater()
     app.processEvents()
+
+
+@pytest.fixture(autouse=True)
+def drain_qt_events():
+    """Flush Qt's event queue after every test, **while that test's widgets are alive**.
+
+    An unparented `QDialog` is owned by Python, not by a parent, so it is destroyed the
+    instant a test's last reference goes — immediately, not deferred. Anything still
+    queued for it is then dispatched against freed memory by whichever test next pumps
+    the loop. In this suite that is the overlay's clock test and its two-second
+    `processEvents` spin, which is where the segfault landed: a crash whose cause was
+    twenty test files earlier.
+
+    Draining here keeps each test's events and its objects inside one lifetime, which is
+    the property the session-scoped teardown above cannot provide. **The fifth
+    destroy-order defect in this harness** (D-53, D-54, and PR #27's two), and the second
+    to surface as a crash with every test passing.
+
+    A no-op when Qt is not loaded: the guard keeps this off the non-Qt tests entirely
+    rather than standing a `QApplication` up for them.
+    """
+    yield
+    qt = sys.modules.get("PySide6.QtWidgets")
+    if qt is None:
+        return
+    app = qt.QApplication.instance()
+    if app is not None:
+        app.processEvents()
