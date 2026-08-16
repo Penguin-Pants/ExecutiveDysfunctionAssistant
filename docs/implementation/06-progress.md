@@ -97,9 +97,8 @@ Remaining, re-sorted after the Qt discovery:
   missing glyph, which is invisible headless and wrong only where it is looked at; and
   **T7.4a's readability judgement** — measured here as 7 bullet lines falling to 5 under a full
   checklist at FR23's maximum, and 2 at the minimum. Whether those densities *read* is not a
-  number this container can produce. **T7.4b** rides with it: a five-row checklist overflows the
-  panel by 34px at FR23's minimum height, and which of three repairs is right (taller panel,
-  fewer rows, no floor) is a look-at-it decision.
+  number this container can produce. *(T7.4b, the 34px overflow at the minimum height, is
+  **fixed** — the panel grows taller. What rides with T5.9 is only the readability call.)*
 - **Needs the user's fixtures:** T4.7 (the OQ-1 gate), T7.2 (paired audio).
 - **Needs a vendor key:** AS-8, T9.5.
 
@@ -187,6 +186,67 @@ conservative choice, just a broken one.
 
 ## Log
 
+### T7.4b — the taller panel · complete · 2026-08-16
+
+`OverlayPanel.rendered_height` grows to the content's floor as well as the checklist's
+reservation; new `_content_floor_height`. `tests/test_checklist.py` +5. **1223 passing**,
+ruff, format and `python -m mypy interview_prep_recall` clean.
+
+**The defect, restated.** At FR23's minimum height a five-row checklist hung **34px**
+below the bottom of the panel. `rendered_height` added the checklist's reservation on the
+assumption that the bullets keep the height they already had — true everywhere except the
+bottom of the range, where `MIN_BULLET_LINES` lifts them from one line to two. The growth
+covered the checklist and not the floor, and the checklist, laid out last, was what got
+cut.
+
+**The fix is the one the user chose: grow taller.** The panel takes whichever is larger —
+the user's height plus the reservation, or the height the content actually needs — still
+clamped at FR23's maximum, where the documented give-way applies instead. The floor is
+built from `MIN_BULLET_LINES` rather than from `bullet_lines_available`, which reads
+`rendered_height` and would have made it circular.
+
+**My first version was wrong in the same shape as the bug.** It left out the layout's
+inter-widget spacing and cut the overflow from 34px to 13px — a smaller instance of
+exactly the defect it was written to remove. Measuring across the range rather than at one
+point is what caught it, which is also the answer to how T7.4b survived T7.4 in the first
+place: the minimum height with a full checklist was the one combination nothing exercised.
+The spacing is now read from the layout rather than restated as a constant.
+
+**Three tests, each run against its own defect** — including against my own first attempt:
+
+| Test | Defect |
+|---|---|
+| The checklist fits at the minimum height | the original reservation-only growth |
+| **Nothing overflows anywhere in the FR23 range** — 3 heights × 2 widths × 4 checklist lengths | the growth without the layout spacing |
+| Growing for the floor still stops at FR23's maximum | the `min(MAX_SIZE…)` clamp removed |
+
+**PR #33 review — one P1, valid, and it named the flaw in my tests before I saw it.**
+`_content_floor_height` depends on the *snippet* — bullet count, and how many lines the
+headline wraps to — and only `set_tracked_points` resized the window. So replacing a short
+snippet with a long one under an existing checklist raised the floor with nothing acting
+on it: measured at **44px** of content below the bottom edge.
+
+**The tests hid it.** My `_settled` helper called
+`panel.resize(panel.width(), panel.rendered_height)` before asserting — quietly supplying
+the exact step production was missing. Every geometry assertion in this task passed
+because the harness did the widget's job for it. The helper no longer resizes, so the
+panel has to reconcile its own size, and `show_snippet` now does.
+
+That is the second time on this task that a test proved less than it appeared to, both
+found by review rather than by me: the first asserted text where geometry was needed, this
+one supplied the missing call. **The pattern is the same** — a helper or an assertion that
+stands in for the behaviour under test. Worth naming, because both slipped past a
+defect-verification pass that I had run and believed.
+
+Two tests cover the path now: replacing a snippet resizes to fit it, and the panel
+**shrinks back** when a shorter one arrives — growth that never reverses would hold the
+panel at its tallest snippet's size for the rest of the session.
+
+**T7.4a's remaining half is untouched by this.** Whether five bullet lines under a full
+checklist *reads* well is still a real-surface judgement riding with T5.9. This fix means
+the thing being judged is at least all on screen.
+
+
 ### T7.4a — the checklist at FR23's ceiling · measured · 2026-08-16
 
 `tests/test_checklist.py`: one vacuous test replaced by three that bite, one of them
@@ -242,14 +302,11 @@ The bullets fit at every size; it is the checklist that is cut. The cause is tha
 keep the height they had — and at the minimum they do not, because `MIN_BULLET_LINES`
 forces them from one line to two. The growth covers the checklist but not the floor.
 
-**Not fixed here, deliberately.** The obvious repair is to grow by the reservation *plus*
-the floor's shortfall, but "how much may the panel exceed the height the user chose"
-is a design question §9b does not answer — it says the panel grows downward *within* the
-FR23 maximum and is silent about the bottom end. The alternatives trade different
-requirements: a taller panel than the user asked for, fewer checklist rows at small sizes,
-or dropping the two-line floor. Which is right depends on what the thing looks like, which
-is the same real-surface session T7.4a's own remaining half needs. Recorded with the
-numbers so that session can settle it in one pass.
+**Raised rather than fixed at the time**, because "how much may the panel exceed the
+height the user chose" is a design question §9b does not answer — it says the panel grows
+downward *within* the FR23 maximum and is silent about the bottom end, and a taller panel,
+fewer rows, or no floor each trade a different requirement. **The user chose the taller
+panel**; see the T7.4b entry at the top of this log.
 
 **What is still blocked, and it is the half T7.4a was actually about.** Whether five lines
 of bullet under a five-row checklist *reads* well — and whether two lines at the minimum
@@ -257,8 +314,8 @@ size is usable rather than merely non-clipping — is a judgement about a real s
 real distance. It rides with T5.9, alongside FR72's glance test and the bundled-font glyph
 coverage. Nothing in this container can answer it, and no test here should pretend to.
 
-**This container is now out of buildable work**, with **T10.7b** the one exception, and
-**T7.4b** newly on the real-surface list rather than the buildable one.
+**This container is now out of buildable work**, with **T10.7b** the one exception.
+*(T7.4b was raised here and fixed the same day, once the user chose the taller panel.)*
 
 
 ### T10.7a — the kind legend · complete · 2026-08-16
