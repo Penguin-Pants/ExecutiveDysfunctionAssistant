@@ -1102,8 +1102,50 @@ class OverlayPanel(QWidget):
         chose and §9b's height-driven text scaling does not jump a size every time a
         point is marked. Clamped to FR23's maximum, which is the one case where the panel
         cannot grow — see `bullet_lines_available` for what gives way then.
+
+        **The growth also covers `MIN_BULLET_LINES`** (T7.4b). Adding only the checklist's
+        reservation assumes the bullets keep the height they already had, and at the
+        bottom of FR23's range that is false: the floor lifts them from one line to two,
+        so the panel came up ~34px short and the checklist — laid out last — was the part
+        that got cut. Growing to whichever is larger, the user's height plus the
+        reservation or the height the content actually needs, keeps FR12's "visible"
+        true at every size in the range rather than every size but one.
         """
-        return min(MAX_SIZE[1], self.geometry_settings.height + self.checklist.reserved_height)
+        grown = self.geometry_settings.height + self.checklist.reserved_height
+        return min(MAX_SIZE[1], max(grown, self._content_floor_height()))
+
+    def _content_floor_height(self) -> int:
+        """The shortest panel that can show its content without clipping (T7.4b).
+
+        Padding, the indicator strip, the headline as it wraps, `MIN_BULLET_LINES` for
+        every bullet on screen, and the checklist's reservation. Deliberately built from
+        the floor rather than from the current allowance: `bullet_lines_available` reads
+        `rendered_height`, so asking it here would be circular, and the floor is the only
+        part of the allowance that is not negotiable anyway.
+        """
+        metrics = QFontMetrics(self.bullets[0].font())
+        headline_metrics = QFontMetrics(self.headline.font())
+        headline_height = (
+            line_count(self.headline.text(), headline_metrics, self.text_width)
+            * headline_metrics.lineSpacing()
+        )
+        shown = self.visible_bullet_count
+        bullets = shown * MIN_BULLET_LINES * metrics.lineSpacing()
+        # **The gaps count too.** The first version of this omitted the layout's spacing
+        # and left the checklist 13px over the edge — a smaller version of the same defect
+        # it was written to remove. Taken from the layout rather than restated, because a
+        # second copy of the number is a second thing to keep in step.
+        layout = self.layout()
+        spacing = layout.spacing() if layout is not None else 0
+        widgets = 2 + shown + (1 if self.checklist.reserved_height else 0)
+        return (
+            2 * PADDING_PX
+            + self.indicators.sizeHint().height()
+            + headline_height
+            + bullets
+            + self.checklist.reserved_height
+            + max(0, widgets - 1) * spacing
+        )
 
     def apply_geometry(self, geometry: OverlayGeometry) -> None:
         self.geometry_settings = geometry.clamped()
