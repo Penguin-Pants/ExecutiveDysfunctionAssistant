@@ -85,7 +85,15 @@ def propose_bullets(headline: str, body: str) -> list[str]:
     return [b for b in bullets if b in haystack]
 
 
-def _headline_needs_review(headline: str) -> bool:
+def headline_needs_review(headline: str) -> bool:
+    """Whether this headline is worth a second look before it becomes a note.
+
+    Public because the import review UI has to re-apply it: the flag on a `ProposedNote`
+    is this rule's opinion of the *original* text, and once the user has rewritten the
+    headline, leaving the warning up tells them to fix what they just fixed. One rule,
+    asked from both sides — design §5a is why it matters at all, `headline` being the
+    only embedded field.
+    """
     return len(headline) > LONG_HEADLINE_CHARS or "?" not in headline
 
 
@@ -96,7 +104,7 @@ def _make(headline: str, body: str, line: int) -> ProposedNote:
         headline=headline,
         body=body,
         bullets=propose_bullets(headline, body),
-        needs_headline_review=_headline_needs_review(headline),
+        needs_headline_review=headline_needs_review(headline),
         source_line=line,
     )
 

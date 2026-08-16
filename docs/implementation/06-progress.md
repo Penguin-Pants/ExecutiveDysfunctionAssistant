@@ -15,7 +15,7 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | **M0 — Scaffold** | ✅ Complete | 20 tests passing, lint + format + mypy clean |
 | **M1 — Audio capture spike** | 🟡 Code written, **unrun** | T1.1/T1.2/T1.4 implemented from `pyaudiowpatch` docs; T1.3 already done. **Nothing has executed** — `scripts/m1_spike.py` is the AS-2 gate and needs the Windows machine. |
 | **M2 — STT interface & local backend** | 🟢 T2.1–T2.3 complete | Interface, local backend, assembler. T2.4 is the **AS-1 latency gate** and genuinely needs the target laptop. T2.2's model adapter is unverified (**AS-9**) |
-| **M3 — Notes store & indexing** | ✅ **Complete** | T3.1–T3.9. Store, importer, index, editor, set lifecycle **and the backup restore**. Nothing in M3 is outstanding |
+| **M3 — Notes store & indexing** | ✅ **Complete** | T3.1–T3.9 **and T3.7a**. Store, importer, index, editor, set lifecycle, backup restore **and the import surface**. Nothing in M3 is outstanding |
 | **M4 — Matching pipeline** | 🟢 T4.1–T4.6 complete | T4.7 **blocked**: needs the user's labelled fixtures |
 | **M5 — Overlay UI** | 🟢 Everything buildable here is done · **T5.10 joined it to matching** | T5.1, T5.3, T5.4, T5.4a, T5.5, T5.6, T5.7, T5.8 complete and tested offscreen. Remaining: **T5.2** (`SetWindowDisplayAffinity` — Windows) and **T5.9** (end-to-end latency, needs the D-U6 laptop). Nothing else in M5 is buildable in this container |
 | **M6 — Session lifecycle** | 🟢 Logic complete · panic on hold (D-U11) | T6.1–T6.3, **T6.3b's panic surface**, T6.5 classification, T6.6 backpressure, T6.7 done. T6.4 and the OS trigger paths need Windows |
@@ -25,10 +25,13 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | **M10 — Typed context sources** | 🟢 T10.1–T10.7 complete | Five kinds, per-kind caps and thresholds, schema v1→v2 migration, **FR72's per-kind marking**. T10.7's 1 m glance test and bundled-font glyph coverage ride with T5.9/T9.4 |
 | **M11 — Post-interview report** | 🟢 T11.1, T11.3–T11.10 + a/b/c complete | Record, evidence binding, encrypted store, retention, generation, the view/export, **context snapshots (D-58) and off-thread generation (D-59)**. Only T11.2's DPAPI cipher needs Windows |
 
-**Next action: T3.7a — a UI for T3.5's importer.** A `.md` of prep notes still cannot be brought
-into the app: the importer, its chunking and its bullet proposal are built and tested, and no
-surface calls them. It is the same missing-join shape as T3.7, T3.9 and T5.10, and it is
-buildable here. **T10.7a** (a kind legend in the editor) and **T7.4a** are the two after it.
+**Next action: T10.7a — a kind legend in the editor.** FR72's per-kind marks are on the overlay
+(T10.7) with nothing anywhere that says what the glyphs mean, so the marking is learnable only by
+inference. **T7.4a** is the one after it. Both are buildable here; after them, this container is
+genuinely out of work and the remaining list is hardware, fixtures and a vendor key.
+
+*(T3.7a landed on 2026-08-16 — the importer has a surface, so notes can finally be brought in
+rather than typed.)*
 
 **The "nothing left to build" claim was wrong a seventh time, on the line directly below this
 one.** It named T11.10 as the last buildable task on 2026-08-15; T3.7 and T3.8 shipped that same
@@ -76,9 +79,9 @@ behind that one word for five milestones.
 
 Remaining, re-sorted after the Qt discovery:
 
-- **Buildable and testable here (Qt, offscreen):** **T3.7a** (no UI for T3.5's importer — a
-  `.md` of prep notes still cannot be brought in), **T10.7a** (a kind legend in the editor) and
-  **T7.4a**. *(T3.9's backup restore landed on 2026-08-16, completing M3.)* *(T11.10a/b/c all landed on 2026-08-15, along with T6.3b — the panic surface T11.10a
+- **Buildable and testable here (Qt, offscreen):** **T10.7a** (a kind legend in the editor) and
+  **T7.4a**. *(T3.9's backup restore and T3.7a's import surface both landed on 2026-08-16,
+  completing M3.)* *(T11.10a/b/c all landed on 2026-08-15, along with T6.3b — the panic surface T11.10a
   needed, which no task had ever named.)* *(M5's overlay widget, T7.4's checklist, T10.7's
   per-kind marking and T11.10's report view were all on this list and are now done — T5.4, T5.7,
   T5.8, T7.4, T10.7 and T11.10 all landed on 2026-08-15.)*
@@ -175,6 +178,75 @@ conservative choice, just a broken one.
 ---
 
 ## Log
+
+### T3.7a — the import surface · complete · 2026-08-16
+
+New `ui/import_notes.py`, wired into `ui/editor.py`; `headline_needs_review` published from
+the importer. New `tests/test_import_notes.py` (28 cases), plus a drain fixture in `conftest`. **1207 passing**, ruff, format
+and `python -m mypy interview_prep_recall` clean.
+
+**Two modules with passing tests and no caller, joined at last.** T3.5 built the chunkers,
+the strategy detection and the verbatim bullet proposal; T10.3 built `add_source`, the
+per-kind replacement. Neither had ever been called from the product, so **a `.md` of prep
+notes could not be brought in at all**, and FR66's five kinds could only be created by hand
+in the editor, one note at a time. The user's first contact with the app was the piece with
+no way in — the fifth instance of this shape after T5.10, T3.7, T3.9 and the health
+indicator.
+
+**FR2 is the shape of the dialog, not a step inside it.** The requirement asks that every
+auto-split chunk is *presented for review and editable before save*, that the strategy is
+*named*, and that the user can *switch it* before saving. So the review list is the main
+body rather than a confirmation at the end, the strategy is a control rather than a label
+(with names a person reads — `md_header` is an identifier), and the Import button is the
+block FR2 describes: it does nothing until there are reviewed chunks on screen.
+
+**Importing replaces one kind and leaves the other four alone** (FR66). That is what
+re-importing a job description means, and it is destructive, so it takes FR60's
+confirmation **with the count in it** — "cannot be undone" is only fair if it says how
+much. Refused mid-session, for D-61's reason arriving by another route: it removes every
+note of a kind that the tracker's verdict and the report's D-58 snapshot both describe.
+
+**Three defects found reviewing this branch before pushing**, all fixed:
+
+| Severity | Finding | Why it mattered |
+|---|---|---|
+| Fix now | **Detection never ran on the paste path.** `analyse` passed the combo box's value unconditionally, so pasted `Q:`/`A:` notes were chunked as Markdown headings — producing nothing — with the box showing a strategy the user never picked. | FR2 makes `.txt` auto-detected, and paste has no filename to detect from. Detection now runs until the user overrides it, and stops once they do (D-64). |
+| Fix now | **A bad bullet elsewhere in the set would have raised out of a Qt slot.** `add_source` verifies the incoming notes; `NotesStore.save` verifies the whole set. Between them sits the modeless editor, which can make the *rest* of the set unsavable while the dialog is open — leaving the set replaced in memory and unchanged on disk. | The survivors are verified before anything is removed (D-65), preserving the property `add_source` was built around. |
+| Fix now | **`dialog.strategy` was annotated `ChunkStrategy` and returned `str`.** `ChunkStrategy` is a `StrEnum` and Qt stores a `str` subclass as a plain `str`. | Everything worked, because a `StrEnum` compares as its value — which is exactly why it was worth fixing. mypy cannot see through Qt's `Any`, and the first caller to write `is ChunkStrategy.MD_HEADER` would have been quietly wrong. Found by a test asserting `is`. |
+
+**Eight tests were run against their own defect**, one at a time: no re-embed, no
+mid-session guard, a strategy switch that does not re-chunk, a headline warning never
+recomputed, an editor that opens the import without flushing, a missing suffix check, and
+the two fixes above. All eight failed, then passed.
+
+**One thing the tests found that the plan did not name.** Opening the import while the
+editor holds unsaved edits writes those edits as a side effect, because the import saves
+the same `ContextSet` object. The editor now flushes first and **does not open the dialog
+if the flush refuses** — the same rule as `activate` and `_on_restored`. A refusal that
+means different things at different exits is not a refusal.
+
+**And a segfault, found by running the suite rather than by reading it.** Adding 28 Qt
+tests made the full run crash roughly two times in three — on Linux, where the previous
+teardown crashes had only ever appeared on Windows. Every test passed; the process died.
+
+The stack said `processEvents`, in the overlay's clock test, which is the only test that
+pumps the loop for two seconds. Four experiments narrowed it: `main` was clean 3/3, this
+branch crashed 2/3, this branch **without the new test file** was clean 3/3 — so the new
+*tests*, not the new code — and neither half of the file crashed alone. Cumulative, then,
+not one bad test.
+
+The mechanism: an unparented `QDialog` is owned by Python and dies the instant a test's
+last reference goes, immediately rather than deferred. Anything still queued for it gets
+dispatched against freed memory by whichever test next pumps the loop — so the crash
+landed twenty files from its cause, and the session-scoped teardown could not help,
+because by then the objects are long gone. `tests/conftest.py` now drains after every
+test, while that test's widgets are still alive (D-66). Clean 4/4 after.
+
+**That is the fifth destroy-order defect in this harness** (D-53, D-54, and the two on PR
+#27) and the second to present as a crash with the suite reporting green. Worth stating
+plainly: had this branch been pushed after a single clean local run, it would have been a
+flaky Windows CI failure with nothing pointing at the import surface.
+
 
 ### T3.9 — backup restore · complete · 2026-08-16
 

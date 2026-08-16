@@ -52,6 +52,7 @@ from PySide6.QtWidgets import (
 from interview_prep_recall.diagnostics.ring import DiagnosticRing
 from interview_prep_recall.notes.model import TRACKABLE_KINDS, ContextSet, Note, SourceKind
 from interview_prep_recall.notes.store import NotesStore, NotesStoreError, SchemaTooNewError
+from interview_prep_recall.ui.import_notes import ImportDialog
 from interview_prep_recall.ui.restore import RestoreDialog
 
 if TYPE_CHECKING:
@@ -87,11 +88,18 @@ RestoreFactory = Callable[["Application", str, NotesStore, QWidget], RestoreDial
 """How T3.9's dialog gets built. Injected for the same reason the confirmer is: a test
 about *when* the offer appears should not have to drive the window that appears."""
 
+ImportFactory = Callable[["Application", NotesStore, QWidget], ImportDialog]
+"""The same, for T3.7a's import surface."""
+
 
 def _open_restore(
     application: Application, noteset_id: str, store: NotesStore, parent: QWidget
 ) -> RestoreDialog:
     return RestoreDialog(application, noteset_id, store=store, parent=parent)
+
+
+def _open_import(application: Application, store: NotesStore, parent: QWidget) -> ImportDialog:
+    return ImportDialog(application, store=store, parent=parent)
 
 
 def active_set_id(settings: object) -> str | None:
@@ -170,6 +178,7 @@ class NotesEditor(QDialog):
         confirm: Confirmer | None = None,
         prompt: Prompter | None = None,
         restore_factory: RestoreFactory | None = None,
+        import_factory: ImportFactory | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -180,6 +189,8 @@ class NotesEditor(QDialog):
         self._prompt = prompt if prompt is not None else self._ask_for_name
         self._restore_factory = restore_factory if restore_factory is not None else _open_restore
         self._restore: RestoreDialog | None = None
+        self._import_factory = import_factory if import_factory is not None else _open_import
+        self._import: ImportDialog | None = None
         self.store = NotesStore(application.root)
         self._dirty = False
         self._loading = False
@@ -204,11 +215,16 @@ class NotesEditor(QDialog):
         # buttons would read as restoring the selected note.
         self.restore_button = QPushButton("Restore…", self)
         self.restore_button.clicked.connect(self.open_restore)
+        # T3.7a. Next to the set controls because an import lands *in* a set and replaces
+        # a whole kind within it — it is a set-level action, not a per-note one.
+        self.import_button = QPushButton("Import…", self)
+        self.import_button.clicked.connect(self.open_import)
         for button in (
             self.new_set_button,
             self.rename_set_button,
             self.delete_set_button,
             self.restore_button,
+            self.import_button,
         ):
             sets.addWidget(button)
         layout.addLayout(sets)
@@ -405,6 +421,37 @@ class NotesEditor(QDialog):
         dialog.restored_set.connect(self._on_restored)
         dialog.show()
         return dialog
+
+    # ---------- import (T3.7a — FR1a, FR2, FR66) ----------
+
+    def open_import(self) -> ImportDialog | None:
+        """T3.5's importer, given a way in at last.
+
+        **Flushes first, and does not open if the flush refuses.** The import mutates the
+        very `ContextSet` this editor is holding and then writes it, so an unsaved
+        non-verbatim bullet would be carried into that write — past the check that refused
+        it here. Same rule as `activate` and `_on_restored`: the refusal has to mean the
+        same thing at every exit.
+        """
+        self.flush()
+        if self._dirty:
+            self.status.setText(
+                f"{self.status.text()} Fix that before importing — the import writes this set too."
+            )
+            return None
+        if self._import is not None:
+            self._import.close()
+        dialog = self._import_factory(self.application, self.store, self)
+        self._import = dialog
+        dialog.imported.connect(self._on_imported)
+        dialog.show()
+        return dialog
+
+    def _on_imported(self, count: int) -> None:
+        """The set this window is showing gained notes. The dialog has already saved and
+        re-embedded, so this only has to catch the widgets up."""
+        self.refresh_notes()
+        self.status.setText(f"Imported {count} note(s).")
 
     def _on_restored(self, restored: ContextSet) -> None:
         """The disk changed under this window. Catch up — and **who owns the pending
