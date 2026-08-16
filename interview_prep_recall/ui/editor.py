@@ -49,8 +49,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from interview_prep_recall.diagnostics.ring import DiagnosticRing
 from interview_prep_recall.notes.model import TRACKABLE_KINDS, ContextSet, Note, SourceKind
-from interview_prep_recall.notes.store import NotesStore
+from interview_prep_recall.notes.store import NotesStore, NotesStoreError, SchemaTooNewError
+from interview_prep_recall.ui.restore import RestoreDialog
 
 if TYPE_CHECKING:
     from interview_prep_recall.app import Application
@@ -77,6 +79,16 @@ without driving a modal."""
 Prompter = Callable[[str, str], str | None]
 """Asks for a name, given a title and a default. None if the user cancelled."""
 
+RestoreFactory = Callable[["Application", str, NotesStore, QWidget], RestoreDialog]
+"""How T3.9's dialog gets built. Injected for the same reason the confirmer is: a test
+about *when* the offer appears should not have to drive the window that appears."""
+
+
+def _open_restore(
+    application: Application, noteset_id: str, store: NotesStore, parent: QWidget
+) -> RestoreDialog:
+    return RestoreDialog(application, noteset_id, store=store, parent=parent)
+
 
 def active_set_id(settings: object) -> str | None:
     """The set FR43 says is active, as persisted by this editor (T3.8).
@@ -90,13 +102,28 @@ def active_set_id(settings: object) -> str | None:
     return str(value) if value else None
 
 
-def load_active_set(root: Path, settings: object, store: NotesStore | None = None) -> ContextSet:
+def load_active_set(
+    root: Path,
+    settings: object,
+    store: NotesStore | None = None,
+    ring: DiagnosticRing | None = None,
+) -> ContextSet:
     """The set to start with: the persisted one, else the only one, else a new one.
 
     **Never raises for an ordinary state.** A first run has no sets, and a persisted id
     can name a set the user deleted from another machine's synced folder — both are
     situations the entry point has to survive, so they fall through to the next answer
     rather than up the stack.
+
+    **A corrupt set is recovered, not skipped** (FR44, T3.9). Falling through to the next
+    candidate is how the user's notes turn into an empty editor: their set is on disk with
+    five readable backups beside it, and the app opens showing nothing — the exact
+    "starting empty" the requirement names, and the failure mode most likely to be read as
+    "the app lost my notes". Recovery is recorded when a ring is supplied, because a
+    restore that happens before any window exists is otherwise invisible.
+
+    A `SchemaTooNewError` is deliberately *not* recovered: the backups are the newer
+    format too, so restoring one would be this build overwriting data it cannot read.
     """
     store = store if store is not None else NotesStore(root)
     remembered = active_set_id(settings)
@@ -105,8 +132,21 @@ def load_active_set(root: Path, settings: object, store: NotesStore | None = Non
     for set_id in candidates:
         try:
             return store.load(set_id)
-        except Exception:  # noqa: BLE001 — try the next one; recovery is T3.9's job
+        except SchemaTooNewError:
             continue
+        except NotesStoreError:
+            try:
+                recovered = store.restore_latest_readable(set_id)
+            except NotesStoreError:
+                continue
+            if ring is not None:
+                ring.record(
+                    "noteset_recovered_on_start",
+                    noteset_id=set_id,
+                    count=len(recovered.notes),
+                    recovered=True,
+                )
+            return recovered
     return ContextSet(name="My notes")
 
 
@@ -125,6 +165,7 @@ class NotesEditor(QDialog):
         settings: object,
         confirm: Confirmer | None = None,
         prompt: Prompter | None = None,
+        restore_factory: RestoreFactory | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -133,6 +174,8 @@ class NotesEditor(QDialog):
         self.settings = settings
         self._confirm = confirm if confirm is not None else self._ask_to_delete
         self._prompt = prompt if prompt is not None else self._ask_for_name
+        self._restore_factory = restore_factory if restore_factory is not None else _open_restore
+        self._restore: RestoreDialog | None = None
         self.store = NotesStore(application.root)
         self._dirty = False
         self._loading = False
@@ -152,7 +195,17 @@ class NotesEditor(QDialog):
         self.rename_set_button.clicked.connect(self.rename_set)
         self.delete_set_button = QPushButton("Delete set…", self)
         self.delete_set_button.clicked.connect(self.delete_set)
-        for button in (self.new_set_button, self.rename_set_button, self.delete_set_button):
+        # T3.9. On the set row rather than the note row because a restore replaces the
+        # whole set — FR29 rotates note *sets*, and a control sitting among the per-note
+        # buttons would read as restoring the selected note.
+        self.restore_button = QPushButton("Restore…", self)
+        self.restore_button.clicked.connect(self.open_restore)
+        for button in (
+            self.new_set_button,
+            self.rename_set_button,
+            self.delete_set_button,
+            self.restore_button,
+        ):
             sets.addWidget(button)
         layout.addLayout(sets)
 
@@ -288,9 +341,20 @@ class NotesEditor(QDialog):
             return False
         try:
             loaded = self.store.load(set_id)
+        except SchemaTooNewError as error:
+            # Never offer a restore past a newer format: the backups are that format too,
+            # and rolling one in would be this build overwriting data it cannot read.
+            self.status.setText(str(error))
+            self.refresh_sets()
+            return False
         except Exception as error:  # noqa: BLE001 — a UI boundary
+            # **FR44's offer, at the one place in the product that meets a corrupt set.**
+            # Reporting and stopping here is what "failing silently" looks like from the
+            # user's side: the file is unreadable, five readable copies are on disk, and
+            # nothing in the app connected the two.
             self.status.setText(f"That note set could not be opened: {error}")
             self.refresh_sets()
+            self.open_restore(set_id)
             return False
         try:
             self.application.activate_context_set(loaded)
@@ -307,6 +371,51 @@ class NotesEditor(QDialog):
 
     def _remember_active(self, set_id: str) -> None:
         self.settings.setValue(ACTIVE_SET_KEY, set_id)  # type: ignore[attr-defined]
+
+    # ---------- restore (T3.9 — FR29, FR44) ----------
+
+    def open_restore(self, set_id: str | None = None) -> RestoreDialog:
+        """FR29's "restorable from the UI". Modeless, and held on the instance.
+
+        Held because a modeless dialog dropped on return is collected while it is on
+        screen; modeless because the user comparing a backup against what they have now
+        is the whole point, and a modal window hides the notes they are comparing it to.
+        """
+        target = set_id or self.context_set.id
+        # One at a time. Replacing the attribute alone would leave the previous dialog on
+        # screen with nothing holding it, listing generations that have since rotated —
+        # and a stray window outliving the reference to it is how the overlay's timer
+        # became a teardown crash.
+        if self._restore is not None:
+            self._restore.close()
+        dialog = self._restore_factory(self.application, target, self.store, self)
+        self._restore = dialog
+        dialog.restored_set.connect(self._on_restored)
+        dialog.show()
+        return dialog
+
+    def _on_restored(self, restored: ContextSet) -> None:
+        """The disk changed under this window. Catch up, and **drop the pending write**.
+
+        The edits in memory belong to the version the user just chose to replace, and
+        `flush` on close would put them straight back over the restored file — the
+        restore undone by the window that offered it.
+        """
+        self._dirty = False
+        if restored.id != self.context_set.id:
+            # The set the user was trying to open was unreadable and has been repaired;
+            # finish the switch they asked for. `activate_context_set` rather than
+            # `activate`, because the set is already in hand and re-reading it from disk
+            # would re-enter the failure path that opened this dialog.
+            try:
+                self.application.activate_context_set(restored)
+            except RuntimeError as error:
+                self.status.setText(str(error))
+                self.refresh_sets()
+                return
+        self._remember_active(restored.id)
+        self.refresh_sets()
+        self.status.setText(f"Restored — {len(restored.notes)} note(s) in {restored.name}.")
 
     def create_set(self) -> ContextSet | None:
         """T3.8. A new set is saved immediately: an unsaved empty set is indistinguishable

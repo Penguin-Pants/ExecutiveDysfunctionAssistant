@@ -105,9 +105,26 @@ format already in users' hands is how data gets lost. v1 -> v2 is the first user
 
 @dataclass(frozen=True)
 class BackupInfo:
+    """One rotated generation, described well enough to choose between them (T3.9).
+
+    FR29 says the generations are restorable *from the UI*, and a list of five identical
+    rows named "backup 1" through "backup 5" is not a choice — the user needs to know
+    which one is the version they want back. `list_backups` already parses every file to
+    test readability, so the name, the note count and the failure reason come free from
+    the read that was happening anyway.
+    """
+
     path: Path
     generation: int
     readable: bool
+    saved_at: float = 0.0
+    """`st_mtime`. The generation number orders them; the timestamp is what the user
+    recognises."""
+    name: str | None = None
+    note_count: int | None = None
+    error: str | None = None
+    """Why this generation is unreadable, in the user's words rather than a traceback.
+    None when `readable`."""
 
 
 class NotesStore:
@@ -221,18 +238,63 @@ class NotesStore:
     # ---------- recovery (FR29, FR44) ----------
 
     def list_backups(self, noteset_id: str) -> list[BackupInfo]:
+        """Every generation that exists, newest first, each one described (T3.9)."""
         infos: list[BackupInfo] = []
         for generation in range(1, BACKUP_DEPTH + 1):
             path = self.backup_path(noteset_id, generation)
             if not path.exists():
                 continue
+            saved_at = path.stat().st_mtime
             try:
-                self._load_path(path)
-                readable = True
-            except NotesStoreError:
-                readable = False
-            infos.append(BackupInfo(path=path, generation=generation, readable=readable))
+                note_set = self._load_path(path)
+            except NotesStoreError as error:
+                infos.append(
+                    BackupInfo(
+                        path=path,
+                        generation=generation,
+                        readable=False,
+                        saved_at=saved_at,
+                        error=str(error),
+                    )
+                )
+                continue
+            infos.append(
+                BackupInfo(
+                    path=path,
+                    generation=generation,
+                    readable=True,
+                    saved_at=saved_at,
+                    name=note_set.name,
+                    note_count=len(note_set.notes),
+                )
+            )
         return infos
+
+    def read_backup(self, noteset_id: str, generation: int) -> ContextSet:
+        """Parse one generation **without writing anything** — T3.9's preview.
+
+        Separate from `restore_generation` on purpose: looking at a backup must not be
+        able to cost the user their live file, and a preview that went through the
+        restore path would rotate the generations out from under the list they are
+        reading.
+        """
+        return self._load_path(self.backup_path(noteset_id, generation))
+
+    def restore_generation(self, noteset_id: str, generation: int) -> ContextSet:
+        """Make one chosen generation live again (T3.9, FR29).
+
+        **The version being replaced is not lost.** `save` rotates before it swaps, so
+        whatever was live — including the corrupt file that sent the user here — becomes
+        generation 1. Restoring the wrong one is therefore undoable, which is the only
+        reason it is safe to offer a one-click restore of a file the user cannot fully
+        read on screen.
+
+        Note the side effect that has to be shown in the UI: every other generation moves
+        down one. The list a caller is holding is stale the moment this returns.
+        """
+        note_set = self.read_backup(noteset_id, generation)
+        self.save(note_set)
+        return note_set
 
     def restore_latest_readable(self, noteset_id: str) -> ContextSet:
         """Fall through generations until one parses (T3.9).
@@ -244,9 +306,7 @@ class NotesStore:
             if not info.readable:
                 errors.append(f"gen {info.generation}: unreadable")
                 continue
-            note_set = self._load_path(info.path)
-            self.save(note_set)
-            return note_set
+            return self.restore_generation(noteset_id, info.generation)
         raise NoteSetCorruptError(
             f"no readable backup for {noteset_id} ({'; '.join(errors) or 'none exist'})"
         )

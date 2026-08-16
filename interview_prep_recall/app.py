@@ -410,6 +410,18 @@ class Application:
 
     # ---------- the report path ----------
 
+    @property
+    def can_change_context_set(self) -> bool:
+        """Whether `activate_context_set` would be permitted right now.
+
+        Exists so a caller can ask *before* doing something it cannot take back. T3.9's
+        restore writes the chosen generation over the live file and then re-points the
+        index through `activate_context_set`; discovering the refusal after the write
+        would leave disk and memory describing different sets, which is worse than either
+        outcome on its own. One definition of the rule, asked two ways.
+        """
+        return self.session.state in (SessionState.IDLE, SessionState.PREFLIGHT)
+
     def activate_context_set(self, context_set: ContextSet) -> None:
         """Switch the active set (FR43, T3.8). **Rebuilds everything that reads it.**
 
@@ -426,7 +438,7 @@ class Application:
         Re-embedding is why this is a method rather than a setter: `build` is the
         expensive step, and it must happen before anything can match against the new set.
         """
-        if self.session.state not in (SessionState.IDLE, SessionState.PREFLIGHT):
+        if not self.can_change_context_set:
             raise ActiveSetLocked(
                 "A session is running. Stop it before switching note sets — matching, "
                 "the tracker and the report all read the set that was active at the start."
