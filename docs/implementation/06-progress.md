@@ -21,13 +21,19 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | **M6 — Session lifecycle** | 🟢 Logic complete · panic on hold (D-U11) | T6.1–T6.3, **T6.3b's panic surface**, T6.5 classification, T6.6 backpressure, T6.7 done. T6.4 and the OS trigger paths need Windows |
 | **M7 — Progress tracker** | 🟢 Everything buildable here is done | T7.1, T7.3 and **T7.4** complete. T7.2 needs paired audio fixtures — the only M7 task left |
 | **M8 — Cloud STT backends** | 🟢 T8.1–T8.5 complete | Deepgram, ElevenLabs, fallback, egress. Protocols unverified against a live endpoint (**AS-8**) |
-| **M9 — Packaging & first run** | 🟡 T9.0–T9.2, T9.6 complete | Composition root, FR63 disclosure, config store, settings surface, **entry point**. T9.3 is **blocked on M1** (three of four steps are audio). **T9.6a no longer needs FR43** — T3.8 answered it and `editor.load_active_set` is the reader; it is down to the no-API-key policy (from T9.3), a real embedding model (`sentence-transformers` is in the platform-neutral `embeddings` extra — blocked **here** by network policy, same as AS-9, not by platform) and the Windows-only DPAPI cipher. T9.4 is PyInstaller; T9.5 needs live vendor docs |
+| **M9 — Packaging & first run** | 🟡 T9.0–T9.2, T9.6 complete · *blockers in the register* | Composition root, FR63 disclosure, config store, settings surface, **entry point**. T9.3 is **blocked on M1** (three of four steps are audio). **T9.6a no longer needs FR43** — T3.8 answered it and `editor.load_active_set` is the reader; it is down to the no-API-key policy (from T9.3), a real embedding model (`sentence-transformers` is in the platform-neutral `embeddings` extra — blocked **here** by network policy, same as AS-9, not by platform) and the Windows-only DPAPI cipher. T9.4 is PyInstaller; T9.5 needs live vendor docs |
 | **M10 — Typed context sources** | 🟢 T10.1–T10.7 complete | Five kinds, per-kind caps and thresholds, schema v1→v2 migration, **FR72's per-kind marking**. T10.7's 1 m glance test and bundled-font glyph coverage ride with T5.9/T9.4 |
 | **M11 — Post-interview report** | 🟢 T11.1, T11.3–T11.10 + a/b/c complete | Record, evidence binding, encrypted store, retention, generation, the view/export, **context snapshots (D-58) and off-thread generation (D-59)**. Only T11.2's DPAPI cipher needs Windows |
 
-**Next action: T10.7b**, the one small thing left — the kind legend beside the import dialog's
-selector as well as the editor's. After that this container is genuinely out of work: what
-remains is the Windows machine, the user's fixtures, or a vendor key.
+**Next action: nothing this container can build.** T10.7b landed on 2026-08-16 and was the last
+of them. What remains is the Windows machine, the user's labelled fixtures, a vendor key, or the
+real-surface session that owes judgements on T5.9, FR72's 1 m glance test and T7.4a's readability.
+
+**That sentence has been wrong seven times.** It is written here as a claim to re-test, not a
+fact — the check that has caught every previous instance is to try a "blocked" task for four
+minutes before believing its label. **The Blocked register below is the single list**, every
+reason re-tested on 2026-08-16, each with the check that would falsify it. Test the reason, not
+the milestone.
 
 *(T7.4a was measured on 2026-08-16. Its code half turned out to be a test that asserted nothing;
 its remaining half is a real-surface judgement riding with T5.9.)*
@@ -79,42 +85,16 @@ The fourth instance, for the record, was T2.2, labelled "needs Windows" from M0 
 reason; `faster-whisper` installs and imports on Linux, and ~700 lines of buildable work sat
 behind that one word for five milestones.
 
-Remaining, re-sorted after the Qt discovery:
-
-- **Buildable and testable here (Qt, offscreen):** **T10.7b** (the kind legend beside the import
-  dialog's selector too). *(T10.7a and T7.4a both landed on 2026-08-16 — T7.4a's remaining half
-  is a real-surface judgement, listed under T5.9 below.)* *(T3.9's backup restore and T3.7a's import surface both landed on 2026-08-16,
-  completing M3.)* *(T11.10a/b/c all landed on 2026-08-15, along with T6.3b — the panic surface T11.10a
-  needed, which no task had ever named.)* *(M5's overlay widget, T7.4's checklist, T10.7's
-  per-kind marking and T11.10's report view were all on this list and are now done — T5.4, T5.7,
-  T5.8, T7.4, T10.7 and T11.10 all landed on 2026-08-15.)*
-- **Genuinely needs Windows:** M1 (WASAPI, AS-2 gate), T2.4 (AS-1, needs the D-U6 laptop's CPU),
-  T5.2's `SetWindowDisplayAffinity`, T6.4's ProcMon trace, T9.1a's device-open enforcement,
-  T9.4's PyInstaller build, T11.2's DPAPI cipher. **T11.10 is off this list** — it was on it, and
-  the export writes an ordinary file to an ordinary path.
-- **Needs the real surface (not merely Windows):** T5.9's end-to-end latency; **FR72's
-  1 m glance test and the bundled-font glyph coverage** — Qt substitutes a fallback font per
-  missing glyph, which is invisible headless and wrong only where it is looked at; and
-  **T7.4a's readability judgement** — measured here as 7 bullet lines falling to 5 under a full
-  checklist at FR23's maximum, and 2 at the minimum. Whether those densities *read* is not a
-  number this container can produce. *(T7.4b, the 34px overflow at the minimum height, is
-  **fixed** — the panel grows taller. What rides with T5.9 is only the readability call.)*
-- **Needs the user's fixtures:** T4.7 (the OQ-1 gate), T7.2 (paired audio).
-- **Needs a vendor key:** AS-8, T9.5.
+Remaining work is listed **once**, in the *Blocked register* below, with each reason
+re-tested and a falsification check beside it. The per-milestone bullets that used to sit here
+were a third copy of that list and drifted from it; they are gone rather than left to disagree.
 
 The previous version of this line said nothing further was buildable on Linux. That was true of
 the *then-known* scope and is now moot — but note it had already been wrong twice on its own terms
 before new scope arrived. Treat any such claim here as one to re-test.
-The remaining work splits cleanly:
-
-- **Needs the Windows machine:** M1 (AS-2 gate), T2.4 (AS-1 gate — needs the D-U6 laptop's CPU,
-  not merely Windows), T5.2's `SetWindowDisplayAffinity`, T6.4's ProcMon trace and M6's OS trigger
-  paths, T9.1a, T9.4's PyInstaller build, T11.10's report view, and T11.2's DPAPI binding (its
-  envelope and listing logic are testable here behind a Protocol). **Qt widgets are not on this
-  list any more** — see the note above.
-- **Needs the user's fixtures:** T4.7 (the OQ-1 gate) and T7.2 (paired headphone/speaker audio).
-- **Needs a vendor key:** AS-8 — the two cloud protocols are implemented from documentation and
-  have never met a live endpoint. Everything *around* them is tested; the wire format is not.
+The remaining work is in the **Blocked register** below. It used to be restated here too, and
+two copies of a list nobody reconciles is how a stale blocker survives — FR43 sat in one of them
+for a day after T3.8 answered it.
 
 **A caution about this list, now with five instances.** An earlier version said "M7 tracker device
 tests", and that blanket phrase hid two buildable tasks for a whole milestone. The very next
@@ -136,6 +116,74 @@ Both errors were mine, both were written *into this file as a summary*, and both
 on the next read. When a milestone is marked blocked here, name the *task* and the *reason*, and
 make the reason specific enough to be falsifiable — "Windows" is not; "needs
 `SetWindowDisplayAffinity`" is.
+
+
+---
+
+## Blocked register — verified 2026-08-16
+
+**Every item here was re-tested on the date above, not transcribed.** Each row gives the
+reason and *the check that would falsify it*, because this file has mislabelled work as
+blocked seven times and every instance was caught by trying the thing for four minutes.
+
+**None of the four packages involved is unavailable here.** `pyinstaller`, `keyring`,
+`faster-whisper` and `sentence-transformers` all download from PyPI for this platform, so
+no blocker below is "the package does not exist on Linux". That was worth checking rather
+than assuming: **two of them had been mislabelled that way** — `faster-whisper` carried a
+bare "needs Windows" for five milestones, and `sentence-transformers` was called a
+"Windows-only embedder" until PR #29 corrected it. The other two are checked here so the
+same claim cannot start up again. The real reasons are below, and each is narrower than a
+platform.
+
+### Needs the Windows machine
+
+| Item | Reason | Falsify it by |
+|---|---|---|
+| **M1 — T1.1, T1.2, T1.4** (WASAPI capture, the **AS-2 gate**) | `pip download pyaudiowpatch` → *"No matching distribution found (from versions: none)"* — no Linux wheel **or sdist** exists. `/dev/snd` is absent; the container has no sound subsystem. Three independent confirmations. | `pip download pyaudiowpatch` returning anything at all |
+| **T2.4** — latency harness, the **AS-1 gate** | Must be measured **CPU-only on the D-U6 laptop** (see the D-U6 discipline above). A container figure would validate hardware most sessions will not run on. | Nothing here; it is a measurement on named hardware |
+| **T5.2** — capture exclusion | `SetWindowDisplayAffinity` is a Win32 call with no POSIX equivalent | — |
+| **T6.4** — privacy trace | Process Monitor is a Windows tool | — |
+| **T9.1a** — device-open enforcement | Needs a real device to open, and there is none | `/dev/snd` appearing |
+| **T9.4** — PyInstaller build | `pyinstaller` **installs fine here**; it cannot *cross-build* a Windows `.exe` from Linux. The blocker is cross-compilation, not the package. | A PyInstaller release that cross-builds |
+| **T11.2** — DPAPI cipher | DPAPI is a Windows API. The store, the envelope and the listing logic are all tested here behind the cipher Protocol; only the binding is missing. | — |
+| **T0.5's OS half** — Credential Manager | `keyring` **installs fine here**; the Windows Credential Manager *backend* is what only exists on Windows. | — |
+| **T9.3** — setup wizard | Three of its four steps are audio, so it is blocked behind M1 rather than behind Windows as such | M1 clearing |
+| **T9.6b** — preflight at session start | Cannot be wired until something can start a session, which is M1. The staleness half is already fixed. | M1 clearing |
+
+### Needs the network policy relaxed (not Windows, not the package)
+
+| Item | Reason | Falsify it by |
+|---|---|---|
+| **AS-9 / T2.2's model adapter** | `faster-whisper` installs; the **model weights** come from `huggingface.co`, and the proxy answers `403 CONNECT tunnel failed`. The backend's VAD, finalisation, timestamps and threading are all tested behind a `Transcriber` Protocol. | `curl https://huggingface.co/...` returning 200 |
+| **T9.6a's embedder** | Same 403. `sentence-transformers` is in the platform-neutral `embeddings` extra and installs here — **this is not a Windows dependency**, and calling it one was a real error corrected on PR #29. | The same curl |
+| **AS-8 / T8.1, T8.2** — live protocol check | `api.deepgram.com` and `api.elevenlabs.io` both fail to connect (curl `000`), **and** no vendor key is set. Two independent blockers. | Either endpoint answering |
+| **T9.5** — live Haiku pricing | Needs vendor documentation this container cannot reach | — |
+
+### Needs a key or a policy decision
+
+| Item | Reason | Falsify it by |
+|---|---|---|
+| **T4.7 — the OQ-1 gate** | Needs the user's **hand-labelled fixtures**, which nothing in the code substitutes. **`api.anthropic.com` is reachable** (405 to a GET, i.e. the endpoint answers) — so egress is *not* the blocker; the missing pieces are the fixtures and `ANTHROPIC_API_KEY`, which is absent from the environment. | Fixtures arriving, plus a key |
+| **T9.6a — real dependency construction** | Three blockers, and FR43 is **no longer one of them**: T3.8 answered it and `editor.load_active_set` is the reader. What remains is the **no-API-key policy** (a product decision belonging with T9.3), the embedder above, and DPAPI. | The policy being decided |
+
+### Needs the real surface (a person looking at it)
+
+| Item | Reason | What is already measured here |
+|---|---|---|
+| **T5.9** — end-to-end latency | NFR1 is a wall-clock claim about the whole path, on the target machine | Every stage below the surface is tested |
+| **FR72's 1 m glance test** | Distinguishability at a metre is a judgement, not an assertion | Pairwise distinctness of all five marks |
+| **Bundled-font glyph coverage** | Qt substitutes a fallback font per missing glyph — invisible headless, wrong only where it is looked at | Nothing; this one genuinely needs eyes |
+| **T7.4a's readability** | Whether the densities *read* | 7 bullet lines falling to 5 under a full checklist at FR23's maximum; 2 at the minimum |
+
+**The two highest-value items, if a machine appears:** M1's WASAPI spike (the AS-2 gate, with
+M9's packaging behind it) and T4.7's labelled fixtures (the OQ-1 gate, which decides whether
+matching is good enough to ship at all). Neither is code.
+
+**Not blocked, just not done:** nothing. Every task not listed above is complete — but note
+that `03-tasks.md` marks only ~20 of its 70 rows with ✅, because the convention started
+partway through M5. **That table under-reports completion and is not the register**; this
+section is. Reconciling the markers wants a pass that checks each task against the code,
+which is a piece of work rather than a line edit.
 
 ---
 
@@ -185,6 +233,27 @@ conservative choice, just a broken one.
 ---
 
 ## Log
+
+### T10.7b — the legend beside the import selector · complete · 2026-08-16
+
+`legend_text` and `LEGEND_TITLE` moved from `ui/editor.py` to `ui/overlay.py`; the label
+added to `ui/import_notes.py`. `tests/test_import_notes.py` +3. **1226 passing**, ruff,
+format and `python -m mypy interview_prep_recall` clean.
+
+**The smaller half of T10.7a, and the one where the mistake costs more.** The editor sets
+a kind one note at a time; the import dialog assigns a whole source at once, so choosing
+wrong there replaces every note of a kind (FR66) rather than mislabelling a single note.
+The surface with the larger consequence was the one without the key.
+
+**Where it lives is the whole design decision.** `editor` imports `import_notes`, so a
+legend defined in the editor cannot be reached from the dialog without a cycle — and a
+copy in each is two things to keep in step, which is the failure the legend exists to
+prevent one level down. It moved to `overlay.py`, beside `KIND_MARKS`, which both surfaces
+already depend on. A test replaces a mark at runtime and asserts **both** legends follow.
+
+**No new decision recorded**, because none was made: T10.7a's reasoning covers this
+entirely, and the only judgement here was where to put a function.
+
 
 ### T7.4b — the taller panel · complete · 2026-08-16
 
@@ -314,8 +383,8 @@ size is usable rather than merely non-clipping — is a judgement about a real s
 real distance. It rides with T5.9, alongside FR72's glance test and the bundled-font glyph
 coverage. Nothing in this container can answer it, and no test here should pretend to.
 
-**This container is now out of buildable work**, with **T10.7b** the one exception.
-*(T7.4b was raised here and fixed the same day, once the user chose the taller panel.)*
+**This container is now out of buildable work.** *(T7.4b was raised here and fixed the same day,
+once the user chose the taller panel; T10.7b followed.)*
 
 
 ### T10.7a — the kind legend · complete · 2026-08-16
@@ -370,6 +439,7 @@ metre.
 
 **Follow-up T10.7b:** the import dialog assigns kinds in bulk and has no legend beside its
 own kind selector. Deliberately out of this task, which the plan scoped to the editor.
+✅ **Done on 2026-08-16.**
 
 
 ### T3.7a — the import surface · complete · 2026-08-16
