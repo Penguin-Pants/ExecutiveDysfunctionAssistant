@@ -33,6 +33,7 @@ from interview_prep_recall.ui.overlay import (  # noqa: E402
     LIGHT_BAND_MIN,
     MAX_SIZE,
     MIN_BULLET_LINES,
+    MIN_SIZE,
     OverlayGeometry,
     OverlayPanel,
     SnippetState,
@@ -282,17 +283,85 @@ def test_growth_stops_at_the_fr23_maximum(qapp: QApplication) -> None:
     assert panel.rendered_height == MAX_SIZE[1]
 
 
-def test_at_the_maximum_the_bullets_elide_and_never_drop_below_the_floor(
-    qapp: QApplication,
-) -> None:
-    """The one case where the panel cannot grow. The bullets give way — by eliding, which
-    is FR23's behaviour — and never past the two-line floor."""
+def test_at_the_maximum_the_checklist_costs_the_bullets_lines(qapp: QApplication) -> None:
+    """The one case where the panel cannot grow, so the space comes out of the bullets
+    (T7.4a).
+
+    **The assertion has to be that the allowance *falls*.** The previous version of this
+    test asserted `>= MIN_BULLET_LINES` against a panel whose allowance at this height is
+    five or more — a comparison that cannot fail, on a code path where the floor is never
+    reached. It would have passed against a panel that ignored the checklist entirely,
+    which is the exact thing it was written to catch.
+    """
     panel = OverlayPanel(OverlayGeometry(width=420, height=MAX_SIZE[1]))
+    panel.show_snippet(snippet(), now=0.0)
+    before = panel.bullet_lines_available(bullet_px(MAX_SIZE[1]))
+
+    panel.set_tracked_points(points(MAX_VISIBLE_ROWS))
+
+    after = panel.bullet_lines_available(bullet_px(MAX_SIZE[1]))
+    assert after < before, "the checklist has to take its height from somewhere"
+    assert after >= MIN_BULLET_LINES
+    assert panel.rendered_height == MAX_SIZE[1]
+
+
+def test_the_two_line_floor_holds_where_it_is_actually_reached(qapp: QApplication) -> None:
+    """**The floor is a minimum-size behaviour, not a maximum-size one** (T7.4a).
+
+    T7.4's note filed it under FR23's 600px maximum, and at that height the measured
+    allowance is five lines — the floor is nowhere near. It engages at the *minimum* size,
+    where the measurement comes out at zero and two lines is the whole of what §9b
+    guarantees. Asserting it at the maximum tested nothing; asserting it here is the
+    difference between a bullet with two lines and a bullet with none.
+    """
+    panel = OverlayPanel(OverlayGeometry(width=MIN_SIZE[0], height=MIN_SIZE[1]))
     panel.show_snippet(snippet(), now=0.0)
 
     panel.set_tracked_points(points(MAX_VISIBLE_ROWS))
 
-    assert panel.bullet_lines_available(bullet_px(MAX_SIZE[1])) >= MIN_BULLET_LINES
+    assert panel.bullet_lines_available(bullet_px(MIN_SIZE[1])) == MIN_BULLET_LINES
+
+
+def test_a_squeezed_bullet_is_elided_and_fits_inside_the_panel(qapp: QApplication) -> None:
+    """FR23 forbids clipping, so a bullet that cannot fit must be shortened *visibly* — an
+    ellipsis the user reads as "there is more" — **and the shortened label must then
+    actually fit**.
+
+    Both halves, because the first alone proves nothing. An earlier version of this test
+    asserted only on `bullets[0].text()`, which is assigned before layout: it would have
+    passed with the label sitting entirely below the bottom of the panel. Asserting the
+    text *and* the geometry is what makes it a no-clipping test. Found by review on PR #32.
+
+    Scoped to the bullets on purpose — the checklist has a measured overflow at exactly
+    this size, recorded as T7.4b rather than asserted here.
+    """
+    long_bullet = (
+        "A bullet long enough that it cannot possibly fit inside two lines of a panel "
+        "at the minimum supported width, however generously it is measured."
+    )
+    view = SnippetView(
+        headline="A headline?",
+        bullets=(long_bullet, long_bullet),
+        state=SnippetState.CONFIRMED,
+        source_text=f"A headline?\n{long_bullet}",
+        kind=SourceKind.PREP,
+    )
+    panel = OverlayPanel(OverlayGeometry(width=MIN_SIZE[0], height=MIN_SIZE[1]))
+    panel.show_snippet(view, now=0.0)
+
+    panel.set_tracked_points(points(MAX_VISIBLE_ROWS))
+
+    panel.resize(panel.width(), panel.rendered_height)
+    panel.show()
+    qapp.processEvents()
+
+    rendered = panel.bullets[0].text()
+    assert rendered != long_bullet
+    assert "…" in rendered
+    for bullet in panel.bullets:
+        if bullet.isVisible():
+            assert bullet.y() + bullet.height() <= panel.height(), "bullet below the panel"
+    panel.hide()
 
 
 def test_the_bottom_resize_edge_follows_the_grown_panel(qapp: QApplication) -> None:
