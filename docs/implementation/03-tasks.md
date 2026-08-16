@@ -49,13 +49,21 @@ milestone. The 60-minute soak runs nightly on that machine, not in CI.
 
 | Task | Requirements | Acceptance criteria |
 |---|---|---|
-| **T1.1** WASAPI loopback capture | FR5 | Console prints live RMS while any app plays audio; verified against 3 different video apps. |
-| **T1.2** Concurrent mic capture | FR6, D-U2 | Both streams deliver frames simultaneously for **60 minutes** with no device conflict, no dropout, and no clock drift beyond 50 ms. |
-| **T1.3** Bounded queue + non-blocking callback | FR45, FR33 | Callback p99 < 2 ms under load; forced overflow drops oldest and increments a counter rather than growing memory. |
-| **T1.4** Device enumeration + default-change notification | FR39 | Switching the default output device and unplugging headphones each fire a callback within 1 s. |
+| **T1.1** WASAPI loopback capture | FR5 | Console prints live RMS while any app plays audio; verified against 3 different video apps. 🟡 **One app passed** 2026-08-16 — 752 frames in 15 s, peak RMS 7719, no callback error. Two more apps owed. |
+| **T1.2** Concurrent mic capture | FR6, D-U2 | Both streams deliver frames simultaneously for **60 minutes** with no device conflict, no dropout, and no clock drift beyond 50 ms. 🟡 **60 s passed** 2026-08-16 — both at 100% of expected, worst drift 40 ms, 0 dropped. The 60-minute run is T1.6. |
+| **T1.3** Bounded queue + non-blocking callback | FR45, FR33 | Callback p99 < 2 ms under load; forced overflow drops oldest and increments a counter rather than growing memory. ✅ **Done** |
+| **T1.4** Device enumeration + default-change notification | FR39 | Switching the default output device and unplugging headphones each fire a callback within 1 s. 🟡 **Enumeration passed** 2026-08-16 — 6 loopback endpoints and a default mic resolved. The change-notification half needs a person to switch a device. |
+| **T1.5** Keep-alive tests | D-68 | Unit tests over `CaptureStream`'s keep-alive, against a fake `pa`: a loopback device opens one and reports `keep_alive_active`; a microphone does not; teardown closes the **capture** stream before the keep-alive; a failed open is recorded in `keep_alive_error` rather than raised, with capture still running. *(`render_device_for` has 5 tests already; this is the half that has none.)* |
+| **T1.6** The AS-2 gate, with pauses | FR5, FR6, D-U2, D-68 | **First**, the discriminating check: `dual --seconds 20` with playback **paused** delivers ~100% on both streams. That exact command returned `interviewer=0` before D-68. **Then** the 60-minute run, with natural pauses rather than continuous playback, mic unclaimed. Redirect to a file — the `\r` progress line makes 3600 ticks unreadable in a captured pipe. |
 
 **Gate:** if T1.2 fails, `pyaudiowpatch` is not viable for D-U2's dual-stream requirement and the
 capture library decision reopens **before** anything is built on top. Stop and escalate.
+
+**The gate did not fire, and M1 earned its place anyway.** The library and concurrency question is
+answered (AS-2, half measured). What the spike actually bought was **D-68**: an idle WASAPI loopback
+endpoint delivers *no callbacks at all* rather than frames of silence, which breaks utterance
+finalisation downstream. Nothing in the vendor documentation the capture code was written from said
+so, and no test on a machine without a sound card could have found it.
 
 ---
 
