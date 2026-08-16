@@ -1028,6 +1028,17 @@ class OverlayPanel(QWidget):
             else:
                 label.setText("")
                 label.hide()
+        # **Reconcile the window to the new content, before scaling to it** (T7.4b).
+        # `_content_floor_height` depends on the snippet — how many bullets, and how many
+        # lines the headline wraps to — so replacing a short snippet with a long one under
+        # an existing checklist raises the floor with nothing to act on it. Only
+        # `set_tracked_points` resized, so the window kept its old height and the bottom
+        # of the content was clipped: 44px in the case that found this. Resizing here also
+        # shrinks the panel back when the floor falls again, because `rendered_height`
+        # returns to the user's height plus the reservation once the content fits.
+        # Found by review on PR #33 — the tests had been resizing by hand, which is
+        # exactly the step production was missing.
+        self.resize(self.width(), self.rendered_height)
         # Sizes then text: elision depends on the font that is about to be applied, so
         # setting the bullets first would elide against the previous panel height.
         self._rescale_text()

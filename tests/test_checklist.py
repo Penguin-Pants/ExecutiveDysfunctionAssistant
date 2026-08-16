@@ -509,8 +509,14 @@ def test_widening_the_panel_restores_an_elided_row(qapp: QApplication) -> None:
 
 
 def _settled(panel: OverlayPanel, qapp: QApplication) -> None:
-    """Lay the panel out for real. Geometry assertions are meaningless before this."""
-    panel.resize(panel.width(), panel.rendered_height)
+    """Lay the panel out for real. Geometry assertions are meaningless before this.
+
+    **Deliberately does not resize.** An earlier version called
+    `panel.resize(panel.width(), panel.rendered_height)` here, which quietly supplied the
+    step production was missing — the panel is expected to reconcile its own size when the
+    content changes, and a helper doing it by hand made that untestable. Found by review
+    on PR #33.
+    """
     panel.show()
     for _ in range(3):
         qapp.processEvents()
@@ -590,3 +596,79 @@ def test_growing_for_the_floor_still_stops_at_the_fr23_maximum(qapp: QApplicatio
     panel.set_tracked_points(points(MAX_VISIBLE_ROWS + 4))
 
     assert panel.rendered_height == MAX_SIZE[1]
+
+
+def test_replacing_the_snippet_resizes_the_panel_to_fit_it(qapp: QApplication) -> None:
+    """**The production path T7.4b's first fix missed.**
+
+    `_content_floor_height` depends on the snippet — bullet count, and how many lines the
+    headline wraps to — so a short snippet replaced by a long one under an existing
+    checklist raises the floor. Only `set_tracked_points` resized, so the window kept its
+    old height and 44px of content sat below the bottom edge. Found by review on PR #33.
+    """
+    long_bullet = (
+        "A bullet long enough that it cannot possibly fit inside two lines of a panel "
+        "at the minimum supported width, however generously it is measured."
+    )
+    short = SnippetView(
+        headline="Hi?",
+        bullets=("Short.",),
+        state=SnippetState.CONFIRMED,
+        source_text="Hi?\nShort.",
+        kind=SourceKind.PREP,
+    )
+    big_headline = "A headline long enough to wrap over several lines on a narrow panel, yes?"
+    big = SnippetView(
+        headline=big_headline,
+        bullets=(long_bullet, long_bullet, long_bullet),
+        state=SnippetState.CONFIRMED,
+        source_text=f"{big_headline}\n{long_bullet}",
+        kind=SourceKind.PREP,
+    )
+    panel = OverlayPanel(OverlayGeometry(width=MIN_SIZE[0], height=MIN_SIZE[1]))
+    panel.show_snippet(short, now=0.0)
+    panel.set_tracked_points(points(MAX_VISIBLE_ROWS))
+    _settled(panel, qapp)
+
+    panel.show_snippet(big, now=1.0)
+    for _ in range(3):
+        qapp.processEvents()
+
+    assert _lowest_edge(panel) <= panel.height()
+    panel.hide()
+
+
+def test_the_panel_shrinks_back_when_the_snippet_gets_shorter(qapp: QApplication) -> None:
+    """Growth that never reverses would leave the panel at its tallest snippet's size for
+    the rest of the session, eating screen the user did not agree to give up."""
+    long_bullet = (
+        "A bullet long enough that it cannot possibly fit inside two lines of a panel "
+        "at the minimum supported width, however generously it is measured."
+    )
+    big_headline = "A headline long enough to wrap over several lines on a narrow panel, yes?"
+    big = SnippetView(
+        headline=big_headline,
+        bullets=(long_bullet, long_bullet, long_bullet),
+        state=SnippetState.CONFIRMED,
+        source_text=f"{big_headline}\n{long_bullet}",
+        kind=SourceKind.PREP,
+    )
+    short = SnippetView(
+        headline="Hi?",
+        bullets=("Short.",),
+        state=SnippetState.CONFIRMED,
+        source_text="Hi?\nShort.",
+        kind=SourceKind.PREP,
+    )
+    panel = OverlayPanel(OverlayGeometry(width=MIN_SIZE[0], height=MIN_SIZE[1]))
+    panel.show_snippet(big, now=0.0)
+    panel.set_tracked_points(points(MAX_VISIBLE_ROWS))
+    _settled(panel, qapp)
+    tall = panel.height()
+
+    panel.show_snippet(short, now=1.0)
+    for _ in range(3):
+        qapp.processEvents()
+
+    assert panel.height() < tall
+    panel.hide()

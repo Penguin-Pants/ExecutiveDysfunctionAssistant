@@ -189,7 +189,7 @@ conservative choice, just a broken one.
 ### T7.4b — the taller panel · complete · 2026-08-16
 
 `OverlayPanel.rendered_height` grows to the content's floor as well as the checklist's
-reservation; new `_content_floor_height`. `tests/test_checklist.py` +3. **1221 passing**,
+reservation; new `_content_floor_height`. `tests/test_checklist.py` +5. **1223 passing**,
 ruff, format and `python -m mypy interview_prep_recall` clean.
 
 **The defect, restated.** At FR23's minimum height a five-row checklist hung **34px**
@@ -219,6 +219,28 @@ The spacing is now read from the layout rather than restated as a constant.
 | The checklist fits at the minimum height | the original reservation-only growth |
 | **Nothing overflows anywhere in the FR23 range** — 3 heights × 2 widths × 4 checklist lengths | the growth without the layout spacing |
 | Growing for the floor still stops at FR23's maximum | the `min(MAX_SIZE…)` clamp removed |
+
+**PR #33 review — one P1, valid, and it named the flaw in my tests before I saw it.**
+`_content_floor_height` depends on the *snippet* — bullet count, and how many lines the
+headline wraps to — and only `set_tracked_points` resized the window. So replacing a short
+snippet with a long one under an existing checklist raised the floor with nothing acting
+on it: measured at **44px** of content below the bottom edge.
+
+**The tests hid it.** My `_settled` helper called
+`panel.resize(panel.width(), panel.rendered_height)` before asserting — quietly supplying
+the exact step production was missing. Every geometry assertion in this task passed
+because the harness did the widget's job for it. The helper no longer resizes, so the
+panel has to reconcile its own size, and `show_snippet` now does.
+
+That is the second time on this task that a test proved less than it appeared to, both
+found by review rather than by me: the first asserted text where geometry was needed, this
+one supplied the missing call. **The pattern is the same** — a helper or an assertion that
+stands in for the behaviour under test. Worth naming, because both slipped past a
+defect-verification pass that I had run and believed.
+
+Two tests cover the path now: replacing a snippet resizes to fit it, and the panel
+**shrinks back** when a shorter one arrives — growth that never reverses would hold the
+panel at its tallest snippet's size for the rest of the session.
 
 **T7.4a's remaining half is untouched by this.** Whether five bullet lines under a full
 checklist *reads* well is still a real-surface judgement riding with T5.9. This fix means
