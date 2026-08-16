@@ -49,7 +49,7 @@ TS§ = [test strategy](./04-test-strategy.md) section
 | FR41 | New (BC-2) | D§4 | T3.1 | Unit |
 | FR42 | New (D-5) | D§4 | T3.5, T5.1 | Substring assertion |
 | FR43 | New (US-A3) | D§4 | T3.1, **T3.8** | Unit |
-| FR44 | New (DI-1) | D§4 | T3.3 | Corrupt fixture |
+| FR44 | New (DI-1) | D§4 | T3.3, **T3.9** | Corrupt fixture + the offer it routes to |
 | FR45 | New (RC-1) | D§8 | T1.3 | Callback timing |
 | FR46 | New (D-4) | **D§3** | T2.3 ✅ | Fixture boundaries |
 | FR47 | New (D-2) | D§2 | T2.2 | Conformance |

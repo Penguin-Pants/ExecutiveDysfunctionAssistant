@@ -15,7 +15,7 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | **M0 — Scaffold** | ✅ Complete | 20 tests passing, lint + format + mypy clean |
 | **M1 — Audio capture spike** | 🟡 Code written, **unrun** | T1.1/T1.2/T1.4 implemented from `pyaudiowpatch` docs; T1.3 already done. **Nothing has executed** — `scripts/m1_spike.py` is the AS-2 gate and needs the Windows machine. |
 | **M2 — STT interface & local backend** | 🟢 T2.1–T2.3 complete | Interface, local backend, assembler. T2.4 is the **AS-1 latency gate** and genuinely needs the target laptop. T2.2's model adapter is unverified (**AS-9**) |
-| **M3 — Notes store & indexing** | 🟢 T3.1–T3.8 complete | Store, importer, index, **and the editor + set lifecycle**. T3.9's backup-restore UI is the last one |
+| **M3 — Notes store & indexing** | ✅ **Complete** | T3.1–T3.9. Store, importer, index, editor, set lifecycle **and the backup restore**. Nothing in M3 is outstanding |
 | **M4 — Matching pipeline** | 🟢 T4.1–T4.6 complete | T4.7 **blocked**: needs the user's labelled fixtures |
 | **M5 — Overlay UI** | 🟢 Everything buildable here is done · **T5.10 joined it to matching** | T5.1, T5.3, T5.4, T5.4a, T5.5, T5.6, T5.7, T5.8 complete and tested offscreen. Remaining: **T5.2** (`SetWindowDisplayAffinity` — Windows) and **T5.9** (end-to-end latency, needs the D-U6 laptop). Nothing else in M5 is buildable in this container |
 | **M6 — Session lifecycle** | 🟢 Logic complete · panic on hold (D-U11) | T6.1–T6.3, **T6.3b's panic surface**, T6.5 classification, T6.6 backpressure, T6.7 done. T6.4 and the OS trigger paths need Windows |
@@ -25,12 +25,20 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | **M10 — Typed context sources** | 🟢 T10.1–T10.7 complete | Five kinds, per-kind caps and thresholds, schema v1→v2 migration, **FR72's per-kind marking**. T10.7's 1 m glance test and bundled-font glyph coverage ride with T5.9/T9.4 |
 | **M11 — Post-interview report** | 🟢 T11.1, T11.3–T11.10 + a/b/c complete | Record, evidence binding, encrypted store, retention, generation, the view/export, **context snapshots (D-58) and off-thread generation (D-59)**. Only T11.2's DPAPI cipher needs Windows |
 
-**Next action: nothing is left that this container can build.** T11.10 landed on 2026-08-15 and
-was the last of them. What remains is genuinely external — hardware, the user's fixtures, or a
-vendor key — and the lists below name each blocked *task* with a falsifiable reason.
+**Next action: T3.7a — a UI for T3.5's importer.** A `.md` of prep notes still cannot be brought
+into the app: the importer, its chunking and its bullet proposal are built and tested, and no
+surface calls them. It is the same missing-join shape as T3.7, T3.9 and T5.10, and it is
+buildable here. **T10.7a** (a kind legend in the editor) and **T7.4a** are the two after it.
 
-**Treat that as the claim it is.** The same sentence has been wrong six times, most recently on
-T11.10 itself: it was filed "(Windows / Qt)" and the entire task — list, reader, generation,
+**The "nothing left to build" claim was wrong a seventh time, on the line directly below this
+one.** It named T11.10 as the last buildable task on 2026-08-15; T3.7 and T3.8 shipped that same
+day and T3.9 the next morning, all three headless, none of them needing anything external. Every
+instance has had the same cause — a milestone treated as blocked because one *task* in it is —
+and the same four-minute fix. What remains genuinely external is listed below with a falsifiable
+reason each; test the reason, not the milestone.
+
+**Treat that as the claim it is.** The same sentence has now been wrong seven times, most
+recently on T11.10 itself: it was filed "(Windows / Qt)" and the entire task — list, reader, generation,
 export, deletion — built and tested headless. The check that has caught every one of them is the
 same: try it for four minutes before believing the label. If a task below looks blocked, the
 reason is written next to it; test *that reason*, not the milestone it belongs to.
@@ -68,8 +76,9 @@ behind that one word for five milestones.
 
 Remaining, re-sorted after the Qt discovery:
 
-- **Buildable and testable here (Qt, offscreen):** **T10.7a** (a kind legend in the editor) and
-  **T7.4a**. *(T11.10a/b/c all landed on 2026-08-15, along with T6.3b — the panic surface T11.10a
+- **Buildable and testable here (Qt, offscreen):** **T3.7a** (no UI for T3.5's importer — a
+  `.md` of prep notes still cannot be brought in), **T10.7a** (a kind legend in the editor) and
+  **T7.4a**. *(T3.9's backup restore landed on 2026-08-16, completing M3.)* *(T11.10a/b/c all landed on 2026-08-15, along with T6.3b — the panic surface T11.10a
   needed, which no task had ever named.)* *(M5's overlay widget, T7.4's checklist, T10.7's
   per-kind marking and T11.10's report view were all on this list and are now done — T5.4, T5.7,
   T5.8, T7.4, T10.7 and T11.10 all landed on 2026-08-15.)*
@@ -166,6 +175,74 @@ conservative choice, just a broken one.
 ---
 
 ## Log
+
+### T3.9 — backup restore · complete · 2026-08-16
+
+New `ui/restore.py`, three new store methods, wired into `ui/editor.py`. New
+`tests/test_restore.py` (26 cases). **1176 passing**, ruff, format and
+`python -m mypy interview_prep_recall` clean.
+
+**The last unbuilt M3 task, and the same shape as the four before it.** FR29 keeps five
+generations and says they are *restorable from the UI*; the rotation, the atomic write and
+`restore_latest_readable`'s fall-through were all built in T3.2/T3.3 with passing tests,
+and **nothing in the product ever opened them**. A backup that cannot be reached is a
+file, not a recovery — and this is the one requirement whose entire purpose is the moment
+something has already gone wrong.
+
+**Three properties carry the surface.**
+
+* **Preview never writes.** `read_backup` parses and returns; `restore_generation` is a
+  separate call. Looking at a backup must not be able to cost the user their live file,
+  and a preview routed through restore would rotate the generations out from under the
+  list they are reading — the row they click would stop being the version they saw
+  (D-62).
+* **A corrupt generation is not the end of the list.** Every row says whether it can be
+  read and why not, and "Restore newest readable" falls through the unreadable ones and
+  **names the ones it skipped**. Landing quietly on version 3 leaves the user believing 1
+  and 2 are still there to go back to.
+* **Restoring the active set re-points everything that reads it.** D-61 again: the index,
+  the prefilter and the tracker each hold their own reference, so a restore that only
+  rewrote the file would leave matching drawing from the version just replaced. It goes
+  through `activate_context_set` — and asks `can_change_context_set` **before** the write,
+  because discovering the mid-session refusal afterwards would leave disk and memory
+  describing different sets, which is worse than either outcome alone.
+
+**FR44 was the half nobody had built.** The requirement is "a corrupt, unparseable **or
+missing** note set *offers restore* rather than failing silently or starting empty", and
+the product met a corrupt set in exactly two places. `NotesEditor.activate` reported the
+error and stopped — five readable copies on disk and nothing connecting them. Worse,
+`load_active_set` **fell through to a brand-new empty set**: the user's notes intact in
+five backups, and the app opening on nothing. That is the literal "starting empty" the
+requirement forbids, and the failure most likely to be read as *the app lost my notes*.
+Both are now wired (D-63), with `SchemaTooNewError` deliberately excluded — the backups
+are the newer format too, so restoring one would be this build overwriting data it cannot
+read.
+
+**Every test was run against its own defect.** Six of them, one at a time: assigning
+`context_set` instead of activating, dropping the dirty-flag clear, moving the session
+check after the write, restoring the fall-through's silence, reverting the startup
+recovery, and routing preview through save. All six failed, then passed. That check is
+this project's standing answer to its recurring defect, and it earned its place again —
+one of the tests had been passing for the wrong reason before the helper was fixed (the
+history fixture minted a fresh id per version, so **nothing rotated** and eleven tests
+were asserting against sets with no backups at all).
+
+**PR #28 review — two findings, both valid, both fixed.** Both were about the *other* set:
+the one not being restored.
+
+| Severity | Finding | Why it mattered |
+|---|---|---|
+| P1 | **Restoring a different set discarded the current set's unsaved edits.** The dirty flag was cleared unconditionally, and the dialog's unsaved-changes notice only covers the active set — so edits typed while the modeless dialog was open vanished with no write and no warning. | Who owns the pending write decides what happens to it. Restoring *this* set drops them (they belong to the version being replaced); restoring another one flushes them, and a refused flush blocks the switch — the same rule `activate` already followed. |
+| P2 | **A set that was corrupt when the editor opened was not listed at all**, so `activate` never ran on it and the restore was never offered. Its five generations were on disk with no control anywhere that could reach them. | The recovery path built by this task was unreachable for the case it exists for. Unreadable sets are now listed and marked; selecting one runs the offer. |
+
+**One thing worth flagging rather than fixing.** `load_active_set`'s new `ring` argument
+has no production caller, because `load_active_set` itself still has none — T9.6a is the
+entry point that will call it, and it remains blocked on the no-API-key policy and the
+Windows-only embedder and cipher. This is the D-20 shape by the letter of it. It is
+recorded here rather than dressed up: the recovery is reachable and tested, the *notice*
+needs a surface that does not exist yet.
+
+**M3 is complete.** T3.1–T3.9, all nine.
 
 ### T3.7 + T3.8 — the notes editor and the set lifecycle · complete · 2026-08-15
 
