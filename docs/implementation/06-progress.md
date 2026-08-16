@@ -13,7 +13,7 @@ Updated at the end of every milestone. Newest entry at the top of the log.
 | Milestone | Status | Notes |
 |---|---|---|
 | **M0 — Scaffold** | ✅ Complete | 20 tests passing, lint + format + mypy clean |
-| **M1 — Audio capture spike** | 🟡 Code written, **unrun** | T1.1/T1.2/T1.4 implemented from `pyaudiowpatch` docs; T1.3 already done. **Nothing has executed** — `scripts/m1_spike.py` is the AS-2 gate and needs the Windows machine. |
+| **M1 — Audio capture spike** | 🟢 **Ran on the target machine 2026-08-16** · gate did **not** fire | Enumeration, loopback capture and a 60 s dual-stream run all pass; both streams at 100%, drift 40 ms of a 50 ms budget. Found **D-68** — an idle loopback endpoint delivers *no frames at all*. Remaining: **T1.5** (keep-alive tests), **T1.6** (the 60-minute run), and the human halves of T1.1 and T1.4. |
 | **M2 — STT interface & local backend** | 🟢 T2.1–T2.3 complete | Interface, local backend, assembler. T2.4 is the **AS-1 latency gate** and genuinely needs the target laptop. T2.2's model adapter is unverified (**AS-9**) |
 | **M3 — Notes store & indexing** | ✅ **Complete** | T3.1–T3.9 **and T3.7a**. Store, importer, index, editor, set lifecycle, backup restore **and the import surface**. Nothing in M3 is outstanding |
 | **M4 — Matching pipeline** | 🟢 T4.1–T4.6 complete | T4.7 **blocked**: needs the user's labelled fixtures |
@@ -135,11 +135,17 @@ bare "needs Windows" for five milestones, and `sentence-transformers` was called
 same claim cannot start up again. The real reasons are below, and each is narrower than a
 platform.
 
-### Needs the Windows machine
+### ~~Needs the Windows machine~~ — **the Windows machine is now the working environment (2026-08-16)**
 
-| Item | Reason | Falsify it by |
+**This whole section was written from the Linux container and is retained as history, not as a
+list of blockers.** `pyaudiowpatch` 0.2.12.8 installs on CPython 3.12 here and the audio devices
+are real. None of the rows below is blocked any longer; each is simply **not yet done**. Treat the
+"reason" column as the record of *why it waited*, and the register's standing discipline applies
+with more force than ever: **test the reason, not the label.**
+
+| Item | Was blocked by | Status now |
 |---|---|---|
-| **M1 — T1.1, T1.2, T1.4** (WASAPI capture, the **AS-2 gate**) | `pip download pyaudiowpatch` → *"No matching distribution found (from versions: none)"* — no Linux wheel **or sdist** exists. `/dev/snd` is absent; the container has no sound subsystem. Three independent confirmations. | `pip download pyaudiowpatch` returning anything at all |
+| ~~**M1 — T1.1, T1.2, T1.4**~~ (WASAPI capture, the **AS-2 gate**) | No Linux wheel or sdist; no `/dev/snd`; no sound subsystem. | **Ran 2026-08-16.** Gate did not fire. See the M1 log entry. Outstanding: **T1.5**, **T1.6**, two more video apps for T1.1, and T1.4's change-notification half. |
 | **T2.4** — latency harness, the **AS-1 gate** | Must be measured **CPU-only on the D-U6 laptop** (see the D-U6 discipline above). A container figure would validate hardware most sessions will not run on. | Nothing here; it is a measurement on named hardware |
 | **T5.2** — capture exclusion | `SetWindowDisplayAffinity` is a Win32 call with no POSIX equivalent | — |
 | **T6.4** — privacy trace | Process Monitor is a Windows tool | — |
@@ -233,6 +239,63 @@ conservative choice, just a broken one.
 ---
 
 ## Log
+
+### M1 — the spike ran, and found a defect no reading could · 2026-08-16
+
+**The environment changed, and that is the headline.** Work moved to the **Windows target
+machine**. Every "needs the Windows machine" row in the register below was written from the Linux
+container and most are now simply *available* — not done, but no longer blocked. `pyaudiowpatch`
+**0.2.12.8 installed on CPython 3.12 without incident**, which retires the oldest open question
+about the library itself.
+
+**What passed.** Enumeration found 6 loopback endpoints and resolved both defaults (T1.4's code
+half). Loopback capture delivered 752 frames in 15 s at peak RMS 7719 (T1.1, one app of three).
+The 60 s dual-stream run put **both streams at 100% of expected frames, worst drift 40 ms against
+a 50 ms budget, zero drops, no callback errors** (T1.2, at 60 s of 60 min). **The gate did not
+fire.**
+
+**What it found — D-68, and this is why M1 existed.** A WASAPI loopback endpoint with nothing
+playing delivers **no callbacks at all** — 0 frames in 6 s — rather than frames of silence. With a
+silent render stream held open on the same endpoint, the same 6 s yields **298 of 300**.
+
+That is correctness, not telemetry. `EnergyVad` closes an utterance after 700 ms of silence and
+learns silence *from frames*; with none arriving, an interviewer's question stays open until
+`max_span_s` force-cuts it 10 s later, and every downstream gap measured from `t_end` moves with
+it. **Nothing in the vendor documentation the capture code was written from said so, and no test
+on a machine without a sound card could have found it.** The capture module's docstring claimed
+the unverified surface was "the `open()` call"; the defect was in what the endpoint *does* once
+open, which that framing had no room for.
+
+**The first run looked like a gate failure and was not.** `dual` with no audio playing reported
+`interviewer=0`, drift 20 000 ms, and printed **STOP AND ESCALATE**. The mic was at 99.9% the
+whole time. Classifying before escalating is what separated "the library is unviable" from "no
+audio was playing" — and the register's own discipline, *test the reason, not the label*, is what
+prompted the classification.
+
+**My own probe was wrong in a way that only luck concealed.** It opened the keep-alive on
+`get_default_output_device_info()`, which returned the **MME** entry `[5]`. The device table shows
+the same physical endpoint three times — MME `[5]`, DirectSound `[16]`, WASAPI `[24]` — under an
+identical name, with MME sorting first and truncating names to 31 characters. The probe worked
+anyway, so a name-only implementation would have shipped and passed. `render_device_for` matches
+on **host API as well as name**, and the test that pins it is written against the name-only
+version. **Sixteenth instance of this project's characteristic defect** — a check that passes for
+a reason other than the one it claims.
+
+**Delivered:** `render_device_for` + `RenderDevice` in `audio/devices.py`, the keep-alive in
+`CaptureStream` (`keep_alive`, `keep_alive_active`, `keep_alive_error`), 5 tests, **33 passing**
+in the two audio modules. A `RenderDevice` record rather than a third `DeviceKind` member, because
+`DefaultDeviceWatcher` iterates `for kind in DeviceKind` wholesale and would have polled for a
+device `_read` has no branch for.
+
+**A fake that lied, caught by its own tests failing.** `FakePyAudio.get_device_count` returned the
+row count while the tables used the real machine's sparse indices, so `range(count)` never reached
+device 33. Production code was right; the fake modelled PortAudio wrong. It now returns one past
+the highest index, which also exercises the gap-skipping path.
+
+**Not done, and named rather than implied:** T1.5 (the keep-alive's own unit tests — `render_device_for`
+has 5, the keep-alive path has **none**), T1.6 (the paused-audio check, then the 60-minute run),
+two more video apps for T1.1, and T1.4's change-notification half.
+
 
 ### T10.7b — the legend beside the import selector · complete · 2026-08-16
 
