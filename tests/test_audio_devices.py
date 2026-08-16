@@ -391,7 +391,7 @@ def test_a_raising_default_input_is_read_as_absent_by_the_watcher() -> None:
     assert watcher.poll_once() == []
 
 
-# ---------- the render device behind a loopback (M1's keep-alive, D-60) ----------
+# ---------- the render device behind a loopback (M1's keep-alive, D-68) ----------
 
 MME, WASAPI = 0, 2
 

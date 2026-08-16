@@ -99,7 +99,7 @@ def _as_render(raw: dict[str, Any]) -> RenderDevice:
 
 
 def render_device_for(pa: Any, loopback: DeviceInfo) -> RenderDevice:
-    """The output endpoint a loopback capture device shadows (M1's keep-alive, D-60).
+    """The output endpoint a loopback capture device shadows (M1's keep-alive, D-68).
 
     WASAPI loopback delivers **no frames at all** while its endpoint is idle — not silent
     frames, nothing — so `CaptureStream` holds a silent render stream open on the endpoint

@@ -268,7 +268,7 @@ class CaptureStream:
     crash in the C layer rather than an exception."""
 
     keep_alive: bool = True
-    """Hold a silent render stream open on a loopback endpoint while capturing (D-60).
+    """Hold a silent render stream open on a loopback endpoint while capturing (D-68).
 
     Measured on the target machine during M1: a WASAPI loopback endpoint with nothing
     playing delivers **no callbacks at all** — 0 frames in 6 s — rather than frames of
